@@ -331,3 +331,212 @@ Server broadcasts `process_status` (every 2s), and per-subscribed-run `conversat
 
 MIT
 
+---
+
+## Extended Features
+
+### Cost Tracking & Budget Management
+
+**Configuring Pricing** (`configs/pricing.yaml`):
+
+```yaml
+models:
+  gpt-4o:
+    input: 0.0025      # $/1K input tokens
+    output: 0.01       # $/1K output tokens
+    cached: 0.00125    # $/1K cached tokens (if applicable)
+```
+
+**Setting Budgets** (`configs/budget.yaml`):
+
+```yaml
+global:
+  daily: 50       # Global daily limit in USD
+  monthly: 500    # Global monthly limit
+
+models:
+  gpt-4o:
+    daily: 20
+    monthly: 150
+
+thresholds:
+  warn: 80        # Alert at 80% of limit
+  block: 100      # Block new runs at 100%
+```
+
+**Budget enforcement**: Runs are blocked when limits are exceeded (use `--force-budget` to override).
+
+---
+
+### Git Integration
+
+Each sandbox workspace is automatically initialized as a git repo:
+- Initial commit captures starter files
+- Per-turn commits track file modifications
+- `diff.patch` generated at run completion showing all changes
+
+**CLI**: View diff for any run:
+```bash
+ai-arena diff <runId> -m <model>
+```
+
+---
+
+### LLM-as-Judge Evaluation
+
+Configure a judge model in `configs/evaluation.yaml`:
+
+```yaml
+judge:
+  model: gpt-4o
+  enabled: true
+
+rubric:
+  correctness:
+    description: "Code correctness"
+    maxScore: 10
+  fidelity:
+    description: "Instruction fidelity"
+    maxScore: 10
+```
+
+Judge scores are saved to `<run>/judge_score.json`.
+
+---
+
+### Regression Testing
+
+Run regression suites against stored baselines:
+
+```bash
+ai-arena regress --suite <name>
+```
+
+Baselines are stored in `outputs/baselines/<model>/<scenario>.json`.
+
+---
+
+### Scheduling Runs
+
+**Create a scheduled job** (`configs/schedules.yaml`):
+
+```yaml
+schedules:
+  - id: nightly-regression
+    scenario: express-rest
+    models: [gpt-4o, claude-3.7]
+    cron: "0 3 * * *"    # 3:00 AM daily
+    enabled: true
+    notifications:
+      - slack-runs
+```
+
+**CLI commands**:
+```bash
+ai-arena schedule list
+ai-arena schedule create -s <scenario> -m <models> -c "<cron>"
+ai-arena schedule remove --id <id>
+```
+
+---
+
+### Notifications
+
+Configure webhooks in `configs/notifications.yaml`:
+
+```yaml
+channels:
+  slack-runs:
+    type: slack
+    webhookUrl: ${SLACK_WEBHOOK_URL}
+  discord-arena:
+    type: discord
+    webhookUrl: ${DISCORD_WEBHOOK_URL}
+
+routing:
+  onRunCompleted: [slack-runs]
+  onBudgetThreshold: [slack-runs]
+  onRegressionFailed: [slack-runs, discord-arena]
+```
+
+Set `SLACK_WEBHOOK_URL` and `DISCORD_WEBHOOK_URL` in your `.env`.
+
+---
+
+### Public API Authentication
+
+Configure API keys in `configs/api-keys.yaml`:
+
+```yaml
+apiKeys:
+  - key: ${ARENA_API_KEY_CI}
+    name: CI Pipeline
+    permissions:
+      - runs:read
+      - runs:write
+      - models:read
+    rateLimit: 100
+```
+
+Requests use `X-API-Key` header:
+```bash
+curl -H "X-API-Key: $ARENA_API_KEY_CI" http://localhost:4000/api/analytics/tools
+```
+
+Available permissions: `runs:read`, `runs:write`, `models:read`, `scenarios:read`, `analytics:read`, `export:read`.
+
+---
+
+### CSV Export
+
+**CLI**:
+```bash
+ai-arena export --format csv --output runs.csv
+ai-arena export -o runs.csv --model gpt-4o --from 2024-01-01
+```
+
+**API**:
+- `GET /api/export/csv` — Export all runs
+- `GET /api/runs/:runId/export/csv` — Export single run conversation
+
+---
+
+### Tool Analytics Dashboard
+
+Navigate to **Analytics** in the dashboard to view:
+- Tool call distribution (bar chart)
+- Per-tool statistics (total, failed, average per run)
+- Loop incident detection
+
+Navigate to **Cost** for the cost leaderboard ranking models by cost per successful task.
+
+---
+
+### End-to-End Example
+
+**1. Create a regression suite** (`configs/regression/default.yaml`):
+```yaml
+name: default
+scenarios:
+  - express-rest
+baselineDir: outputs/baselines
+```
+
+**2. Schedule nightly runs** (`configs/schedules.yaml`):
+```yaml
+schedules:
+  - id: nightly-regression
+    scenario: express-rest
+    models: [gpt-4o]
+    cron: "0 3 * * *"
+    notifications: [slack-runs]
+```
+
+**3. Configure Slack webhook** (`.env`):
+```
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
+```
+
+**4. Result**: Every night at 3 AM, runs execute and post results to Slack. Regressions trigger alerts.
+
+

@@ -6,6 +6,7 @@ import type { Logger } from '../types.js';
 import { loadModelsConfig, findModel } from '../config.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
+import { loadBudgetConfig, loadPricingConfig, checkBudget } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
 import {
   upsertRun,
@@ -43,7 +44,9 @@ export interface RunStartOptions {
   modelsConfigPath?: string;
   scenariosDir?: string;
   logger?: Logger;
-  source?: 'cli' | 'dashboard';
+  source?: 'cli' | 'dashboard' | 'scheduler';
+  forceBudget?: boolean;
+  timeoutMs?: number;
 }
 
 export interface PerModelStatus {
@@ -155,7 +158,7 @@ export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<vo
 }
 
 /** Register a run (status=running) in the index. */
-export function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' = 'cli'): void {
+export function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli'): void {
   const perModel: RunIndexModelEntry[] = spec.models.map((m) => ({
     model: m.model, runId: spec.runId, procName: m.procName, outputDir: m.outputDir,
     sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
@@ -173,6 +176,26 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   const root = pm2h.projectRoot();
   const logger = opts.logger ?? createLogger('ai-arena:orchestrator');
   await ensureBuilt(root, logger);
+  
+  // Load budget and pricing configs for enforcement
+  loadPricingConfig(path.join(root, 'configs', 'pricing.yaml'), logger);
+  loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);
+  
+  // Check budget for each model before starting
+  for (const modelName of opts.models) {
+    const budgetCheck = checkBudget(modelName, root, opts.forceBudget ?? false, logger);
+    if (!budgetCheck.allowed) {
+      throw new Error(budgetCheck.reason ?? `Budget exceeded for ${modelName}`);
+    }
+    if (budgetCheck.percentUsed >= 80) {
+      logger.warn(`Budget threshold approach for ${modelName}`, { 
+        spent: budgetCheck.spentUsd, 
+        limit: budgetCheck.limitUsd, 
+        percent: budgetCheck.percentUsed 
+      });
+    }
+  }
+  
   const spec = createRunSpec(opts);
   await spawnRunWorkers(spec, logger);
   registerRun(spec, opts.source ?? 'cli');

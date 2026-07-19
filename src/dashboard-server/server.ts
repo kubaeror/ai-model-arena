@@ -7,10 +7,13 @@ import cors from 'cors';
 import { findProjectRoot } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { loadAuthConfig, requireAuth, verifyCredentials, signToken, type AuthedRequest } from './auth.js';
+import { loadApiKeysConfig, requireApiKey } from './auth-api.js';
 import { LiveHub } from './live.js';
 import { createModelsRouter } from './routes/models.js';
 import { createScenariosRouter } from './routes/scenarios.js';
 import { createRunsRouter } from './routes/runs.js';
+import { createAnalyticsRouter } from './routes/analytics.js';
+import { createExportRouter } from './routes/export.js';
 
 const logger = createLogger('ai-arena:dashboard');
 
@@ -21,11 +24,14 @@ function clientDist(): string {
 function start(): void {
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
   const auth = loadAuthConfig();
+  const root = findProjectRoot();
   const allowedOrigins = (process.env.DASHBOARD_CORS_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
   const app = express();
   app.use(cors(allowedOrigins.length ? { origin: allowedOrigins, credentials: true } : {}));
   app.use(express.json({ limit: '20mb' }));
+
+  loadApiKeysConfig(path.join(root, 'configs', 'api-keys.yaml'), logger);
 
   // ── Auth login (public) ──────────────────────────────────────────────────
   app.post('/api/auth/login', (req: AuthedRequest, res) => {
@@ -38,10 +44,14 @@ function start(): void {
     res.json({ token: signToken(auth, username), username });
   });
 
-  // ── Authenticated API routers ─────────────────────────────────────────────
+  // ── Authenticated API routers (JWT) ─────────────────────────────────────────
   app.use('/api/models', requireAuth(auth), createModelsRouter());
   app.use('/api/scenarios', requireAuth(auth), createScenariosRouter());
   app.use('/api/runs', requireAuth(auth), createRunsRouter());
+  
+  // ── Public API (API key auth) ──────────────────────────────────────────────
+  app.use('/api/analytics', requireApiKey(['analytics:read']), createAnalyticsRouter());
+  app.use('/api/export', requireApiKey(['export:read']), createExportRouter());
 
   // ── Serve the built frontend in production (SPA) ─────────────────────────
   const dist = clientDist();

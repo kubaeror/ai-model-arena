@@ -31,11 +31,13 @@ import { ConversationLogger } from './logger/conversation-logger.js';
 import { writeReport } from './logger/report-logger.js';
 import { writeResultJson, type RunResult } from './logger/result-logger.js';
 import { Sandbox } from './sandbox/sandbox.js';
+import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { createAdapter } from './adapters/index.js';
 import { runAgentLoop } from './agent-loop/index.js';
 import { findProjectRoot } from './paths.js';
 import type { ToolExecutionContext } from './types.js';
+import { loadPricingConfig, computeCost } from './cost-tracking/index.js';
 
 const execAsync = promisify(exec);
 
@@ -130,6 +132,12 @@ async function main(): Promise<void> {
   fs.mkdirSync(outputDir, { recursive: true });
   fs.mkdirSync(sandboxDir, { recursive: true });
 
+  // ── Load pricing config for cost tracking ───────────────────────────────────
+  loadPricingConfig(path.join(root, 'configs', 'pricing.yaml'), logger);
+
+  // ── Git integration ───────────────────────────────────────────────────────
+  const sandboxGit = new SandboxGit({ sandboxDir, modelName, logger });
+  
   const startedAt = new Date();
   const conv = new ConversationLogger(path.join(outputDir, 'conversation.json'), {
     model: modelName,
@@ -152,6 +160,9 @@ async function main(): Promise<void> {
     logger.info('Seeding sandbox from template', { templateDir });
     sandbox.seedFrom(templateDir);
   }
+
+  // Initialize git after seeding starter files
+  await sandboxGit.init();
 
   const resultBase = {
     model: modelName,
@@ -236,6 +247,22 @@ async function main(): Promise<void> {
   }
 
   const finishedAt = new Date();
+  
+  // ── Compute cost ─────────────────────────────────────────────────────────
+  const costBreakdown = computeCost(modelName, {
+    prompt: loopResult.tokenUsage.prompt ?? 0,
+    completion: loopResult.tokenUsage.completion ?? 0,
+    cached: loopResult.tokenUsage.total ?? 0,
+  });
+  
+  // ── Finalize git repo ─────────────────────────────────────────────────────
+  const finalCommitSummary = success ? 'Task completed successfully' : 'Task failed or incomplete';
+  await sandboxGit.commitFinal(finalCommitSummary);
+  const diff = await sandboxGit.generateDiff();
+  if (diff) {
+    await writeDiffPatch(outputDir, diff, logger);
+  }
+  
   const result: RunResult = {
     ...resultBase,
     finishedAt: finishedAt.toISOString(),
@@ -248,6 +275,7 @@ async function main(): Promise<void> {
     stopReason: loopResult.stopReason,
     errors: loopResult.errors,
     success,
+    costUsd: costBreakdown.total,
     successCriteria: successOutcome
       ? {
           command: successOutcome.command,

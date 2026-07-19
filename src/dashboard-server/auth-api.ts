@@ -1,0 +1,112 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import yaml from 'js-yaml';
+import type { Response, NextFunction, Request } from 'express';
+import type { Logger } from '../types.js';
+import type { ApiKeysConfig, ApiKeyPermission, RequestContext, RateLimitState } from './auth-api-types.js';
+import { ApiKeysConfigSchema } from './auth-api-types.js';
+
+const rateLimitStore = new Map<string, RateLimitState>();
+let apiKeysConfig: ApiKeysConfig | null = null;
+
+function expandEnvVars(str: string): string {
+  return str.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] || '');
+}
+
+export function loadApiKeysConfig(configPath: string, logger?: Logger): ApiKeysConfig {
+  if (apiKeysConfig) return apiKeysConfig;
+  
+  const resolvedPath = path.resolve(configPath);
+  if (!fs.existsSync(resolvedPath)) {
+    const fallback = ApiKeysConfigSchema.parse({ apiKeys: [] });
+    logger?.warn(`API keys config not found at ${resolvedPath}, API key auth disabled`);
+    apiKeysConfig = fallback;
+    return fallback;
+  }
+  
+  const content = fs.readFileSync(resolvedPath, 'utf8');
+  const expanded = expandEnvVars(content);
+  const parsed = yaml.load(expanded);
+  const validated = ApiKeysConfigSchema.parse(parsed);
+  apiKeysConfig = validated;
+  return validated;
+}
+
+function findApiKey(key: string): RequestContext | null {
+  if (!apiKeysConfig) return null;
+  const found = apiKeysConfig.apiKeys.find(k => k.key === key);
+  if (!found) return null;
+  return {
+    keyName: found.name,
+    permissions: found.permissions,
+    rateLimit: found.rateLimit,
+  };
+}
+
+function checkPermission(ctx: RequestContext, permission: ApiKeyPermission): boolean {
+  return ctx.permissions.includes(permission);
+}
+
+function checkRateLimit(ctx: RequestContext): { allowed: boolean; remaining: number; resetIn: number } {
+  const now = Date.now();
+  const minuteBucket = Math.floor(now / 60000);
+  const key = `${ctx.keyName}:${minuteBucket}`;
+  
+  const state = rateLimitStore.get(key);
+  if (!state) {
+    rateLimitStore.set(key, { count: 0, resetAt: now + 60000 });
+  }
+  
+  const currentState = rateLimitStore.get(key)!;
+  const remaining = Math.max(0, ctx.rateLimit - currentState.count);
+  const resetIn = Math.max(0, currentState.resetAt - now);
+  
+  if (currentState.count >= ctx.rateLimit) {
+    return { allowed: false, remaining: 0, resetIn };
+  }
+  
+  currentState.count++;
+  return { allowed: true, remaining: remaining - 1, resetIn };
+}
+
+export function requireApiKey(permissions: ApiKeyPermission[]) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const authHeader = (req.headers as Record<string, string | string[] | undefined>)['x-api-key'];
+    const apiKey = typeof authHeader === 'string' ? authHeader : Array.isArray(authHeader) ? authHeader[0] ?? '' : '';
+    
+    if (!apiKey) {
+      res.status(401).json({ error: 'X-API-Key header required' });
+      return;
+    }
+    
+    const ctx = findApiKey(apiKey);
+    if (!ctx) {
+      res.status(401).json({ error: 'Invalid API key' });
+      return;
+    }
+    
+    for (const perm of permissions) {
+      if (!checkPermission(ctx, perm)) {
+        res.status(403).json({ error: `Missing permission: ${perm}` });
+        return;
+      }
+    }
+    
+    const rateLimit = checkRateLimit(ctx);
+    if (!rateLimit.allowed) {
+      res.status(429).json({ error: 'Rate limit exceeded', retryAfter: rateLimit.resetIn });
+      return;
+    }
+    
+    res.setHeader('X-RateLimit-Remaining', String(rateLimit.remaining));
+    res.setHeader('X-RateLimit-Reset', String(Math.ceil(rateLimit.resetIn / 1000)));
+    
+    (req as unknown as Record<string, unknown>).apiKey = ctx;
+    next();
+  };
+}
+
+export function resetApiKeysCache(): void {
+  apiKeysConfig = null;
+  rateLimitStore.clear();
+}

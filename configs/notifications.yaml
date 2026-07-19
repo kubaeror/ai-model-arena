@@ -1,0 +1,26 @@
+# ai-model-arena notification configuration
+# Configure webhooks for Slack and Discord
+
+channels:
+  slack-runs:
+    type: slack
+    webhookUrl: ${SLACK_WEBHOOK_URL}
+    # Slack incoming webhook URL - set via environment variable
+    
+  slack-alerts:
+    type: slack
+    webhookUrl: ${SLACK_ALERTS_WEBHOOK_URL}
+    
+  discord-arena:
+    type: discord
+    webhookUrl: ${DISCORD_WEBHOOK_URL}
+
+# Event routing - which events go to which channels
+routing:
+  onRunCompleted:
+    - slack-runs
+  onBudgetThreshold:
+    - slack-alerts
+  onRegressionFailed:
+    - slack-alerts
+    - discord-arena

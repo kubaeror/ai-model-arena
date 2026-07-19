@@ -1,0 +1,21 @@
+# ai-model-arena API keys for programmatic access
+# API keys are separate from dashboard JWT authentication
+
+apiKeys:
+  - key: ${ARENA_API_KEY_CI}
+    name: CI Pipeline
+    description: API key for CI/CD integration
+    permissions:
+      - runs:read
+      - runs:write
+      - models:read
+      - scenarios:read
+    rateLimit: 100
+    
+  - key: ${ARENA_API_KEY_READONLY}
+    name: Read-only monitoring
+    permissions:
+      - runs:read
+      - models:read
+      - analytics:read
+    rateLimit: 60
