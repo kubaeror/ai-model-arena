@@ -15,6 +15,8 @@
     "worker:dev": "tsx src/worker.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
+    "test": "tsx --test tests/**/*.test.ts",
+    "test:db": "tsx --test tests/db/**/*.test.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dashboard:dev": "concurrently -k -n api,web -c green,cyan \"tsx src/dashboard-server/server.ts\" \"npm --prefix src/dashboard-client run dev\"",
     "dashboard:build": "tsc && npm --prefix src/dashboard-client run build",
