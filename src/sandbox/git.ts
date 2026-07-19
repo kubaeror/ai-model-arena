@@ -1,10 +1,10 @@
-import { exec as execCallback } from 'node:child_process';
+import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Logger } from '../types.js';
 
-const exec = promisify(execCallback);
+const execFile = promisify(execFileCallback);
 
 export interface GitOptions {
   sandboxDir: string;
@@ -25,10 +25,9 @@ export class SandboxGit {
     this.logger = opts.logger;
   }
   
-  private async git(args: string): Promise<{ stdout: string; stderr: string }> {
-    const cmd = `git ${args}`;
-    this.logger?.debug('Running git command', { cmd });
-    const result = await exec(cmd, {
+  private async git(args: string[]): Promise<{ stdout: string; stderr: string }> {
+    this.logger?.debug('Running git command', { args });
+    const result = await execFile('git', args, {
       cwd: this.sandboxDir,
       env: {
         ...process.env,
@@ -50,26 +49,26 @@ export class SandboxGit {
     
     const gitDir = path.join(this.sandboxDir, '.git');
     if (!fs.existsSync(gitDir)) {
-      await this.git('init');
+      await this.git(['init']);
       this.logger?.info('Initialized git repo in sandbox', { dir: this.sandboxDir });
     }
     
     try {
-      await this.git('config user.name "ai-arena-bot"');
-      await this.git('config user.email "ai-arena@localhost"');
+      await this.git(['config', 'user.name', 'ai-arena-bot']);
+      await this.git(['config', 'user.email', 'ai-arena@localhost']);
     } catch {}
     
     const files = fs.readdirSync(this.sandboxDir).filter(f => f !== '.git');
     if (files.length > 0) {
-      await this.git('add -A');
+      await this.git(['add', '-A']);
       try {
-        await this.git('commit -m "Initial commit (starter files)" --allow-empty-message');
+        await this.git(['commit', '-m', 'Initial commit (starter files)', '--allow-empty-message']);
       } catch {}
     } else {
-      await this.git('commit --allow-empty -m "Initial commit (empty sandbox)"');
+      await this.git(['commit', '--allow-empty', '-m', 'Initial commit (empty sandbox)']);
     }
     
-    const result = await this.git('rev-parse HEAD');
+    const result = await this.git(['rev-parse', 'HEAD']);
     this.initialCommitHash = result.stdout.trim();
     this.initialized = true;
     this.logger?.info('Created initial commit', { hash: this.initialCommitHash });
@@ -82,14 +81,14 @@ export class SandboxGit {
     const message = `[${this.modelName}] turn ${turnNumber}: ${shortSummary}`;
     
     try {
-      await this.git('add -A');
-      const status = await this.git('status --porcelain');
+      await this.git(['add', '-A']);
+      const status = await this.git(['status', '--porcelain']);
       if (!status.stdout.trim()) {
         this.logger?.debug('No changes to commit', { turn: turnNumber });
         return null;
       }
-      await this.git(`commit -m "${message.replace(/"/g, '\\"')}"`);
-      const result = await this.git('rev-parse HEAD');
+      await this.git(['commit', '-m', message]);
+      const result = await this.git(['rev-parse', 'HEAD']);
       const hash = result.stdout.trim();
       this.logger?.info('Committed turn changes', { turn: turnNumber, hash });
       return hash;
@@ -106,13 +105,13 @@ export class SandboxGit {
     const message = `[${this.modelName}] run complete: ${shortSummary}`;
     
     try {
-      await this.git('add -A');
-      const status = await this.git('status --porcelain');
+      await this.git(['add', '-A']);
+      const status = await this.git(['status', '--porcelain']);
       if (!status.stdout.trim()) {
         return null;
       }
-      await this.git(`commit -m "${message.replace(/"/g, '\\"')}"`);
-      const result = await this.git('rev-parse HEAD');
+      await this.git(['commit', '-m', message]);
+      const result = await this.git(['rev-parse', 'HEAD']);
       return result.stdout.trim();
     } catch (err) {
       this.logger?.warn('Failed to commit final state', { error: String(err) });
@@ -126,7 +125,7 @@ export class SandboxGit {
     }
     
     try {
-      const result = await this.git(`diff ${this.initialCommitHash} HEAD`);
+      const result = await this.git(['diff', this.initialCommitHash!, 'HEAD']);
       return result.stdout;
     } catch (err) {
       this.logger?.warn('Failed to generate diff', { error: String(err) });
@@ -138,10 +137,15 @@ export class SandboxGit {
     if (!this.initialized) return [];
     
     try {
-      const result = await this.git('log --pretty=format:"%H|%s|%an|%cd" --date=iso');
+      const result = await this.git(['log', '--pretty=format:%H|%s|%an|%cd', '--date=iso']);
       return result.stdout.trim().split('\n').filter(Boolean).map(line => {
-        const [hash, message, author, date] = line.split('|');
-        return { hash, message, author, date };
+        const parts = line.split('|');
+        return {
+          hash: parts[0] ?? '',
+          message: parts[1] ?? '',
+          author: parts[2] ?? '',
+          date: parts[3] ?? '',
+        };
       });
     } catch {
       return [];

@@ -108,10 +108,12 @@ function loopDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): 
   const calls = input.toolCalls;
   const min = cfg.consecutiveRepeats;
   for (let i = 0; i <= calls.length - min; i++) {
-    const key = `${calls[i].name}:${JSON.stringify(calls[i].arguments)}`;
+    const c = calls[i]!;
+    const key = `${c.name}:${JSON.stringify(c.arguments)}`;
     let consecutive = 1;
     for (let j = i + 1; j < calls.length; j++) {
-      const k2 = `${calls[j].name}:${JSON.stringify(calls[j].arguments)}`;
+      const cj = calls[j]!;
+      const k2 = `${cj.name}:${JSON.stringify(cj.arguments)}`;
       if (k2 === key) consecutive++;
       else break;
     }
@@ -121,8 +123,8 @@ function loopDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): 
         model: input.model,
         type: 'loop',
         severity: cfg.severity as AnomalySeverity,
-        description: `Tool "${calls[i].name}" with identical arguments repeated ${consecutive} times consecutively (turn ${calls[i].turn})`,
-        metadata: { tool: calls[i].name, arguments: calls[i].arguments, consecutive, turn: calls[i].turn },
+        description: `Tool "${c.name}" with identical arguments repeated ${consecutive} times consecutively (turn ${c.turn})`,
+        metadata: { tool: c.name, arguments: c.arguments, consecutive, turn: c.turn },
       }];
     }
   }

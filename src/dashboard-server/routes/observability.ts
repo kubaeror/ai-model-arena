@@ -51,7 +51,7 @@ export function createObservabilityRouter(): Router {
       pm2Bus = { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
 
-    const healthy = otel.enabled && sqlite.ok && pm2Bus.ok;
+    const healthy = sqlite.ok && pm2Bus.ok;
     res.status(healthy ? 200 : 503).json({ healthy, otel, sqlite, pm2Bus, timestamp: new Date().toISOString() });
   });
 

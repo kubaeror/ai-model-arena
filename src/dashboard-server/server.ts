@@ -1,9 +1,12 @@
 import 'dotenv/config';
+import '../env.js';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { findProjectRoot } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { loadAuthConfig, requireAuth, verifyCredentials, signToken, type AuthedRequest } from './auth.js';
@@ -29,17 +32,44 @@ function clientDist(): string {
 function start(): void {
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
   const auth = loadAuthConfig();
+  if (auth.generatedPassword) {
+    logger.warn('No DASHBOARD_PASSWORD set — generated a one-time password', {
+      generatedPassword: auth.generatedPassword,
+    });
+  }
   const root = findProjectRoot();
   const allowedOrigins = (process.env.DASHBOARD_CORS_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
   const app = express();
-  app.use(cors(allowedOrigins.length ? { origin: allowedOrigins, credentials: true } : {}));
+  const corsOrigins = allowedOrigins.length
+    ? allowedOrigins
+    : ['http://localhost:4000', 'http://127.0.0.1:4000'];
+  app.use(cors({ origin: corsOrigins, credentials: true }));
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        connectSrc: ["'self'", 'ws:', 'wss:'],
+        imgSrc: ["'self'", 'data:'],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  }));
   app.use(express.json({ limit: '20mb' }));
 
   loadApiKeysConfig(path.join(root, 'configs', 'api-keys.yaml'), logger);
 
   // ── Auth login (public) ──────────────────────────────────────────────────
-  app.post('/api/auth/login', (req: AuthedRequest, res) => {
+  const loginRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: { error: 'Too many login attempts, please try again later' },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.post('/api/auth/login', loginRateLimit, (req: AuthedRequest, res) => {
     const username = String(req.body?.username ?? '');
     const password = String(req.body?.password ?? '');
     if (!verifyCredentials(auth, username, password)) {
@@ -96,15 +126,22 @@ function start(): void {
   const hub = new LiveHub(server, auth);
 
   server.listen(port, () => {
-    logger.info('Dashboard server listening', { port, wsPath: '/ws' });
-    console.log(`\n  ai-model-arena dashboard:  http://localhost:${port}`);
-    console.log(`  WebSocket:                ws://localhost:${port}/ws?token=<jwt>\n`);
+    logger.info(`Dashboard running at http://localhost:${port}`);
+    logger.info(`WebSocket at ws://localhost:${port}/ws`);
   });
 
   const shutdown = (): void => {
     logger.info('Shutting down dashboard server...');
     hub.close();
-    server.close(() => process.exit(0));
+    server.close(() => {
+      logger.info('Server closed cleanly');
+      process.exit(0);
+    });
+    server.closeIdleConnections();
+    setTimeout(() => {
+      logger.warn('Graceful shutdown timed out after 10 s — forcing exit');
+      process.exit(1);
+    }, 10_000).unref();
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

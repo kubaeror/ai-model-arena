@@ -8,8 +8,8 @@ import {
   stopRun,
   restartRun,
   checkRunStatus,
-  type RunSpec,
 } from '../../orchestrator/orchestrator.js';
+import type { RunSpec } from '../../orchestrator/run-lifecycle.js';
 import type { RunIndexModelEntry } from '../../orchestrator/run-index.js';
 import { safeResolve } from '../../sandbox/sandbox.js';
 
@@ -52,9 +52,20 @@ export function createRunsRouter(): Router {
   // POST /api/runs — trigger a new run (non-blocking; uses the orchestrator)
   router.post('/', async (req, res) => {
     const scenario = String(req.body?.scenario ?? '');
-    const models = req.body?.models;
-    if (!scenario || !Array.isArray(models) || models.length === 0) {
-      res.status(400).json({ error: 'body must include scenario and models[]' });
+    const rawModels = req.body?.models;
+    if (!scenario || !Array.isArray(rawModels) || rawModels.length === 0) {
+      res.status(400).json({ error: 'body must include scenario (string) and models (non-empty string[])' });
+      return;
+    }
+    const models: string[] = (rawModels as unknown[])
+      .filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+      .map((m) => m.trim());
+    if (models.length === 0) {
+      res.status(400).json({ error: 'models[] must contain at least one non-empty string' });
+      return;
+    }
+    if (models.some((m) => m.includes('/') || m.includes('\\') || m.includes('..'))) {
+      res.status(400).json({ error: 'model names must not contain path separators or ..' });
       return;
     }
     try {
@@ -79,9 +90,8 @@ export function createRunsRouter(): Router {
     }
     const spec = {
       runId: rec.runId, scenario: rec.scenario, ts: '', startedAt: rec.startedAt,
-      root: '', modelsConfigPath: '', scenariosDir: '', comparisonBase: '',
       models: rec.perModel.map((m) => ({ ...m })),
-    } as unknown as RunSpec;
+    } satisfies RunSpec;
     let statuses: { model: string; status: string; online: boolean; exitCode: number | null }[] = [];
     try {
       statuses = (await checkRunStatus(spec)).map((s) => ({

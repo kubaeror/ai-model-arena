@@ -32,10 +32,10 @@ export interface RunSpec {
   scenario: string;
   ts: string;
   startedAt: string;
-  root: string;
-  modelsConfigPath: string;
-  scenariosDir: string;
-  comparisonBase: string;
+  root?: string;
+  modelsConfigPath?: string;
+  scenariosDir?: string;
+  comparisonBase?: string;
   models: PerModelSpec[];
 }
 
@@ -132,18 +132,18 @@ export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<vo
         AI_ARENA_MODEL: m.model,
         AI_ARENA_SCENARIO: spec.scenario,
         AI_ARENA_RUN_ID: spec.runId,
-        AI_ARENA_ROOT: spec.root,
+        AI_ARENA_ROOT: spec.root!,
         AI_ARENA_MODELS_CONFIG: spec.modelsConfigPath,
         AI_ARENA_SCENARIOS_DIR: spec.scenariosDir,
       };
       const startOpts: StartOptions = {
         name: m.procName,
-        script: pm2h.workerScriptPath(spec.root),
+        script: pm2h.workerScriptPath(spec.root!),
         interpreter: 'node',
         exec_mode: 'fork',
         autorestart: false,
         max_restarts: 0,
-        cwd: spec.root,
+        cwd: spec.root!,
         time: true,
         merge_logs: true,
         out_file: m.logFile,
@@ -159,13 +159,13 @@ export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<vo
 }
 
 /** Register a run (status=running) in the index. */
-export function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli'): void {
+export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli'): Promise<void> {
   const perModel: RunIndexModelEntry[] = spec.models.map((m) => ({
     model: m.model, runId: spec.runId, procName: m.procName, outputDir: m.outputDir,
     sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
     reportPath: m.reportPath, logFile: m.logFile, status: 'running',
   }));
-  upsertRun({
+  await upsertRun({
     runId: spec.runId, scenario: spec.scenario, models: spec.models.map((m) => m.model),
     startedAt: spec.startedAt, finishedAt: null, status: 'running', source, perModel,
     comparisonMdPath: null, comparisonJsonPath: null,
@@ -199,7 +199,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   
   const spec = createRunSpec(opts);
   await spawnRunWorkers(spec, logger);
-  registerRun(spec, opts.source ?? 'cli');
+  await registerRun(spec, opts.source ?? 'cli');
   return spec;
 }
 
@@ -272,8 +272,8 @@ function aggregate(root: string, input: AggregateInput): {
   return { entries, mdPath, jsonPath };
 }
 
-function patchIndexAfterFinalize(runId: string, mdPath: string, jsonPath: string, perModel: RunIndexModelEntry[]): void {
-  updateRun(runId, (rec) => {
+async function patchIndexAfterFinalize(runId: string, mdPath: string, jsonPath: string, perModel: RunIndexModelEntry[]): Promise<void> {
+  await updateRun(runId, (rec) => {
     rec.status = 'completed';
     rec.finishedAt = new Date().toISOString();
     rec.comparisonMdPath = mdPath;
@@ -291,7 +291,7 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
   mdPath: string;
   jsonPath: string;
 }> {
-  const { entries, mdPath, jsonPath } = aggregate(spec.root, {
+  const { entries, mdPath, jsonPath } = aggregate(spec.root!, {
     runId: spec.runId, scenario: spec.scenario, startedAt: spec.startedAt,
     models: spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
@@ -306,7 +306,7 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
       ? { ...base, status: 'completed', success: r.success, turnsUsed: r.turnsUsed, totalToolCalls: r.totalToolCalls, stopReason: r.stopReason, durationMs: r.durationMs }
       : { ...base, status: 'errored' };
   });
-  patchIndexAfterFinalize(spec.runId, mdPath, jsonPath, perModel);
+  await patchIndexAfterFinalize(spec.runId, mdPath, jsonPath, perModel);
   logger.info('Comparison written', { md: mdPath, json: jsonPath });
   // Run anomaly detection over the just-completed run (best-effort, non-blocking).
   void analyzeRun(spec.runId, logger).catch((e) =>
@@ -335,7 +335,7 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
       ? { ...m, status: 'completed', success: r.success, turnsUsed: r.turnsUsed, totalToolCalls: r.totalToolCalls, stopReason: r.stopReason, durationMs: r.durationMs }
       : { ...m, status: 'errored' };
   });
-  patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
+  await patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
   logger.info('Finalized run via watcher', { runId, md: mdPath });
   // Run anomaly detection over the just-completed run (best-effort, non-blocking).
   void analyzeRun(runId, logger).catch((e) =>
@@ -353,7 +353,7 @@ export async function stopRun(runId: string): Promise<void> {
   } finally {
     await pm2h.pm2Disconnect();
   }
-  updateRun(runId, (r) => { r.status = 'stopped'; });
+  await updateRun(runId, (r) => { r.status = 'stopped'; });
 }
 
 /** Restart a run's PM2 processes (re-runs the workers with the same runId). */
@@ -366,7 +366,7 @@ export async function restartRun(runId: string): Promise<void> {
   } finally {
     await pm2h.pm2Disconnect();
   }
-  updateRun(runId, (r) => {
+  await updateRun(runId, (r) => {
     r.status = 'running';
     r.finishedAt = null;
     for (const m of r.perModel) { m.status = 'running'; m.success = undefined; }

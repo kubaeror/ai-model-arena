@@ -91,15 +91,15 @@ function detectLoopsInConversation(conv: Record<string, unknown>): LoopIncident[
   
   const turns = Array.from(turnTools.keys()).sort((a, b) => a - b);
   for (let i = 0; i < turns.length - 2; i++) {
-    const t1 = turnTools.get(turns[i]) ?? [];
-    const t2 = turnTools.get(turns[i + 1]) ?? [];
-    const t3 = turnTools.get(turns[i + 2]) ?? [];
+    const t1 = turnTools.get(turns[i]!) ?? [];
+    const t2 = turnTools.get(turns[i + 1]!) ?? [];
+    const t3 = turnTools.get(turns[i + 2]!) ?? [];
     
     if (JSON.stringify(t1) === JSON.stringify(t2) && JSON.stringify(t2) === JSON.stringify(t3) && t1.length > 0) {
       incidents.push({
         runId: (conv.runId as string) ?? '',
         model: (conv.meta as Record<string, unknown>)?.model as string ?? '',
-        turn: turns[i],
+        turn: turns[i]!,
         tools: t1,
       });
     }

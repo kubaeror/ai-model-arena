@@ -193,7 +193,7 @@ export interface WebhookRecord {
   id: number;
   url: string;
   events: string; // comma-separated
-  secret: string | null;
+  secretSet: boolean;    // true if a secret was provided; never return plaintext
   created_at: string;
   active: boolean;
 }
@@ -218,10 +218,18 @@ function webhookRowToRecord(row: Record<string, unknown>): WebhookRecord {
     id: Number(row.id),
     url: String(row.url),
     events: String(row.events),
-    secret: row.secret ? String(row.secret) : null,
+    secretSet: row.secret != null && String(row.secret).length > 0,
     created_at: String(row.created_at),
     active: Number(row.active) === 1,
   };
+}
+
+/** INTERNAL ONLY — never expose via API. Returns raw secret for outbound HMAC. */
+export function getWebhookSecret(id: number): string | null {
+  const database = getDb();
+  const row = database.prepare('SELECT secret FROM webhooks WHERE id = ?').get(id) as
+    { secret?: string } | undefined;
+  return row?.secret ?? null;
 }
 
 export function listWebhooks(activeOnly = false): WebhookRecord[] {

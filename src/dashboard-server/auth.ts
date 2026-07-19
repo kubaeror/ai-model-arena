@@ -7,6 +7,7 @@ export interface AuthConfig {
   password: string;
   secret: string;
   expiresIn: string;
+  generatedPassword?: string;
 }
 
 /**
@@ -17,20 +18,29 @@ export interface AuthConfig {
 export function loadAuthConfig(): AuthConfig {
   const username = process.env.DASHBOARD_USERNAME ?? 'admin';
   let password = process.env.DASHBOARD_PASSWORD ?? '';
+  let generatedPassword: string | undefined;
   if (!password) {
     password = crypto.randomBytes(12).toString('base64url');
-    console.warn(`\n[dashboard] No DASHBOARD_PASSWORD set; generated a one-time password: ${password}`);
-    console.warn('[dashboard] Set DASHBOARD_PASSWORD in .env to persist it.\n');
+    generatedPassword = password;
   }
-  let secret = process.env.DASHBOARD_JWT_SECRET ?? '';
-  if (!secret) secret = crypto.randomBytes(32).toString('hex');
-  return { username, password, secret, expiresIn: process.env.DASHBOARD_JWT_EXPIRES_IN ?? '12h' };
+  const secret = process.env.DASHBOARD_JWT_SECRET ?? '';
+  if (!secret) {
+    throw new Error(
+      'DASHBOARD_JWT_SECRET is not set.\n' +
+      'Generate one: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"\n' +
+      'Then add DASHBOARD_JWT_SECRET=<value> to your .env file.',
+    );
+  }
+  return { username, password, secret, expiresIn: process.env.DASHBOARD_JWT_EXPIRES_IN ?? '12h', generatedPassword };
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) return false;
+  if (!a || !b) return false;
+  const maxLen = Math.max(Buffer.byteLength(a), Buffer.byteLength(b));
+  const ba = Buffer.alloc(maxLen, 0);
+  const bb = Buffer.alloc(maxLen, 0);
+  Buffer.from(a).copy(ba);
+  Buffer.from(b).copy(bb);
   return crypto.timingSafeEqual(ba, bb);
 }
 
@@ -39,7 +49,7 @@ export function verifyCredentials(cfg: AuthConfig, username: string, password: s
 }
 
 export function signToken(cfg: AuthConfig, username: string): string {
-  return jwt.sign({ sub: username }, cfg.secret, { expiresIn: cfg.expiresIn } as unknown as jwt.SignOptions);
+  return jwt.sign({ sub: username }, cfg.secret, { expiresIn: cfg.expiresIn as jwt.SignOptions['expiresIn'] });
 }
 
 export function verifyToken(cfg: AuthConfig, token: string): { sub: string } | null {

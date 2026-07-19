@@ -53,24 +53,38 @@ function safeParseArgs(raw: unknown): Record<string, unknown> {
   return {};
 }
 
+interface OpenAIRawToolCall {
+  id?: string;
+  function?: { name?: string; arguments?: unknown };
+}
+interface OpenAIRawChoice {
+  finish_reason?: string;
+  message?: { content?: string | null; tool_calls?: OpenAIRawToolCall[] };
+}
+interface OpenAIRawResponse {
+  choices?: OpenAIRawChoice[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}
+
 /** Parse an OpenAI Chat Completions response into a normalised ModelResponse. */
-export function parseOpenAIResponse(data: any): ModelResponse {
-  const choice = data?.choices?.[0];
+export function parseOpenAIResponse(data: unknown): ModelResponse {
+  const raw = data as OpenAIRawResponse;
+  const choice = raw.choices?.[0];
   const msg = choice?.message ?? {};
   const text = msg.content ?? null;
   const toolCalls = (msg.tool_calls ?? [])
-    .map((tc: any) => ({
-      id: tc.id,
-      name: tc.function?.name,
+    .map((tc) => ({
+      id: tc.id ?? '',
+      name: tc.function?.name ?? '',
       arguments: safeParseArgs(tc.function?.arguments),
     }))
-    .filter((tc: any) => tc.id && tc.name);
+    .filter((tc) => tc.id && tc.name);
   const usage: TokenUsage = {
-    prompt: data?.usage?.prompt_tokens,
-    completion: data?.usage?.completion_tokens,
-    total: data?.usage?.total_tokens,
+    prompt: raw.usage?.prompt_tokens,
+    completion: raw.usage?.completion_tokens,
+    total: raw.usage?.total_tokens,
   };
-  return { text, toolCalls, usage, stopReason: choice?.finish_reason, raw: data };
+  return { text, toolCalls, usage, stopReason: choice?.finish_reason, raw };
 }
 
 /**

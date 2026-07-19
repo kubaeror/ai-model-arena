@@ -72,3 +72,28 @@ export function isWithin(sandboxDir: string, targetAbs: string): boolean {
   // absolute (which happens when the two are on different Windows roots).
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
+
+/** Env var name prefixes that must never be visible inside sandboxed commands. */
+const BLOCKED_ENV_PREFIXES = [
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'GOOGLE_API_KEY',
+  'DASHBOARD_JWT_SECRET',
+  'DASHBOARD_PASSWORD',
+  'ARENA_API_KEY_',
+];
+
+/**
+ * Returns a copy of process.env with all sensitive credentials stripped.
+ * Use this instead of process.env when spawning LLM-controlled subprocesses.
+ */
+export function sandboxEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    const blocked = BLOCKED_ENV_PREFIXES.some(
+      (prefix) => key === prefix || key.startsWith(prefix),
+    );
+    if (!blocked) env[key] = value;
+  }
+  return env;
+}

@@ -8,6 +8,7 @@ import { ApiKeysConfigSchema } from './auth-api-types.js';
 
 const rateLimitStore = new Map<string, RateLimitState>();
 let apiKeysConfig: ApiKeysConfig | null = null;
+let rateLimitPrunerStarted = false;
 
 function expandEnvVars(str: string): string {
   return str.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] || '');
@@ -38,6 +39,17 @@ export function loadApiKeysConfig(configPath: string, logger?: Logger): ApiKeysC
     : [];
   const validated = ApiKeysConfigSchema.parse({ apiKeys });
   apiKeysConfig = validated;
+  if (!rateLimitPrunerStarted) {
+    rateLimitPrunerStarted = true;
+    setInterval(() => {
+      const currentBucket = Math.floor(Date.now() / 60_000);
+      for (const key of rateLimitStore.keys()) {
+        const parts = key.split(':');
+        const bucket = Number(parts[parts.length - 1]);
+        if (bucket < currentBucket - 2) rateLimitStore.delete(key);
+      }
+    }, 120_000).unref();
+  }
   return validated;
 }
 

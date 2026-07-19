@@ -45,9 +45,9 @@ export interface ObservabilityStats {
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
-  if (sorted.length === 1) return sorted[0];
+  if (sorted.length === 1) return sorted[0]!;
   const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
-  return sorted[Math.max(0, idx)];
+  return sorted[Math.max(0, idx)]!;
 }
 
 export function computeObservabilityStats(modelFilter?: string): ObservabilityStats {
@@ -95,7 +95,7 @@ export function computeObservabilityStats(modelFilter?: string): ObservabilitySt
     const [model, tool] = key.split('|');
     const sorted = [...arr].sort((a, b) => a - b);
     latency.push({
-      model, tool,
+      model: model ?? '', tool: tool ?? '',
       count: arr.length,
       avgMs: arr.reduce((a, b) => a + b, 0) / arr.length,
       p95Ms: percentile(sorted, 95),
@@ -122,7 +122,7 @@ export function computeObservabilityStats(modelFilter?: string): ObservabilitySt
     const [model, scenario] = key.split('|');
     const costs = costsBy.get(key) ?? [];
     baselines.push({
-      model, scenario,
+      model: model ?? '', scenario: scenario ?? '',
       sampleCount: arr.length,
       avgTokens: arr.reduce((a, b) => a + b, 0) / arr.length,
       avgCostUsd: costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : 0,

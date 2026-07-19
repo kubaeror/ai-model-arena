@@ -40,7 +40,7 @@ function countRedundantCalls(toolCalls: ToolCallRecord[]): number {
   const seen = new Map<string, number>();
   
   for (let i = 0; i < toolCalls.length; i++) {
-    const tc = toolCalls[i];
+    const tc = toolCalls[i]!;
     const key = `${tc.name}:${JSON.stringify(tc.arguments)}`;
     
     if (i > 0 && seen.has(key)) {

@@ -131,12 +131,9 @@ program
   .requiredOption('-s, --suite <name>', 'Suite name (configs/regression/<name>.yaml)')
   .option('-m, --model <name>', 'Run for a specific model only')
   .option('--update-baseline', 'Update baselines after run', false)
-  .action(async (opts) => {
-    const logger = createLogger('ai-arena:cli');
-    void rootDir;
-    logger.info('Running regression suite', { suite: opts.suite });
-    console.log(`\nRegression suite: ${opts.suite}`);
-    console.log('Note: Full regression implementation requires orchestrator integration.\n');
+  .action(async (_opts) => {
+    process.stderr.write('\nError: The `regress` command is not yet implemented.\n');
+    process.exit(1);
   });
 
 // ── schedule ──────────────────────────────────────────────────────────────────
@@ -287,7 +284,7 @@ program
     
     let model = opts.model;
     if (!model && run.perModel.length === 1) {
-      model = run.perModel[0].model;
+      model = run.perModel[0]!.model;
     }
     if (!model) {
       console.error('Model name required. Available models:', run.models.join(', '));

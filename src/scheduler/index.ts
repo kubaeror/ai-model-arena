@@ -18,9 +18,9 @@ function parseCron(expr: string): { minute: number | null; hour: number | null; 
   };
   
   return {
-    minute: parsePart(parts[0]),
-    hour: parsePart(parts[1]),
-    dow: parts.length >= 5 ? parsePart(parts[4]) : null,
+    minute: parsePart(parts[0]!),
+    hour: parsePart(parts[1]!),
+    dow: parts.length >= 5 ? parsePart(parts[4]!) : null,
   };
 }
 
@@ -76,7 +76,7 @@ async function executeSchedule(schedule: Schedule, logger?: Logger): Promise<voi
     });
     
     if (schedule.notifications && schedule.notifications.length > 0) {
-      dispatchNotification({
+      void dispatchNotification({
         type: DispatchEventType.onRunCompleted,
         data: {
           scheduleId: schedule.id,
@@ -106,7 +106,7 @@ function scheduleJob(schedule: Schedule, logger?: Logger): void {
   });
   
   const timeout = setTimeout(() => {
-    executeSchedule(schedule, scheduleLogger);
+    void executeSchedule(schedule, scheduleLogger);
     scheduleJob(schedule, logger);
   }, nextRun);
   

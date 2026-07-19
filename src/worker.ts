@@ -17,8 +17,7 @@
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFile } from 'node:child_process';
 import {
   loadModelsConfig,
   loadScenario,
@@ -30,7 +29,7 @@ import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { writeReport } from './logger/report-logger.js';
 import { writeResultJson, type RunResult } from './logger/result-logger.js';
-import { Sandbox } from './sandbox/sandbox.js';
+import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { createAdapter } from './adapters/index.js';
@@ -40,7 +39,8 @@ import { findProjectRoot } from './paths.js';
 import type { ToolExecutionContext } from './types.js';
 import { loadPricingConfig, computeCost } from './cost-tracking/index.js';
 
-const execAsync = promisify(exec);
+/** Shell metacharacters that enable command injection. Rejected in successCriteria.command. */
+const SHELL_METACHAR_RE = /[`$(){}|;&<>\\]/;
 
 function rootDir(): string {
   if (process.env.AI_ARENA_ROOT) return process.env.AI_ARENA_ROOT;
@@ -81,13 +81,32 @@ async function runSuccessCriteria(
     passed: false,
   };
 
+  if (SHELL_METACHAR_RE.test(sc.command)) {
+    return {
+      command: sc.command,
+      expectedExitCode: sc.expectedExitCode,
+      exitCode: -1,
+      output: 'successCriteria.command contains disallowed shell metacharacters. ' +
+              'Use a simple command like "npm test" or "python -m pytest".',
+      passed: false,
+    };
+  }
+  const [bin = '', ...args] = sc.command.trim().split(/\s+/);
   try {
-    const { stdout } = await execAsync(sc.command, {
-      cwd: sandboxDir,
-      timeout: ctx.shellTimeoutMs,
-      maxBuffer: ctx.maxShellOutputBytes,
-      env: process.env,
-      shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+      execFile(
+        bin, args,
+        {
+          cwd: sandboxDir,
+          timeout: ctx.shellTimeoutMs,
+          maxBuffer: ctx.maxShellOutputBytes,
+          env: sandboxEnv(),
+        },
+        (err, stdout, stderr) => {
+          if (err) reject(Object.assign(err, { stdout, stderr }));
+          else resolve({ stdout });
+        },
+      );
     });
     outcome.output = stdout;
     outcome.exitCode = 0;
@@ -326,9 +345,9 @@ async function main(): Promise<void> {
 // Top-level: write a result.json even on catastrophic failure, then exit 0
 // so PM2 records "stopped" (not "errored"). Real failures are in result.json.
 main()
-  .catch((err) => {
+  .catch(async (err) => {
     const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    console.error(`[worker] fatal: ${msg}`);
+    process.stderr.write(`[worker] fatal error: ${msg}\n`);
     try {
       const root = rootDir();
       const modelName = process.env.AI_ARENA_MODEL ?? 'unknown';
@@ -355,9 +374,8 @@ main()
     } catch {
       /* nothing more we can do */
     }
+    try { await shutdownTracing(); } catch { /* ignore */ }
   })
   .finally(() => {
-    // Always exit 0: the orchestrator reads result.json to judge success, and a
-    // 0 exit keeps PM2 status "stopped" rather than triggering restarts/errored.
     process.exit(0);
   });

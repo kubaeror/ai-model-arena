@@ -28,19 +28,20 @@ export function buildAnthropicPayload(
   const systemParts: string[] = [];
   const out: AnthropicMessage[] = [];
 
-  const lastIsToolResultOnly = (): boolean =>
-    out.length > 0 &&
-    out[out.length - 1].role === 'user' &&
-    out[out.length - 1].content.every((b) => b.type === 'tool_result');
+  const lastIsToolResultOnly = (): boolean => {
+    if (out.length === 0) return false;
+    const last = out[out.length - 1]!;
+    return last.role === 'user' && last.content.every((b) => b.type === 'tool_result');
+  };
 
   const pushUserText = (text: string) => {
-    if (lastIsToolResultOnly()) out[out.length - 1].content.push({ type: 'text', text });
+    if (lastIsToolResultOnly()) out[out.length - 1]!.content.push({ type: 'text', text });
     else out.push({ role: 'user', content: [{ type: 'text', text }] });
   };
 
   const pushToolResult = (toolUseId: string, content: string) => {
     if (lastIsToolResultOnly()) {
-      out[out.length - 1].content.push({ type: 'tool_result', tool_use_id: toolUseId, content });
+      out[out.length - 1]!.content.push({ type: 'tool_result', tool_use_id: toolUseId, content });
     } else {
       out.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content }] });
     }
@@ -83,9 +84,17 @@ export function buildAnthropicPayload(
   return payload;
 }
 
+interface AnthropicRawContent { type?: string; text?: string; id?: string; name?: string; input?: unknown; }
+interface AnthropicRawResponse {
+  stop_reason?: string;
+  content?: AnthropicRawContent[];
+  usage?: { input_tokens?: number; output_tokens?: number };
+}
+
 /** Parse an Anthropic Messages response into a normalised ModelResponse. */
-export function parseAnthropicResponse(data: any): ModelResponse {
-  const blocks: AnthropicBlock[] = data?.content ?? [];
+export function parseAnthropicResponse(data: unknown): ModelResponse {
+  const raw = data as AnthropicRawResponse;
+  const blocks: AnthropicRawContent[] = raw.content ?? [];
   const textParts: string[] = [];
   const toolCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [];
   for (const b of blocks) {
@@ -99,19 +108,19 @@ export function parseAnthropicResponse(data: any): ModelResponse {
       });
     }
   }
-  const input = data?.usage?.input_tokens ?? 0;
-  const output = data?.usage?.output_tokens ?? 0;
+  const input = raw.usage?.input_tokens ?? 0;
+  const output = raw.usage?.output_tokens ?? 0;
   const usage: TokenUsage = {
-    prompt: data?.usage?.input_tokens,
-    completion: data?.usage?.output_tokens,
+    prompt: raw.usage?.input_tokens,
+    completion: raw.usage?.output_tokens,
     total: input + output || undefined,
   };
   return {
     text: textParts.length ? textParts.join('\n') : null,
     toolCalls,
     usage,
-    stopReason: data?.stop_reason,
-    raw: data,
+    stopReason: raw.stop_reason,
+    raw,
   };
 }
 

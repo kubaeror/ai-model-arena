@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { webhooksForEvent } from '../anomaly-detection/db.js';
+import { webhooksForEvent, getWebhookSecret } from '../anomaly-detection/db.js';
 import type { Logger } from '../types.js';
 
 /**
@@ -25,8 +25,9 @@ export async function dispatchWebhooks(event: WebhookEvent, payload: unknown, lo
     hooks.map(async (h) => {
       try {
         const headers: Record<string, string> = { 'content-type': 'application/json' };
-        if (h.secret) {
-          const sig = crypto.createHmac('sha256', h.secret).update(body).digest('hex');
+        const secret = getWebhookSecret(h.id);
+        if (secret) {
+          const sig = crypto.createHmac('sha256', secret).update(body).digest('hex');
           headers['x-arena-signature'] = `sha256=${sig}`;
         }
         const res = await fetch(h.url, {

@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import type { IncomingMessage } from 'node:http';
-import fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import {
   listArenaProcesses,
   listRuns,
@@ -9,6 +9,7 @@ import {
   isRunCompleteByRunId,
   finalizeRunByRunId,
 } from '../orchestrator/orchestrator.js';
+import * as pm2h from '../orchestrator/pm2-helpers.js';
 import { isOnline, DASHBOARD_PROC_NAME } from '../orchestrator/pm2-helpers.js';
 import type { Pm2ProcessStatus } from 'pm2';
 import { verifyToken, type AuthConfig } from './auth.js';
@@ -61,13 +62,24 @@ export class LiveHub {
       verifyClient: (info: ClientInfo, cb) => cb(this.verify(info, auth)),
     });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
+    void pm2h.pm2ConnectPersistent().catch((e) =>
+      this.logger.warn('PM2 persistent connect failed', { error: String(e) }),
+    );
     this.start();
   }
 
   private verify(info: ClientInfo, auth: AuthConfig): boolean {
     try {
+      const protocols = String(info.req.headers['sec-websocket-protocol'] ?? '');
+      const protocolToken = protocols
+        .split(',')
+        .map((p) => p.trim())
+        .find((p) => p !== 'access_token' && p.length > 0);
+
       const url = new URL(info.req.url ?? '/', 'http://localhost');
-      const token = url.searchParams.get('token');
+      const queryToken = url.searchParams.get('token');
+
+      const token = protocolToken ?? queryToken;
       if (!token) return false;
       return verifyToken(auth, token) != null;
     } catch {
@@ -130,7 +142,9 @@ export class LiveHub {
 
   private onConnection(ws: WebSocket, _req: IncomingMessage): void {
     this.subs.set(ws, new Set());
-    void this.getProcessStatus().then((processes) => this.send(ws, { type: 'process_status', processes }));
+    void this.getProcessStatus()
+      .then((processes) => this.send(ws, { type: 'process_status', processes }))
+      .catch((err) => this.logger.warn('Failed to get process status on connect', { error: String(err) }));
     ws.on('message', (data) => this.onMessage(ws, data));
     ws.on('close', () => this.subs.delete(ws));
     ws.on('error', () => this.subs.delete(ws));
@@ -145,7 +159,7 @@ export class LiveHub {
     }
     if (msg.type === 'subscribe' && typeof msg.runId === 'string') {
       this.subs.get(ws)?.add(msg.runId);
-      this.sendRunSnapshot(ws, msg.runId);
+      void this.sendRunSnapshot(ws, msg.runId);
     } else if (msg.type === 'unsubscribe' && typeof msg.runId === 'string') {
       this.subs.get(ws)?.delete(msg.runId);
     }
@@ -165,24 +179,26 @@ export class LiveHub {
   }
 
   /** On subscribe, immediately send the current conversation + recent log tail. */
-  private sendRunSnapshot(ws: WebSocket, runId: string): void {
+  private async sendRunSnapshot(ws: WebSocket, runId: string): Promise<void> {
     const rec = getRunRecord(runId);
     if (!rec) return;
     for (const m of rec.perModel) {
       const key = `${runId}:${m.model}`;
       try {
-        if (fs.existsSync(m.conversationPath)) {
-          const conv = JSON.parse(fs.readFileSync(m.conversationPath, 'utf8'));
+        const stat = await fsp.stat(m.conversationPath).catch(() => null);
+        if (stat) {
+          const conv = JSON.parse(await fsp.readFile(m.conversationPath, 'utf8'));
           const count = conv.entries?.length ?? 0;
           this.convSeen.set(key, count);
-          this.convMtime.set(key, fs.statSync(m.conversationPath).mtimeMs);
+          this.convMtime.set(key, stat.mtimeMs);
           this.send(ws, { type: 'conversation_snapshot', runId, model: m.model, conversation: conv });
         }
       } catch {
         /* ignore */
       }
       try {
-        const content = fs.existsSync(m.logFile) ? fs.readFileSync(m.logFile, 'utf8') : '';
+        const logStat = await fsp.stat(m.logFile).catch(() => null);
+        const content = logStat ? await fsp.readFile(m.logFile, 'utf8') : '';
         this.logSize.set(key, Buffer.byteLength(content));
         this.send(ws, { type: 'log_line', runId, model: m.model, lines: content.split(/\r?\n/).slice(-200) });
       } catch {
@@ -192,16 +208,15 @@ export class LiveHub {
   }
 
   /** Poll subscribed runs' conversation.json for newly-appended entries. */
-  private pollConversations(): void {
+  private async pollConversationsAsync(): Promise<void> {
     for (const runId of this.subscribedRunIds()) {
       const rec = getRunRecord(runId);
       if (!rec) continue;
       for (const m of rec.perModel) {
         const key = `${runId}:${m.model}`;
-        if (!fs.existsSync(m.conversationPath)) continue;
-        let stat: fs.Stats;
+        let stat: Awaited<ReturnType<typeof fsp.stat>>;
         try {
-          stat = fs.statSync(m.conversationPath);
+          stat = await fsp.stat(m.conversationPath);
         } catch {
           continue;
         }
@@ -209,7 +224,7 @@ export class LiveHub {
         this.convMtime.set(key, stat.mtimeMs);
         let conv: { entries?: unknown[] };
         try {
-          conv = JSON.parse(fs.readFileSync(m.conversationPath, 'utf8'));
+          conv = JSON.parse(await fsp.readFile(m.conversationPath, 'utf8'));
         } catch {
           continue;
         }
@@ -226,16 +241,15 @@ export class LiveHub {
   }
 
   /** Tail PM2 log files for subscribed runs (byte-offset based, cheap when idle). */
-  private pollLogs(): void {
+  private async pollLogsAsync(): Promise<void> {
     for (const runId of this.subscribedRunIds()) {
       const rec = getRunRecord(runId);
       if (!rec) continue;
       for (const m of rec.perModel) {
         const key = `${runId}:${m.model}`;
-        if (!fs.existsSync(m.logFile)) continue;
         let size: number;
         try {
-          size = fs.statSync(m.logFile).size;
+          size = (await fsp.stat(m.logFile)).size;
         } catch {
           continue;
         }
@@ -245,11 +259,11 @@ export class LiveHub {
           continue;
         }
         if (size === last) continue;
-        const fd = fs.openSync(m.logFile, 'r');
+        const fh = await fsp.open(m.logFile, 'r');
         try {
           const len = size - last;
           const buf = Buffer.alloc(len);
-          fs.readSync(fd, buf, 0, len, last);
+          await fh.read(buf, 0, len, last);
           this.logSize.set(key, size);
           const text = buf.toString('utf8');
           let lines = text.split(/\r?\n/);
@@ -258,7 +272,7 @@ export class LiveHub {
         } catch {
           /* ignore */
         } finally {
-          fs.closeSync(fd);
+          await fh.close();
         }
       }
     }
@@ -286,7 +300,12 @@ export class LiveHub {
 
   start(): void {
     this.timers.push(setInterval(() => { void this.broadcastProcessStatus(); }, 2000));
-    this.timers.push(setInterval(() => { this.pollConversations(); this.pollLogs(); }, 1000));
+    this.timers.push(setInterval(() => {
+      void this.pollConversationsAsync()
+        .catch((e) => this.logger.warn('pollConversations error', { error: String(e) }));
+      void this.pollLogsAsync()
+        .catch((e) => this.logger.warn('pollLogs error', { error: String(e) }));
+    }, 1000));
     this.timers.push(setInterval(() => { void this.finalizeRuns(); }, 3000));
     void this.broadcastProcessStatus();
   }
@@ -295,6 +314,7 @@ export class LiveHub {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     this.wss.close();
+    void pm2h.pm2DisconnectPersistent().catch(() => undefined);
   }
 }
 
