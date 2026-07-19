@@ -1,0 +1,14 @@
+{
+  "name": "express-rest",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Starter workspace for the express-rest scenario (seeded into the sandbox).",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

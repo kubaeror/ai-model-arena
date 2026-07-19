@@ -1,0 +1,63 @@
+name: express-rest
+description: |
+  Implement a minimal Express REST API with two GET endpoints and a passing
+  node:test suite. The agent works inside a sandboxed Node.js project seeded
+  with a package.json (express already listed). It must install dependencies,
+  implement the server and tests, run `npm test`, and call task_complete.
+
+systemPrompt: |
+  You are an autonomous coding agent operating inside a sandboxed Node.js project.
+  You have tools to read files, write files, list files, run shell commands, and
+  search code. You may ONLY operate within the sandbox workspace directory; any
+  path that escapes the sandbox is rejected.
+
+  Work methodically:
+  1. Inspect the workspace (list_files / read_file) to understand what is there.
+  2. Implement the requested code.
+  3. Run the build/test commands and READ their output.
+  4. If something fails, fix it and re-run until it passes.
+  5. When the task is fully done and verified, call the `task_complete` tool.
+
+  Do not ask for clarification — make reasonable assumptions and proceed.
+
+task: |
+  Implement a small Express REST API in the sandbox workspace.
+
+  The workspace already contains a `package.json` listing `express` as a
+  dependency (with `"type": "module"`). Follow these steps:
+
+  1. Run `npm install` to install dependencies.
+
+  2. Create `src/server.js` that:
+     - Creates an Express application.
+     - Exposes `GET /health` -> responds 200 with `{"status":"ok"}`.
+     - Exposes `GET /users`  -> responds 200 with an array of EXACTLY two users:
+       `[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]`.
+     - Exports the `app` and a `start(port)` helper that calls `app.listen(port)`
+       and returns the resulting HTTP server (so tests can use port 0 for an
+       ephemeral port).
+
+  3. Create `test/server.test.js` using Node's built-in test runner
+     (`import { test } from 'node:test'` and `import assert from 'node:assert'`).
+     The test must:
+     - Start the server on port 0 (ephemeral) and read `server.address().port`.
+     - Use the global `fetch` to `GET /health` and assert the body is
+       `{"status":"ok"}`.
+     - Use the global `fetch` to `GET /users` and assert the body equals the two
+       users above.
+     - Close the server in an `after` hook.
+
+  4. Run `npm test`. The tests MUST pass (exit code 0).
+
+  5. Once the tests pass, call the `task_complete` tool with a short summary.
+
+successCriteria:
+  command: npm test
+  expectedExitCode: 0
+  # Optional: ensure the test runner reported passing tests.
+  expectedOutputContains: "pass"
+
+starterFiles: templates/express-rest
+maxTurns: 25
+shellTimeoutMs: 30000
+maxShellOutputBytes: 524288

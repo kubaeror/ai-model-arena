@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bkg: 15 23 42;        /* slate-900 */
+  --fg: 226 232 240;      /* slate-200 */
+  --card: 30 41 59;       /* slate-800 */
+  --border: 51 65 85;     /* slate-700 */
+  --muted: 100 116 139;   /* slate-500 */
+  --primary: 99 102 241;  /* indigo-500 */
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: rgb(var(--bkg));
+  color: rgb(var(--fg));
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Thin scrollbars for transcript / logs */
+.nice-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.nice-scroll::-webkit-scrollbar-thumb {
+  background: rgb(var(--border));
+  border-radius: 4px;
+}
+.nice-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}

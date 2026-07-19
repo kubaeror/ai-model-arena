@@ -1,0 +1,188 @@
+import { Router } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  listRuns,
+  getRunRecord,
+  startRun,
+  stopRun,
+  restartRun,
+  checkRunStatus,
+  type RunSpec,
+} from '../../orchestrator/orchestrator.js';
+import type { RunIndexModelEntry } from '../../orchestrator/run-index.js';
+import { safeResolve } from '../../sandbox/sandbox.js';
+
+function findEntry(runId: string, model: string): RunIndexModelEntry | undefined {
+  return getRunRecord(runId)?.perModel.find((m) => m.model === model);
+}
+
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache']);
+
+function walkSandbox(dir: string, base: string, acc: string[] = []): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return acc;
+  }
+  for (const e of entries) {
+    if (IGNORE_DIRS.has(e.name)) continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) walkSandbox(full, base, acc);
+    else if (e.isFile()) acc.push(path.relative(base, full).replace(/\\/g, '/'));
+  }
+  return acc;
+}
+
+function readTail(filePath: string, lines = 400): string {
+  if (!fs.existsSync(filePath)) return '';
+  const content = fs.readFileSync(filePath, 'utf8');
+  return content.split(/\r?\n/).slice(-lines).join('\n');
+}
+
+export function createRunsRouter(): Router {
+  const router = Router();
+
+  // GET /api/runs — list all runs (from the index, no filesystem scan)
+  router.get('/', (_req, res) => {
+    res.json({ runs: listRuns() });
+  });
+
+  // POST /api/runs — trigger a new run (non-blocking; uses the orchestrator)
+  router.post('/', async (req, res) => {
+    const scenario = String(req.body?.scenario ?? '');
+    const models = req.body?.models;
+    if (!scenario || !Array.isArray(models) || models.length === 0) {
+      res.status(400).json({ error: 'body must include scenario and models[]' });
+      return;
+    }
+    try {
+      const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard' });
+      res.status(202).json({
+        runId: spec.runId,
+        scenario: spec.scenario,
+        startedAt: spec.startedAt,
+        models: spec.models.map((m) => ({ model: m.model, procName: m.procName })),
+      });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // GET /api/runs/:runId — run metadata + live per-model status
+  router.get('/:runId', async (req, res) => {
+    const rec = getRunRecord(req.params.runId);
+    if (!rec) {
+      res.status(404).json({ error: 'Run not found' });
+      return;
+    }
+    const spec = {
+      runId: rec.runId, scenario: rec.scenario, ts: '', startedAt: rec.startedAt,
+      root: '', modelsConfigPath: '', scenariosDir: '', comparisonBase: '',
+      models: rec.perModel.map((m) => ({ ...m })),
+    } as unknown as RunSpec;
+    let statuses: { model: string; status: string; online: boolean; exitCode: number | null }[] = [];
+    try {
+      statuses = (await checkRunStatus(spec)).map((s) => ({
+        model: s.model, status: s.status, online: s.online, exitCode: s.exitCode,
+      }));
+    } catch {
+      /* pm2 unavailable — still return the index record */
+    }
+    res.json({ run: rec, statuses });
+  });
+
+  // GET /api/runs/:runId/models/:model/conversation
+  router.get('/:runId/models/:model/conversation', (req, res) => {
+    const entry = findEntry(req.params.runId, req.params.model);
+    if (!entry) {
+      res.status(404).json({ error: 'Run or model not found' });
+      return;
+    }
+    if (!fs.existsSync(entry.conversationPath)) {
+      res.json({ model: req.params.model, conversation: { entries: [] } });
+      return;
+    }
+    res.json({ model: req.params.model, conversation: JSON.parse(fs.readFileSync(entry.conversationPath, 'utf8')) });
+  });
+
+  // GET /api/runs/:runId/models/:model/report
+  router.get('/:runId/models/:model/report', (req, res) => {
+    const entry = findEntry(req.params.runId, req.params.model);
+    if (!entry) {
+      res.status(404).json({ error: 'Run or model not found' });
+      return;
+    }
+    res.type('text/markdown').send(readTail(entry.reportPath, 100000) || '(report not available yet)');
+  });
+
+  // GET /api/runs/:runId/models/:model/files — list sandbox files
+  router.get('/:runId/models/:model/files', (req, res) => {
+    const entry = findEntry(req.params.runId, req.params.model);
+    if (!entry) {
+      res.status(404).json({ error: 'Run or model not found' });
+      return;
+    }
+    if (!fs.existsSync(entry.sandboxDir)) {
+      res.json({ files: [] });
+      return;
+    }
+    res.json({ files: walkSandbox(entry.sandboxDir, entry.sandboxDir).sort() });
+  });
+
+  // GET /api/runs/:runId/models/:model/files/* — read one sandbox file
+  router.get('/:runId/models/:model/files/*', (req, res) => {
+    const entry = findEntry(req.params.runId, req.params.model);
+    if (!entry) {
+      res.status(404).json({ error: 'Run or model not found' });
+      return;
+    }
+    const prefix = `/api/runs/${req.params.runId}/models/${req.params.model}/files/`;
+    const relRaw = req.path.startsWith(prefix) ? req.path.slice(prefix.length) : '';
+    let abs: string;
+    try {
+      abs = safeResolve(entry.sandboxDir, decodeURIComponent(relRaw));
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+      res.status(404).json({ error: 'File not found' });
+      return;
+    }
+    res.type('text/plain').send(fs.readFileSync(abs, 'utf8'));
+  });
+
+  // GET /api/runs/:runId/models/:model/logs — tail PM2 log
+  router.get('/:runId/models/:model/logs', (req, res) => {
+    const entry = findEntry(req.params.runId, req.params.model);
+    if (!entry) {
+      res.status(404).json({ error: 'Run or model not found' });
+      return;
+    }
+    res.type('text/plain').send(readTail(entry.logFile, 400));
+  });
+
+  // POST /api/runs/:runId/stop
+  router.post('/:runId/stop', async (req, res) => {
+    try {
+      await stopRun(req.params.runId);
+      res.json({ runId: req.params.runId, action: 'stop' });
+    } catch (e) {
+      res.status(404).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  // POST /api/runs/:runId/restart
+  router.post('/:runId/restart', async (req, res) => {
+    try {
+      await restartRun(req.params.runId);
+      res.json({ runId: req.params.runId, action: 'restart' });
+    } catch (e) {
+      res.status(404).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
+  return router;
+}
