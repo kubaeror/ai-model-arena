@@ -26,8 +26,17 @@ export function loadApiKeysConfig(configPath: string, logger?: Logger): ApiKeysC
   
   const content = fs.readFileSync(resolvedPath, 'utf8');
   const expanded = expandEnvVars(content);
-  const parsed = yaml.load(expanded);
-  const validated = ApiKeysConfigSchema.parse(parsed);
+  const rawParsed = yaml.load(expanded) as { apiKeys?: unknown[] } | null;
+  // Drop API-key entries whose `key` resolved to null/empty (env var unset)
+  // instead of crashing the server — an unset key is simply not registered.
+  const apiKeys = Array.isArray(rawParsed?.apiKeys)
+    ? rawParsed!.apiKeys.filter((entry): entry is Record<string, unknown> => {
+        if (!entry || typeof entry !== 'object') return false;
+        const k = (entry as Record<string, unknown>).key;
+        return typeof k === 'string' && k.length > 0;
+      })
+    : [];
+  const validated = ApiKeysConfigSchema.parse({ apiKeys });
   apiKeysConfig = validated;
   return validated;
 }

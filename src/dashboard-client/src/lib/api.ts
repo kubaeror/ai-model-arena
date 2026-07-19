@@ -31,6 +31,28 @@ export function clearToken(): void {
   localStorage.removeItem(USER_KEY);
 }
 
+/**
+ * Raw fetch wrapper (returns a `Response`) for callers that need the full
+ * response (e.g. `.json()` / status inspection) rather than the typed
+ * `apiFetch<T>` helper. Adds the JWT bearer header + same-origin API base.
+ */
+async function request(path: string, init?: RequestInit): Promise<Response> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
+  return fetch(API_BASE + path, { ...init, headers });
+}
+
+/** Low-level HTTP namespace (get/post/patch/del) returning a `Response`. */
+export const api = {
+  get: (path: string, init?: RequestInit) => request(path, { ...init, method: 'GET' }),
+  post: (path: string, init?: RequestInit) => request(path, { ...init, method: 'POST' }),
+  patch: (path: string, init?: RequestInit) => request(path, { ...init, method: 'PATCH' }),
+  del: (path: string, init?: RequestInit) => request(path, { ...init, method: 'DELETE' }),
+};
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {

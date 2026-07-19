@@ -1,0 +1,6 @@
+{"level":30,"time":"2026-07-19T21:47:59.274Z","name":"ai-arena:dashboard","dist":"C:\\Users\\Kuba\\Documents\\lmhub\\ai-model-arena\\src\\dashboard-client\\dist","msg":"Serving built dashboard client"}
+
+  ai-model-arena dashboard:  http://localhost:4000
+  WebSocket:                ws://localhost:4000/ws?token=<jwt>
+
+{"level":30,"time":"2026-07-19T21:47:59.278Z","name":"ai-arena:dashboard","port":4000,"wsPath":"/ws","msg":"Dashboard server listening"}
