@@ -14,6 +14,11 @@ import { createScenariosRouter } from './routes/scenarios.js';
 import { createRunsRouter } from './routes/runs.js';
 import { createAnalyticsRouter } from './routes/analytics.js';
 import { createExportRouter } from './routes/export.js';
+import { createTracesRouter } from './routes/traces.js';
+import { createAnomaliesRouter } from './routes/anomalies.js';
+import { createObservabilityRouter } from './routes/observability.js';
+import { createWebhooksRouter } from './routes/webhooks.js';
+import { mountOpenApi } from './openapi.js';
 
 const logger = createLogger('ai-arena:dashboard');
 
@@ -48,10 +53,28 @@ function start(): void {
   app.use('/api/models', requireAuth(auth), createModelsRouter());
   app.use('/api/scenarios', requireAuth(auth), createScenariosRouter());
   app.use('/api/runs', requireAuth(auth), createRunsRouter());
-  
+  app.use('/api/traces', requireAuth(auth), createTracesRouter());
+  app.use('/api/anomalies', requireAuth(auth), createAnomaliesRouter());
+  app.use('/api/observability', requireAuth(auth), createObservabilityRouter());
+  app.use('/api/webhooks', requireAuth(auth), createWebhooksRouter());
+
+  // ── Public API (API key auth + rate limiting), versioned under /api/v1 ────────
+  app.use('/api/v1/models', requireApiKey(['models:read']), createModelsRouter());
+  app.use('/api/v1/scenarios', requireApiKey(['scenarios:read']), createScenariosRouter());
+  app.use('/api/v1/runs', requireApiKey(['runs:read']), createRunsRouter());
+  app.use('/api/v1/analytics', requireApiKey(['analytics:read']), createAnalyticsRouter());
+  app.use('/api/v1/export', requireApiKey(['export:read']), createExportRouter());
+  app.use('/api/v1/traces', requireApiKey(['traces:read']), createTracesRouter());
+  app.use('/api/v1/anomalies', requireApiKey(['anomalies:read']), createAnomaliesRouter());
+  app.use('/api/v1/observability', requireApiKey(['observability:read']), createObservabilityRouter());
+  app.use('/api/v1/webhooks', requireApiKey(['webhooks:write']), createWebhooksRouter());
+
   // ── Public API (API key auth) ──────────────────────────────────────────────
   app.use('/api/analytics', requireApiKey(['analytics:read']), createAnalyticsRouter());
   app.use('/api/export', requireApiKey(['export:read']), createExportRouter());
+
+  // ── OpenAPI interactive docs (public) ──────────────────────────────────────
+  mountOpenApi(app);
 
   // ── Serve the built frontend in production (SPA) ─────────────────────────
   const dist = clientDist();

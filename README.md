@@ -539,4 +539,182 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
 
 **4. Result**: Every night at 3 AM, runs execute and post results to Slack. Regressions trigger alerts.
 
+---
+
+## OpenTelemetry Observability
+
+ai-model-arena instruments every agent run with OpenTelemetry spans using the
+**GenAI semantic conventions**, so a full trace tree can be reconstructed and
+viewed per run in any OTel-compatible backend.
+
+### Spans
+
+- `invoke_agent` (root, per run) — attributes: `gen_ai.system`, `gen_ai.request.model`, `ai_arena.run_id`, `ai_arena.scenario`, `ai_arena.model_config`.
+- `chat` (per model API call) — attributes: `gen_ai.request.model`, `gen_ai.request.temperature`, `gen_ai.request.max_tokens`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reasons`, `duration`.
+- `execute_tool` (per tool call) — attributes: `gen_ai.tool.name`, tool arguments (redacted/truncated), `duration_ms`, `tool.success`, `tool.error`.
+
+Full prompt/completion content is captured into span attributes **only** when
+`OTEL_CAPTURE_CONTENT=true` (off by default — may contain sensitive data and
+increases payload size).
+
+A lightweight local copy of each run's trace metadata is written to
+`outputs/<model>/<runId>/trace-meta.json` (+ an `index.json` summary with
+`trace_id`, `span_count`, `total_duration_ms`, `error_count`) so the dashboard
+can link straight into Jaeger/Grafana and render an in-app waterfall without
+querying the OTel backend.
+
+### Start the local observability stack
+
+```bash
+docker compose -f docker-compose.observability.yml up -d
+```
+
+This brings up:
+- **OTel Collector** on `:4318` (OTLP/HTTP) — receives traces from the arena.
+- **Jaeger UI** on `http://localhost:16686` — browse traces per run.
+- **Grafana** on `http://localhost:3000` — a pre-built *ai-model-arena Observability* dashboard (token volume, latency, error rate) with Jaeger as the auto-provisioned datasource.
+
+Then point the arena at the collector in your `.env`:
+
+```bash
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+OTEL_TRACE_UI_BASE_URL=http://localhost:16686   # dashboard deep-links into Jaeger
+```
+
+To view a trace for a specific run: open the run in the dashboard and click the
+**Trace** tab — it shows an in-app span waterfall and a deep-link into Jaeger
+using the stored `trace_id`. You can also call `GET /api/v1/traces/:runId`.
+
+## Anomaly Detection
+
+A background analysis module runs after each completed run (and is also
+triggerable over recent history) and flags anomalies using the collected
+metrics + traces, with lightweight, explainable statistics (rolling mean +
+standard deviation, z-score thresholds).
+
+### Anomaly types
+
+| Type | Trigger |
+|------|---------|
+| `latency` | A single tool/model call taking significantly longer than that model+tool's historical p95 (z-score ≥ threshold). |
+| `loop` | Same tool+args combination repeated `consecutiveRepeats` (default 3) times consecutively. |
+| `token_spike` | Total tokens in a run exceeding a configurable multiple of that model's historical average for the scenario. |
+| `cost_spike` | Estimated cost exceeding a multiple of the historical average. |
+| `error_rate` | Tool/API failure rate spiking above the model's historical baseline over the sliding window. |
+| `silent_failure` | Success criteria passed but judge score unusually low (or failed but score unusually high) — a "criteria mismatch" for manual review. |
+
+When an anomaly is detected, a record is written to SQLite
+(`outputs/arena.db`, table `anomalies`: id, run_id, model, type, severity,
+description, detected_at, resolved), a notification is dispatched via the
+existing notifications module (`onAnomalyDetected` routing → Slack/Discord),
+registered webhooks are fired, and the anomaly is surfaced on the dashboard
+**Anomalies** page (filter by model/type/severity/resolved, mark
+resolved/false-positive).
+
+### Configure + tune thresholds
+
+All thresholds live in `configs/anomaly-detection.yaml`:
+
+```yaml
+enabled: true
+slidingWindow: 20          # recent runs feeding the rolling baselines
+minSampleSize: 5           # require >= N historical samples before firing
+
+latency:    { enabled: true, zScoreThreshold: 3, severity: high }
+loop:       { enabled: true, consecutiveRepeats: 3, severity: medium }
+tokenSpike: { enabled: true, multiple: 3, severity: high }
+costSpike:  { enabled: true, multiple: 3, severity: high }
+errorRate:  { enabled: true, zScoreThreshold: 3, severity: high }
+silentFailure:
+  enabled: true
+  lowJudgeScore: 40
+  highJudgeScore: 70
+  severity: medium
+```
+
+Tuning: lower `zScoreThreshold`/`multiple` for more sensitivity (more alerts),
+raise them to reduce noise; raise `minSampleSize` to avoid firing on sparse
+history; widen `slidingWindow` to weight longer-term baselines.
+
+## Webhooks
+
+External systems can register a URL that receives signed POSTs on events
+(`run_completed`, `anomaly_detected`, `budget_exceeded`), decoupling
+notification logic from hardcoded Slack/Discord config:
+
+```bash
+curl -X POST http://localhost:4000/api/v1/webhooks \
+  -H "X-API-Key: $ARENA_API_KEY_CI" -H "content-type: application/json" \
+  -d '{"url":"https://example.com/hook","events":["anomaly_detected"]}'
+```
+
+Deliveries are HMAC-SHA256 signed with the registered secret in the
+`x-arena-signature` header (`sha256=<hex>`).
+
+## Public API
+
+The full OpenAPI spec is at `openapi.yaml` and served interactively at
+**`/api/docs`** (Swagger UI). All endpoints are versioned under `/api/v1/` and
+protected by API-key auth (`X-API-Key`) + per-key rate limiting. New endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/traces/:runId` | Span metadata tree for a run (+ external trace URL). |
+| GET | `/api/v1/anomalies` | List anomalies (model/type/severity/resolved/date filters). |
+| GET | `/api/v1/anomalies/:id` | Full anomaly detail incl. related run + span data. |
+| PATCH | `/api/v1/anomalies/:id` | Mark resolved / false positive. |
+| GET | `/api/v1/observability/stats` | Avg/p95/p99 latency, error rates, rolling baselines. |
+| GET | `/api/v1/observability/health` | Healthcheck (OTel exporter, SQLite, PM2). |
+| POST | `/api/v1/webhooks` | Register a webhook subscription. |
+| GET | `/api/v1/webhooks` | List webhooks. |
+| DELETE | `/api/v1/webhooks/:id` | Remove a webhook. |
+
+Existing endpoints (models, scenarios, runs, cost, tool analytics, export) are
+all mirrored under `/api/v1/` as well. Permissions include `traces:read`,
+`anomalies:read`, `anomalies:write`, `observability:read`, `webhooks:write`
+(configured in `configs/api-keys.yaml`).
+
+## End-to-End Example
+
+```bash
+# 1. Start the observability stack
+docker compose -f docker-compose.observability.yml up -d
+
+# 2. Configure the arena (.env)
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+OTEL_TRACE_UI_BASE_URL=http://localhost:16686
+
+# 3. Run a scenario
+ai-arena run --scenario express-rest --models gpt-4o
+```
+
+Each model worker now emits a full trace tree. Open the run in the dashboard →
+**Trace** tab, or browse it in Jaeger at
+`http://localhost:16686/trace/<trace_id>` (the dashboard prints the link).
+
+### Simulate an anomaly
+
+To demonstrate the anomaly-detection + notification flow, throttle a mock model
+so a single `chat` call takes far longer than its baseline (e.g. point a model
+config at a slow/local endpoint that sleeps). After a few normal runs establish a
+baseline, the throttled run will:
+
+1. Produce a `latency` span well above mean + 3·std.
+2. Trigger an anomaly record in `outputs/arena.db`.
+3. Dispatch a Slack/Discord notification (`onAnomalyDetected`) + any registered
+   webhooks.
+4. Surface on the dashboard **Anomalies** page, where it can be marked
+   resolved / false positive.
+
+Verify programmatically:
+
+```bash
+curl -H "X-API-Key: $ARENA_API_KEY_CI" http://localhost:4000/api/v1/anomalies?resolved=false
+curl http://localhost:4000/api/v1/observability/health   # OTel / SQLite / PM2 health
+```
+
+
+
 

@@ -34,7 +34,8 @@ import { Sandbox } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { createAdapter } from './adapters/index.js';
-import { runAgentLoop } from './agent-loop/index.js';
+import { initTracing, shutdownTracing } from './observability/tracing.js';
+import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { findProjectRoot } from './paths.js';
 import type { ToolExecutionContext } from './types.js';
 import { loadPricingConfig, computeCost } from './cost-tracking/index.js';
@@ -109,6 +110,10 @@ async function runSuccessCriteria(
 async function main(): Promise<void> {
   const root = rootDir();
   const logger = createLogger('ai-arena:worker', process.env.LOG_LEVEL);
+
+  // Initialise OpenTelemetry before any work that should be traced. The OTLP
+  // exporter honours OTEL_EXPORTER_OTLP_ENDPOINT; no-op when OTEL_ENABLED=false.
+  initTracing();
 
   const modelName = process.env.AI_ARENA_MODEL;
   const scenarioName = process.env.AI_ARENA_SCENARIO;
@@ -217,7 +222,7 @@ async function main(): Promise<void> {
 
   let loopResult;
   try {
-    loopResult = await runAgentLoop({
+    const { result } = await runAgentLoopTraced({
       adapter,
       tools: TOOL_DEFINITIONS,
       executors,
@@ -227,12 +232,22 @@ async function main(): Promise<void> {
       toolCtx,
       conv,
       logger,
+      provider: modelCfg.provider,
+      model: modelCfg.model,
+      temperature: modelCfg.temperature,
+      maxTokens: modelCfg.maxTokens,
+      scenario: scenarioName,
+      runId,
+      modelConfig: modelName,
+      outputDir,
     });
+    loopResult = result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error('Agent loop crashed', { error: msg });
     conv.append({ type: 'error', content: `Agent loop crashed: ${msg}` });
     fail([`Agent loop crashed: ${msg}`]);
+    await shutdownTracing();
     return;
   }
 
@@ -303,6 +318,9 @@ async function main(): Promise<void> {
     stopReason: result.stopReason, turnsUsed: result.turnsUsed,
     totalToolCalls: result.totalToolCalls, durationMs: result.durationMs,
   });
+
+  // Flush any pending traces to the OTel backend before the process exits.
+  await shutdownTracing();
 }
 
 // Top-level: write a result.json even on catastrophic failure, then exit 0

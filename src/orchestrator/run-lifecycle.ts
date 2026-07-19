@@ -14,6 +14,7 @@ import {
   getRunRecord,
   type RunIndexModelEntry,
 } from './run-index.js';
+import { analyzeRun } from '../anomaly-detection/index.js';
 
 export interface PerModelSpec {
   model: string;
@@ -307,6 +308,10 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
   });
   patchIndexAfterFinalize(spec.runId, mdPath, jsonPath, perModel);
   logger.info('Comparison written', { md: mdPath, json: jsonPath });
+  // Run anomaly detection over the just-completed run (best-effort, non-blocking).
+  void analyzeRun(spec.runId, logger).catch((e) =>
+    logger.warn('Anomaly analysis failed', { runId: spec.runId, error: e instanceof Error ? e.message : String(e) }),
+  );
   return { entries, mdPath, jsonPath };
 }
 
@@ -332,6 +337,10 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
   });
   patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
   logger.info('Finalized run via watcher', { runId, md: mdPath });
+  // Run anomaly detection over the just-completed run (best-effort, non-blocking).
+  void analyzeRun(runId, logger).catch((e) =>
+    logger.warn('Anomaly analysis failed', { runId, error: e instanceof Error ? e.message : String(e) }),
+  );
 }
 
 /** Stop a running run's PM2 processes (keeps them in the PM2 list). */

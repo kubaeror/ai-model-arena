@@ -19,6 +19,7 @@ export enum DispatchEventType {
   onRunCompleted = 'onRunCompleted',
   onBudgetThreshold = 'onBudgetThreshold',
   onRegressionFailed = 'onRegressionFailed',
+  onAnomalyDetected = 'onAnomalyDetected',
 }
 
 export interface DispatchEvent {

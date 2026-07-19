@@ -107,3 +107,69 @@ export interface ProcStatus {
   exitCode: number | null;
   online: boolean;
 }
+
+// ── Observability / anomaly types ───────────────────────────────────────────
+
+export type AnomalyType = 'latency' | 'loop' | 'token_spike' | 'cost_spike' | 'error_rate' | 'silent_failure';
+export type AnomalySeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export interface AnomalyRecord {
+  id: number;
+  run_id: string;
+  model: string;
+  type: AnomalyType;
+  severity: AnomalySeverity;
+  description: string;
+  detected_at: string;
+  resolved: boolean;
+  resolved_at: string | null;
+  resolved_as: string | null;
+  metadata_json: string | null;
+}
+
+export interface SpanMeta {
+  spanId: string;
+  parentSpanId: string | null;
+  traceId: string;
+  name: string;
+  type: 'root' | 'chat' | 'execute_tool' | 'other';
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number | null;
+  status: 'ok' | 'error' | 'unset';
+  attributes: Record<string, unknown>;
+}
+
+export interface TraceTree {
+  model: string;
+  traceId: string | null;
+  spanCount: number;
+  totalDurationMs: number;
+  errorCount: number;
+  externalUrl: string | null;
+  spans: SpanMeta[];
+}
+
+export interface TraceResponse {
+  runId: string;
+  scenario: string;
+  externalBackend: boolean;
+  traces: TraceTree[];
+}
+
+export interface WebhookRecord {
+  id: number;
+  url: string;
+  events: string;
+  secret: string | null;
+  created_at: string;
+  active: boolean;
+}
+
+export interface ObservabilityStats {
+  generatedAt: string;
+  latency: Array<{ model: string; tool: string; count: number; avgMs: number; p95Ms: number; p99Ms: number }>;
+  models: Array<{ model: string; runs: number; errorRate: number; anomalies: number; unresolvedAnomalies: number }>;
+  baselines: Array<{ model: string; scenario: string; sampleCount: number; avgTokens: number; avgCostUsd: number }>;
+}
+

@@ -10,6 +10,13 @@ apiKeys:
       - runs:write
       - models:read
       - scenarios:read
+      - traces:read
+      - anomalies:read
+      - anomalies:write
+      - observability:read
+      - webhooks:write
+      - analytics:read
+      - export:read
     rateLimit: 100
     
   - key: ${ARENA_API_KEY_READONLY}
@@ -17,5 +24,10 @@ apiKeys:
     permissions:
       - runs:read
       - models:read
+      - scenarios:read
       - analytics:read
+      - traces:read
+      - anomalies:read
+      - observability:read
+      - export:read
     rateLimit: 60

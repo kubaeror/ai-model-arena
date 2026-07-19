@@ -10,6 +10,11 @@ export const ApiKeyPermissionSchema = z.enum([
   'analytics:read',
   'analytics:write',
   'export:read',
+  'traces:read',
+  'anomalies:read',
+  'anomalies:write',
+  'observability:read',
+  'webhooks:write',
 ]);
 
 export const ApiKeySchema = z.object({

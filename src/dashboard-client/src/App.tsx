@@ -1,5 +1,5 @@
 import { NavLink, Route, Routes, Navigate, useLocation } from 'react-router-dom';
-import { Activity, Boxes, DollarSign, FlaskConical, ListChecks, Play, Settings, Wrench } from 'lucide-react';
+import { Activity, AlertTriangle, Boxes, DollarSign, FlaskConical, ListChecks, Play, Settings, Wrench } from 'lucide-react';
 import { AuthProvider, useAuth } from './hooks/useAuth.js';
 import { LiveProvider } from './hooks/useLive.js';
 import { Login } from './pages/Login.js';
@@ -11,6 +11,7 @@ import { Launcher } from './pages/Launcher.js';
 import { Comparisons } from './pages/Comparisons.js';
 import { ToolAnalytics } from './pages/ToolAnalytics.js';
 import { CostLeaderboard } from './pages/CostLeaderboard.js';
+import { Anomalies } from './pages/Anomalies.js';
 import { cn } from './lib/cn.js';
 
 const NAV = [
@@ -21,6 +22,7 @@ const NAV = [
   { to: '/comparisons', label: 'Comparisons', icon: ListChecks },
   { to: '/analytics', label: 'Analytics', icon: Wrench },
   { to: '/cost', label: 'Cost', icon: DollarSign },
+  { to: '/anomalies', label: 'Anomalies', icon: AlertTriangle },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -65,6 +67,7 @@ function Shell() {
             <Route path="/comparisons" element={<Comparisons />} />
             <Route path="/analytics" element={<ToolAnalytics />} />
             <Route path="/cost" element={<CostLeaderboard />} />
+            <Route path="/anomalies" element={<Anomalies />} />
             <Route path="/runs/:runId" element={<RunDetail />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace state={{ from: location }} />} />

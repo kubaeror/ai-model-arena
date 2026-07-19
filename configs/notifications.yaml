@@ -24,3 +24,5 @@ routing:
   onRegressionFailed:
     - slack-alerts
     - discord-arena
+  onAnomalyDetected:
+    - slack-alerts

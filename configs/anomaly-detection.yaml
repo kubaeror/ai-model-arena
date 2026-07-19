@@ -1,0 +1,39 @@
+# ai-model-arena anomaly detection configuration
+# Lightweight, explainable rules (z-scores + multiples) — no ML.
+# Tuned against a rolling window of the most recent `slidingWindow` runs per
+# (model, scenario). `minSampleSize` guards against firing on too little data.
+
+enabled: true
+slidingWindow: 20          # how many recent runs feed the rolling baselines
+minSampleSize: 5           # need >= N historical samples before z-score/multiple rules fire
+
+latency:
+  enabled: true
+  zScoreThreshold: 3       # flag spans whose duration exceeds mean + 3*std
+  severity: high
+
+loop:
+  enabled: true
+  consecutiveRepeats: 3     # same tool+args N times in a row
+  severity: medium
+
+tokenSpike:
+  enabled: true
+  multiple: 3              # total tokens > 3x historical mean
+  severity: high
+
+costSpike:
+  enabled: true
+  multiple: 3              # estimated cost > 3x historical mean
+  severity: high
+
+errorRate:
+  enabled: true
+  zScoreThreshold: 3      # failure fraction > mean + 3*std
+  severity: high
+
+silentFailure:
+  enabled: true
+  lowJudgeScore: 40       # success criteria passed but judge score < this => mismatch
+  highJudgeScore: 70      # success criteria failed but judge score > this => mismatch
+  severity: medium
