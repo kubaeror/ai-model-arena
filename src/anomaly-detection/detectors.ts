@@ -6,13 +6,9 @@ import type { AnomalyDetectionConfig } from './config.js';
 import type { RunHistory } from './baselines.js';
 import { latencyStats, tokenStats, costStats, errorRateStats, readResult } from './baselines.js';
 import type { NewAnomaly, AnomalySeverity } from './db.js';
+import type { ToolCallEntry } from '../logger/conversation-parser.js';
 
-export interface ToolCallRow {
-  name: string;
-  arguments: Record<string, unknown>;
-  turn: number;
-  success: boolean;
-}
+export type ToolCallRow = ToolCallEntry;
 
 export interface RunAnalysisInput {
   runId: string;
@@ -26,38 +22,6 @@ export interface RunAnalysisInput {
 }
 
 export type Detector = (input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory) => NewAnomaly[];
-
-/** Extract ordered tool calls (with success) from a conversation.json file. */
-export function extractToolCallsFromConversation(convPath: string): ToolCallRow[] {
-  if (!fs.existsSync(convPath)) return [];
-  let conv: Record<string, unknown>;
-  try {
-    conv = JSON.parse(fs.readFileSync(convPath, 'utf8')) as Record<string, unknown>;
-  } catch {
-    return [];
-  }
-  const entries = (conv.entries as Array<Record<string, unknown>>) ?? [];
-  const calls: ToolCallRow[] = [];
-  let currentTurn = 0;
-  for (const entry of entries) {
-    const type = entry.type as string;
-    if (type === 'assistant') currentTurn = (entry.turn as number) ?? currentTurn + 1;
-    else if (type === 'tool_call') {
-      calls.push({
-        name: String(entry.toolName ?? ''),
-        arguments: ((entry.meta as Record<string, unknown>)?.args as Record<string, unknown>) ?? {},
-        turn: currentTurn,
-        success: true,
-      });
-    } else if (type === 'tool_result') {
-      const name = String(entry.toolName ?? '');
-      const isError = Boolean(entry.isError);
-      const last = [...calls].reverse().find((c) => c.turn === currentTurn && c.name === name);
-      if (last) last.success = !isError;
-    }
-  }
-  return calls;
-}
 
 /** Read the judge score (0-100) for a run, if judge_score.json exists. */
 export function readJudgeScore(outputDir: string): number | null {

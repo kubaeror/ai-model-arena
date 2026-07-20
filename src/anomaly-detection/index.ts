@@ -8,10 +8,10 @@ import { loadAnomalyConfig } from './config.js';
 import { buildRunHistory, type RunHistory } from './baselines.js';
 import {
   ALL_DETECTORS,
-  extractToolCallsFromConversation,
   readJudgeScore,
   type RunAnalysisInput,
 } from './detectors.js';
+import { extractToolCallsFromConversation, type ToolCallEntry } from '../logger/conversation-parser.js';
 import { insertAnomaly, listAnomaliesForRun, type AnomalyRecord, type NewAnomaly } from './db.js';
 import { dispatchNotification, dispatchWebhooks, DispatchEventType } from '../notifications/index.js';
 
@@ -46,7 +46,13 @@ export async function analyzeRun(runId: string, externalLogger?: Logger): Promis
     try {
       const result = readResultJsonSafe(perModel.resultPath);
       const trace = readTraceMeta(perModel.outputDir);
-      const toolCalls = extractToolCallsFromConversation(perModel.conversationPath);
+      let toolCalls: ToolCallEntry[] = [];
+      try {
+        if (fs.existsSync(perModel.conversationPath)) {
+          const conv = JSON.parse(fs.readFileSync(perModel.conversationPath, 'utf8')) as Record<string, unknown>;
+          toolCalls = extractToolCallsFromConversation(conv);
+        }
+      } catch { /* ignore */ }
       const judgeScore = readJudgeScore(perModel.outputDir);
 
       const input: RunAnalysisInput = {

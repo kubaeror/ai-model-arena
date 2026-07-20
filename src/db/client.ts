@@ -58,6 +58,14 @@ const MIGRATIONS: Array<{ id: string; sql: string }> = [
   },
 ];
 
+/**
+ * Initialise (or return) the shared SQLite database singleton.
+ *
+ * WARNING — SINGLETON: Only the first call with a given path is honoured.
+ * Subsequent calls with a *different* path are silently ignored. In automated
+ * tests, call `closeDb()` between test suites to reset the singleton, or use
+ * an in-memory database (`:memory:`).
+ */
 export function initDb(dbPath: string): DatabaseType {
   if (dbInstance && dbInstance.name === dbPath) return dbInstance;
   const db = new Database(dbPath);

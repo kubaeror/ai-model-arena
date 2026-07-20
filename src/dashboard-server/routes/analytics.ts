@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { promises as fsp } from 'node:fs';
 import { listRuns } from '../../orchestrator/orchestrator.js';
+import { extractToolCallsFromConversation } from '../../logger/conversation-parser.js';
 
 interface AnalyticsToolsCache { key: string; data: ToolAnalyticsResponse; ts: number; }
 let analyticsToolsCache: AnalyticsToolsCache | null = null;
@@ -38,31 +39,6 @@ async function readResultFile(resultPath: string): Promise<Record<string, unknow
 }
 async function readConversationFile(convPath: string): Promise<Record<string, unknown> | null> {
   try { return JSON.parse(await fsp.readFile(convPath, 'utf8')); } catch { return null; }
-}
-
-function extractToolCallsFromConversation(conv: Record<string, unknown>): Array<{ turn: number; name: string; success: boolean }> {
-  const entries = (conv.entries as Array<Record<string, unknown>>) ?? [];
-  const toolCalls: Array<{ turn: number; name: string; success: boolean }> = [];
-  
-  let currentTurn = 0;
-  for (const entry of entries) {
-    const type = entry.type as string;
-    if (type === 'assistant') {
-      currentTurn = (entry.turn as number) ?? currentTurn + 1;
-    } else if (type === 'tool_call') {
-      const name = entry.toolName as string;
-      toolCalls.push({ turn: currentTurn, name, success: true });
-    } else if (type === 'tool_result') {
-      const name = entry.toolName as string;
-      const isError = entry.isError as boolean;
-      const lastCall = toolCalls.filter(tc => tc.turn === currentTurn && tc.name === name).pop();
-      if (lastCall) {
-        lastCall.success = !isError;
-      }
-    }
-  }
-  
-  return toolCalls;
 }
 
 function detectLoopsInConversation(conv: Record<string, unknown>): LoopIncident[] {
