@@ -22,6 +22,7 @@ export const ScenarioConfigSchema = z.object({
   successCriteria: SuccessCriteriaSchema.optional(),
   maxTurns: z.number().int().positive().optional(),
   shellTimeoutMs: z.number().int().positive().default(30000),
+  shellPolicy: z.enum(['strict', 'permissive']).default('strict'),
   maxShellOutputBytes: z.number().int().positive().default(524288), // 512 KB
 });
 export type ScenarioConfig = z.infer<typeof ScenarioConfigSchema>;

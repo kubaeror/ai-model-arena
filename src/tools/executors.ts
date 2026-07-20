@@ -3,6 +3,7 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
+import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
 import type { ToolExecutor, ToolExecutorMap } from '../types.js';
 
 const execAsync = promisify(exec);
@@ -92,6 +93,12 @@ function formatShell(stdout: string, stderr: string, code: number | string | nul
 export const runShellCommand: ToolExecutor = async (args, ctx) => {
   const command = String(args.command ?? '');
   if (!command.trim()) return { content: 'Error: "command" is required.', isError: true };
+  if (!isShellCommandAllowed(command, ctx.shellPolicy)) {
+    return {
+      content: `Error: command rejected by shell policy (contains shell metacharacters). Use a plain command without | ; & $ \` > < ( ) \\ or newlines.`,
+      isError: true,
+    };
+  }
 
   try {
     const { stdout, stderr } = await execAsync(command, {

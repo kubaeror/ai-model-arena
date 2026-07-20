@@ -36,11 +36,9 @@ import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { findProjectRoot, outputRoot, dbPath } from './paths.js';
+import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
 import type { ToolExecutionContext } from './types.js';
 import { computeCost } from './cost-tracking/index.js';
-
-/** Shell metacharacters that enable command injection. Rejected in successCriteria.command. */
-const SHELL_METACHAR_RE = /[`$(){}|;&<>\\]/;
 
 function rootDir(): string {
   if (process.env.AI_ARENA_ROOT) return process.env.AI_ARENA_ROOT;
@@ -182,6 +180,7 @@ async function main(): Promise<void> {
     logger: logger.child('tools'),
     shellTimeoutMs: scenario.shellTimeoutMs,
     maxShellOutputBytes: scenario.maxShellOutputBytes,
+    shellPolicy: scenario.shellPolicy,
   };
 
   const sandbox = new Sandbox(sandboxDir);

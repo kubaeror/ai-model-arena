@@ -76,6 +76,7 @@ export interface ToolExecutionContext {
   logger: Logger;
   shellTimeoutMs: number;
   maxShellOutputBytes: number;
+  shellPolicy?: 'strict' | 'permissive';
 }
 
 export type ToolExecutor = (
