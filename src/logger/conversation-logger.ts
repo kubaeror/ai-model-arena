@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Role, ToolCall, TokenUsage } from '../types.js';
 
@@ -36,6 +37,21 @@ export interface ConversationFile {
   entries: ConversationEntry[];
 }
 
+export interface ConversationDbSink {
+  appendMessage(sessionId: string, msg: {
+    id: string;
+    sessionId: string;
+    turn: number;
+    role: string;
+    content: string | null;
+    toolCalls: string | null;
+    toolCallId: string | null;
+    tokenInput: number | null;
+    tokenOutput: number | null;
+    createdAt: string;
+  }): Promise<void>;
+}
+
 /**
  * Writes a structured, durable conversation transcript to `conversation.json`.
  * Each `append()` flushes the whole file so a crash mid-run still leaves a
@@ -43,12 +59,18 @@ export interface ConversationFile {
  */
 export class ConversationLogger {
   private file: ConversationFile;
+  private dbSink?: ConversationDbSink;
+  private sessionId?: string;
+  private turn = 0;
 
   constructor(
     private readonly filePath: string,
     meta: { model: string; scenario: string; runId: string; startedAt: string },
+    opts?: { dbSink?: ConversationDbSink; sessionId?: string },
   ) {
     this.file = { ...meta, entries: [] };
+    this.dbSink = opts?.dbSink;
+    this.sessionId = opts?.sessionId;
   }
 
   append(entry: Omit<ConversationEntry, 'timestamp'> & { timestamp?: string }): void {
@@ -58,6 +80,24 @@ export class ConversationLogger {
       timestamp: timestamp ?? new Date().toISOString(),
     };
     this.file.entries.push(e);
+    if (entry.turn != null) this.turn = entry.turn;
+
+    if (this.dbSink && this.sessionId && entry.role) {
+      const msg = {
+        id: crypto.randomUUID(),
+        sessionId: this.sessionId,
+        turn: entry.turn ?? this.turn,
+        role: entry.role,
+        content: entry.content ?? null,
+        toolCalls: entry.toolCalls ? JSON.stringify(entry.toolCalls) : null,
+        toolCallId: entry.toolCallId ?? null,
+        tokenInput: entry.usage?.prompt ?? null,
+        tokenOutput: entry.usage?.completion ?? null,
+        createdAt: entry.timestamp ?? new Date().toISOString(),
+      };
+      this.dbSink.appendMessage(this.sessionId, msg).catch(() => {});
+    }
+
     this.flush();
   }
 

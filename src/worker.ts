@@ -32,6 +32,7 @@ import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { initDb, getDb } from './db/client.js';
+import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
@@ -168,12 +169,14 @@ async function main(): Promise<void> {
   const sandboxGit = new SandboxGit({ sandboxDir, modelName, logger });
   
   const startedAt = new Date();
+  const store = createSessionStore();
+  const session = await store.createSession({ model: modelName });
   const conv = new ConversationLogger(path.join(outputDir, 'conversation.json'), {
     model: modelName,
     scenario: scenarioName,
     runId,
     startedAt: startedAt.toISOString(),
-  });
+  }, { dbSink: store, sessionId: session.id });
 
   const toolCtx: ToolExecutionContext = {
     sandboxDir,
