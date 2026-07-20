@@ -73,7 +73,18 @@ export function isWithin(sandboxDir: string, targetAbs: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-/** Env var name prefixes that must never be visible inside sandboxed commands. */
+/**
+ * Sensitive environment variable names/prefixes stripped from sandboxed commands.
+ *
+ * Matching: `key === prefix` (exact) OR `key.startsWith(prefix)` (prefix).
+ * Entries without a trailing `_` act as both exact names AND prefixes — i.e.,
+ * OPENAI_API_KEY blocks OPENAI_API_KEY itself and OPENAI_API_KEY_2, etc.
+ * ARENA_API_KEY_ (with trailing `_`) blocks ARENA_API_KEY_CI, ARENA_API_KEY_READONLY, etc.
+ * DASHBOARD_JWT_SECRET and DASHBOARD_PASSWORD are exact names that also cover
+ * any variable starting with those strings.
+ *
+ * To add a new secret family, append the common prefix here.
+ */
 const BLOCKED_ENV_PREFIXES = [
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',

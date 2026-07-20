@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Logger } from '../types.js';
+import { sandboxEnv } from './sandbox.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -30,7 +31,7 @@ export class SandboxGit {
     const result = await execFile('git', args, {
       cwd: this.sandboxDir,
       env: {
-        ...process.env,
+        ...sandboxEnv(),
         GIT_AUTHOR_NAME: `ai-arena:${this.modelName}`,
         GIT_AUTHOR_EMAIL: `ai-arena-${this.modelName}@localhost`,
         GIT_COMMITTER_NAME: `ai-arena:${this.modelName}`,

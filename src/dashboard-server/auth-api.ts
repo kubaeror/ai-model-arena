@@ -1,14 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import yaml from 'js-yaml';
 import type { Response, NextFunction, Request } from 'express';
 import type { Logger } from '../types.js';
 import type { ApiKeysConfig, ApiKeyPermission, RequestContext, RateLimitState } from './auth-api-types.js';
 import { ApiKeysConfigSchema } from './auth-api-types.js';
 
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const key = Buffer.alloc(32, 0);
+  const ha = crypto.createHmac('sha256', key).update(a).digest();
+  const hb = crypto.createHmac('sha256', key).update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
 const rateLimitStore = new Map<string, RateLimitState>();
 let apiKeysConfig: ApiKeysConfig | null = null;
+let apiKeyMap: Map<string, RequestContext> | null = null;
 let rateLimitPrunerStarted = false;
+let rateLimitPrunerHandle: NodeJS.Timeout | null = null;
 
 function expandEnvVars(str: string): string {
   return str.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] || '');
@@ -39,29 +49,36 @@ export function loadApiKeysConfig(configPath: string, logger?: Logger): ApiKeysC
     : [];
   const validated = ApiKeysConfigSchema.parse({ apiKeys });
   apiKeysConfig = validated;
+  apiKeyMap = new Map(
+    validated.apiKeys.map((k) => [k.key, {
+      keyName: k.name,
+      permissions: k.permissions,
+      rateLimit: k.rateLimit,
+    }]),
+  );
   if (!rateLimitPrunerStarted) {
     rateLimitPrunerStarted = true;
-    setInterval(() => {
+    rateLimitPrunerHandle = setInterval(() => {
       const currentBucket = Math.floor(Date.now() / 60_000);
       for (const key of rateLimitStore.keys()) {
         const parts = key.split(':');
         const bucket = Number(parts[parts.length - 1]);
         if (bucket < currentBucket - 2) rateLimitStore.delete(key);
       }
-    }, 120_000).unref();
+    }, 120_000);
+    rateLimitPrunerHandle.unref();
   }
   return validated;
 }
 
 function findApiKey(key: string): RequestContext | null {
-  if (!apiKeysConfig) return null;
-  const found = apiKeysConfig.apiKeys.find(k => k.key === key);
-  if (!found) return null;
-  return {
-    keyName: found.name,
-    permissions: found.permissions,
-    rateLimit: found.rateLimit,
-  };
+  if (!apiKeyMap) return null;
+  let found: RequestContext | null = null;
+  // Always iterate all entries for timing-safety (no early-exit on match).
+  for (const [storedKey, ctx] of apiKeyMap) {
+    if (timingSafeEqualStr(key, storedKey)) found = ctx;
+  }
+  return found;
 }
 
 function checkPermission(ctx: RequestContext, permission: ApiKeyPermission): boolean {
@@ -129,5 +146,11 @@ export function requireApiKey(permissions: ApiKeyPermission[]) {
 
 export function resetApiKeysCache(): void {
   apiKeysConfig = null;
+  apiKeyMap = null;
   rateLimitStore.clear();
+  rateLimitPrunerStarted = false;
+  if (rateLimitPrunerHandle) {
+    clearInterval(rateLimitPrunerHandle);
+    rateLimitPrunerHandle = null;
+  }
 }

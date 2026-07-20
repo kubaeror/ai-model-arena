@@ -35,13 +35,12 @@ export function loadAuthConfig(): AuthConfig {
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
-  if (!a || !b) return false;
-  const maxLen = Math.max(Buffer.byteLength(a), Buffer.byteLength(b));
-  const ba = Buffer.alloc(maxLen, 0);
-  const bb = Buffer.alloc(maxLen, 0);
-  Buffer.from(a).copy(ba);
-  Buffer.from(b).copy(bb);
-  return crypto.timingSafeEqual(ba, bb);
+  // Hash both inputs to a fixed-length digest so comparison time is
+  // independent of input length and content.
+  const key = Buffer.alloc(32, 0);
+  const ha = crypto.createHmac('sha256', key).update(a).digest();
+  const hb = crypto.createHmac('sha256', key).update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
 }
 
 export function verifyCredentials(cfg: AuthConfig, username: string, password: string): boolean {
