@@ -140,6 +140,36 @@ export const webhooks = sqliteTable('webhooks', {
   active: integer('active').notNull().default(1),
 });
 
+export const runs = sqliteTable('runs', {
+  run_id: text('run_id').primaryKey(),
+  scenario: text('scenario').notNull(),
+  models: text('models').notNull(),
+  started_at: text('started_at').notNull(),
+  finished_at: text('finished_at'),
+  status: text('status').notNull(),
+  source: text('source').notNull(),
+  comparison_md_path: text('comparison_md_path'),
+  comparison_json_path: text('comparison_json_path'),
+});
+
+export const run_models = sqliteTable('run_models', {
+  run_id: text('run_id').notNull().references(() => runs.run_id),
+  model: text('model').notNull(),
+  proc_name: text('proc_name'),
+  output_dir: text('output_dir'),
+  sandbox_dir: text('sandbox_dir'),
+  result_path: text('result_path'),
+  conversation_path: text('conversation_path'),
+  report_path: text('report_path'),
+  log_file: text('log_file'),
+  status: text('status').notNull(),
+  success: integer('success'),
+  turns_used: integer('turns_used'),
+  total_tool_calls: integer('total_tool_calls'),
+  stop_reason: text('stop_reason'),
+  duration_ms: integer('duration_ms'),
+});
+
 // ── Legacy type exports (kept for existing consumers of these interfaces) ──
 
 export interface ProviderRow {
