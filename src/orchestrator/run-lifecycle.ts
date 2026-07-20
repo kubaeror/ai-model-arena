@@ -12,6 +12,7 @@ import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/client.js';
+import { outputRoot, dbPath } from '../paths.js';
 import {
   upsertRun,
   updateRun,
@@ -99,8 +100,7 @@ export async function ensureBuilt(root: string, logger: Logger): Promise<void> {
 export function createRunSpec(opts: RunStartOptions): RunSpec {
   const root = pm2h.projectRoot();
   const scenariosDir = opts.scenariosDir ?? path.join(root, 'configs', 'scenarios');
-  // Initialize the catalog DB so resolveModelForRun can query the models table.
-  initDb(path.join(root, 'outputs', 'arena.db'));
+  initDb(dbPath());
   for (const name of opts.models) {
     const resolved = resolveModelForRun(name);
     if (!resolved) {
@@ -112,8 +112,8 @@ export function createRunSpec(opts: RunStartOptions): RunSpec {
   const runId = `${opts.scenario}_${ts}`;
   const perModel: PerModelSpec[] = opts.models.map((model) => {
     const procName = pm2h.sanitizeName(`${pm2h.ARENA_PREFIX}${model}-${opts.scenario}-${ts}`);
-    const outputDir = path.join(root, 'outputs', model, runId);
-    const pm2LogDir = path.join(root, 'outputs', model, 'pm2-logs');
+    const outputDir = path.join(outputRoot(), model, runId);
+    const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
     fs.mkdirSync(pm2LogDir, { recursive: true });
     return {
       model,
@@ -134,7 +134,7 @@ export function createRunSpec(opts: RunStartOptions): RunSpec {
     root,
     modelsConfigPath: opts.modelsConfigPath,
     scenariosDir,
-    comparisonBase: path.join(root, 'outputs', 'comparisons', runId),
+    comparisonBase: path.join(outputRoot(), 'comparisons', runId),
     models: perModel,
   };
 }
@@ -264,7 +264,7 @@ interface AggregateInput {
   startedAt: string;
   models: { model: string; resultPath: string }[];
 }
-function aggregate(root: string, input: AggregateInput): {
+function aggregate(_root: string, input: AggregateInput): {
   entries: ComparisonEntry[];
   mdPath: string;
   jsonPath: string;
@@ -281,7 +281,7 @@ function aggregate(root: string, input: AggregateInput): {
     }
   });
   const { mdPath, jsonPath } = writeComparison(
-    path.join(root, 'outputs', 'comparisons', input.runId),
+    path.join(outputRoot(), 'comparisons', input.runId),
     entries,
     { scenario: input.scenario, startedAt: input.startedAt, finishedAt: new Date().toISOString() },
   );

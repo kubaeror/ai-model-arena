@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Pm2ProcessStatus } from 'pm2';
 import { createLogger } from '../logger/pino-logger.js';
+import { outputRoot } from '../paths.js';
 import type { ComparisonEntry } from '../logger/comparison-logger.js';
 import * as pm2h from './pm2-helpers.js';
 import {
@@ -134,8 +135,7 @@ export async function printStatus(): Promise<void> {
 
 /** Tail the most recent PM2 log file for a given model (CLI `logs` command). */
 export async function tailLogs(model: string, lines = 200): Promise<void> {
-  const root = pm2h.projectRoot();
-  const dir = path.join(root, 'outputs', model, 'pm2-logs');
+  const dir = path.join(outputRoot(), model, 'pm2-logs');
   if (!fs.existsSync(dir)) {
     console.log(`No logs directory found for model "${model}".`);
     console.log(`Looked in: ${dir}`);

@@ -35,7 +35,7 @@ import { initDb, getDb } from './db/client.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
-import { findProjectRoot } from './paths.js';
+import { findProjectRoot, outputRoot, dbPath } from './paths.js';
 import type { ToolExecutionContext } from './types.js';
 import { computeCost } from './cost-tracking/index.js';
 
@@ -142,12 +142,12 @@ async function main(): Promise<void> {
   logger.info('Worker starting', { model: modelName, scenario: scenarioName, runId });
 
   // ── Initialize SQLite catalog DB + resolve model from catalog ──────────
-  initDb(path.join(root, 'outputs', 'arena.db'));
+  initDb(dbPath());
   const resolved = resolveModelForRun(modelName);
   if (!resolved) {
     logger.error('Model not found in catalog', { model: modelName });
     const msg = `Model not found in catalog: ${modelName}. Run catalog sync first.`;
-    const outputDir = path.join(root, 'outputs', modelName, runId);
+    const outputDir = path.join(outputRoot(), modelName, runId);
     fs.mkdirSync(outputDir, { recursive: true });
     writeResultJson(path.join(outputDir, 'result.json'), {
       model: modelName, scenario: scenarioName, runId,
@@ -161,7 +161,7 @@ async function main(): Promise<void> {
   const scenario = loadScenario(resolveScenarioPath(scenarioDir(root), scenarioName));
 
   // ── Output + sandbox dirs ─────────────────────────────────────────────
-  const outputDir = path.join(root, 'outputs', modelName, runId);
+  const outputDir = path.join(outputRoot(), modelName, runId);
   const sandboxDir = path.join(outputDir, 'files');
   fs.mkdirSync(outputDir, { recursive: true });
   fs.mkdirSync(sandboxDir, { recursive: true });
@@ -359,10 +359,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
       const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       process.stderr.write(`[worker] fatal error: ${msg}\n`);
       try {
-        const root = rootDir();
         const modelName = process.env.AI_ARENA_MODEL ?? 'unknown';
         const runId = process.env.AI_ARENA_RUN_ID ?? `crash_${Date.now()}`;
-        const outputDir = path.join(root, 'outputs', modelName, runId);
+        const outputDir = path.join(outputRoot(), modelName, runId);
         fs.mkdirSync(outputDir, { recursive: true });
         const finishedAt = new Date();
         writeResultJson(path.join(outputDir, 'result.json'), {

@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { Command } from 'commander';
-import { findProjectRoot } from './paths.js';
+import { findProjectRoot, dbPath } from './paths.js';
 import { createLogger } from './logger/pino-logger.js';
 import { initDb } from './db/client.js';
 import { listRuns, getRunRecord } from './orchestrator/run-index.js';
@@ -152,7 +152,7 @@ program
 
     const baselineDir = path.resolve(root, config.baselineDir);
     const logger = createLogger('ai-arena:regress');
-    initDb(path.join(root, 'outputs', 'arena.db'));
+    initDb(dbPath());
 
     const { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath } =
       await import('./evaluation/regression.js');

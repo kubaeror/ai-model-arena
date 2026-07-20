@@ -7,7 +7,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { findProjectRoot } from '../paths.js';
+import { findProjectRoot, dbPath } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { initDb } from '../db/client.js';
 import { ensureFresh } from '../catalog/cache.js';
@@ -47,9 +47,9 @@ async function start(): Promise<void> {
   const root = findProjectRoot();
   const allowedOrigins = (process.env.DASHBOARD_CORS_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
-  const dbPath = path.join(root, 'outputs', 'arena.db');
-  initDb(dbPath);
-  logger.info('SQLite catalog DB initialized', { dbPath });
+  const resolvedDbPath = dbPath();
+  initDb(resolvedDbPath);
+  logger.info('SQLite catalog DB initialized', { dbPath: resolvedDbPath });
 
   // Boot: block on stale catalog sources
   for (const source of ['models.dev', 'modelbench', 'zeroeval'] as const) {

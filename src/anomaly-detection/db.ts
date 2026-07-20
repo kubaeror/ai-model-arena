@@ -1,6 +1,5 @@
-import path from 'node:path';
 import type Database from 'better-sqlite3';
-import { findProjectRoot } from '../paths.js';
+import { dbPath as projectDbPath } from '../paths.js';
 import { getDb as getCentralDb } from '../db/client.js';
 
 /**
@@ -35,7 +34,7 @@ export interface AnomalyRecord {
 }
 
 export function dbPath(): string {
-  return path.join(findProjectRoot(), 'outputs', 'arena.db');
+  return projectDbPath();
 }
 
 /** Access the shared DB singleton (initialise via src/db/client.ts first). */
