@@ -17,27 +17,31 @@
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFile } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import {
-  loadModelsConfig,
   loadScenario,
-  findModel,
   resolveScenarioPath,
 } from './config.js';
-import type { ModelConfig, ScenarioConfig } from './config.js';
+import type { ScenarioConfig } from './config.js';
 import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { writeReport } from './logger/report-logger.js';
 import { writeResultJson, type RunResult } from './logger/result-logger.js';
-import { Sandbox } from './sandbox/sandbox.js';
+import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
+import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
-import { createAdapter } from './adapters/index.js';
-import { runAgentLoop } from './agent-loop/index.js';
+import { initDb, getDb } from './db/client.js';
+import { ProviderRegistry, loadBuiltins } from './providers/index.js';
+import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
+import { initTracing, shutdownTracing } from './observability/tracing.js';
+import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { findProjectRoot } from './paths.js';
 import type { ToolExecutionContext } from './types.js';
+import { computeCost } from './cost-tracking/index.js';
 
-const execAsync = promisify(exec);
+/** Shell metacharacters that enable command injection. Rejected in successCriteria.command. */
+const SHELL_METACHAR_RE = /[`$(){}|;&<>\\]/;
 
 function rootDir(): string {
   if (process.env.AI_ARENA_ROOT) return process.env.AI_ARENA_ROOT;
@@ -48,9 +52,9 @@ function scenarioDir(root: string): string {
   return process.env.AI_ARENA_SCENARIOS_DIR ?? path.join(root, 'configs', 'scenarios');
 }
 
-function modelsConfigPath(root: string): string {
-  return process.env.AI_ARENA_MODELS_CONFIG ?? path.join(root, 'configs', 'models.yaml');
-}
+// ResolvedModel and resolveModelForRun are re-exported from model-resolver.ts
+// so that orchestrator/evaluation do not need to import this entry-point script.
+export type { ResolvedModel };
 
 interface SuccessOutcome {
   command?: string;
@@ -78,13 +82,32 @@ async function runSuccessCriteria(
     passed: false,
   };
 
+  if (SHELL_METACHAR_RE.test(sc.command)) {
+    return {
+      command: sc.command,
+      expectedExitCode: sc.expectedExitCode,
+      exitCode: -1,
+      output: 'successCriteria.command contains disallowed shell metacharacters. ' +
+              'Use a simple command like "npm test" or "python -m pytest".',
+      passed: false,
+    };
+  }
+  const [bin = '', ...args] = sc.command.trim().split(/\s+/);
   try {
-    const { stdout } = await execAsync(sc.command, {
-      cwd: sandboxDir,
-      timeout: ctx.shellTimeoutMs,
-      maxBuffer: ctx.maxShellOutputBytes,
-      env: process.env,
-      shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+      execFile(
+        bin, args,
+        {
+          cwd: sandboxDir,
+          timeout: ctx.shellTimeoutMs,
+          maxBuffer: ctx.maxShellOutputBytes,
+          env: sandboxEnv(),
+        },
+        (err, stdout, stderr) => {
+          if (err) reject(Object.assign(err, { stdout, stderr }));
+          else resolve({ stdout });
+        },
+      );
     });
     outcome.output = stdout;
     outcome.exitCode = 0;
@@ -108,6 +131,10 @@ async function main(): Promise<void> {
   const root = rootDir();
   const logger = createLogger('ai-arena:worker', process.env.LOG_LEVEL);
 
+  // Initialise OpenTelemetry before any work that should be traced. The OTLP
+  // exporter honours OTEL_EXPORTER_OTLP_ENDPOINT; no-op when OTEL_ENABLED=false.
+  initTracing();
+
   const modelName = process.env.AI_ARENA_MODEL;
   const scenarioName = process.env.AI_ARENA_SCENARIO;
   const runId = process.env.AI_ARENA_RUN_ID;
@@ -119,9 +146,24 @@ async function main(): Promise<void> {
 
   logger.info('Worker starting', { model: modelName, scenario: scenarioName, runId });
 
-  // ── Load configs ───────────────────────────────────────────────────────
-  const models = loadModelsConfig(modelsConfigPath(root));
-  const modelCfg: ModelConfig = findModel(models.models, modelName);
+  // ── Initialize SQLite catalog DB + resolve model from catalog ──────────
+  initDb(path.join(root, 'outputs', 'arena.db'));
+  const resolved = resolveModelForRun(modelName);
+  if (!resolved) {
+    logger.error('Model not found in catalog', { model: modelName });
+    const msg = `Model not found in catalog: ${modelName}. Run catalog sync first.`;
+    const outputDir = path.join(root, 'outputs', modelName, runId);
+    fs.mkdirSync(outputDir, { recursive: true });
+    writeResultJson(path.join(outputDir, 'result.json'), {
+      model: modelName, scenario: scenarioName, runId,
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      durationMs: 0, turnsUsed: 0, maxTurns: 0, totalToolCalls: 0, toolsCalled: [],
+      tokenUsage: {}, stopReason: 'setup_error', errors: [msg], success: false,
+    });
+    await shutdownTracing();
+    return;
+  }
+
   const scenario = loadScenario(resolveScenarioPath(scenarioDir(root), scenarioName));
 
   // ── Output + sandbox dirs ─────────────────────────────────────────────
@@ -130,6 +172,9 @@ async function main(): Promise<void> {
   fs.mkdirSync(outputDir, { recursive: true });
   fs.mkdirSync(sandboxDir, { recursive: true });
 
+  // ── Git integration ───────────────────────────────────────────────────────
+  const sandboxGit = new SandboxGit({ sandboxDir, modelName, logger });
+  
   const startedAt = new Date();
   const conv = new ConversationLogger(path.join(outputDir, 'conversation.json'), {
     model: modelName,
@@ -153,6 +198,9 @@ async function main(): Promise<void> {
     sandbox.seedFrom(templateDir);
   }
 
+  // Initialize git after seeding starter files
+  await sandboxGit.init();
+
   const resultBase = {
     model: modelName,
     scenario: scenarioName,
@@ -170,7 +218,7 @@ async function main(): Promise<void> {
       finishedAt: finishedAt.toISOString(),
       durationMs: finishedAt.getTime() - startedAt.getTime(),
       turnsUsed: 0,
-      maxTurns: scenario.maxTurns ?? modelCfg.maxTurns,
+      maxTurns: scenario.maxTurns ?? resolved.maxTurns,
       totalToolCalls: 0,
       toolsCalled: [],
       tokenUsage: {},
@@ -191,8 +239,8 @@ async function main(): Promise<void> {
   };
 
   // ── Validate API key ──────────────────────────────────────────────────
-  if (modelCfg.apiKeyEnv && !process.env[modelCfg.apiKeyEnv]) {
-    const msg = `Missing API key: set ${modelCfg.apiKeyEnv} in your .env`;
+  if (resolved.envVar && !process.env[resolved.envVar]) {
+    const msg = `Missing API key: set ${resolved.envVar} in your .env`;
     logger.error(msg);
     conv.append({ type: 'error', content: msg });
     fail([msg]);
@@ -200,13 +248,17 @@ async function main(): Promise<void> {
   }
 
   // ── Run the agentic loop ───────────────────────────────────────────────
-  const adapter = createAdapter(modelCfg, logger.child('adapter'));
+  const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
+  const registry = new ProviderRegistry();
+  loadBuiltins(registry);
+  registry.loadCustomFromDb(getDb());
+  const adapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger.child('adapter') });
   const executors = buildToolExecutors();
-  const maxTurns = scenario.maxTurns ?? modelCfg.maxTurns;
+  const maxTurns = scenario.maxTurns ?? resolved.maxTurns;
 
   let loopResult;
   try {
-    loopResult = await runAgentLoop({
+    const { result } = await runAgentLoopTraced({
       adapter,
       tools: TOOL_DEFINITIONS,
       executors,
@@ -216,12 +268,22 @@ async function main(): Promise<void> {
       toolCtx,
       conv,
       logger,
+      provider: resolved.providerId,
+      model: resolved.apiModelId,
+      temperature: resolved.temperature,
+      maxTokens: resolved.maxTokens,
+      scenario: scenarioName,
+      runId,
+      modelConfig: modelName,
+      outputDir,
     });
+    loopResult = result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error('Agent loop crashed', { error: msg });
     conv.append({ type: 'error', content: `Agent loop crashed: ${msg}` });
     fail([`Agent loop crashed: ${msg}`]);
+    await shutdownTracing();
     return;
   }
 
@@ -236,6 +298,22 @@ async function main(): Promise<void> {
   }
 
   const finishedAt = new Date();
+  
+  // ── Compute cost ─────────────────────────────────────────────────────────
+  const costBreakdown = computeCost(modelName, {
+    prompt: loopResult.tokenUsage.prompt ?? 0,
+    completion: loopResult.tokenUsage.completion ?? 0,
+    cached: loopResult.tokenUsage.cacheReadTokens ?? 0,
+  });
+  
+  // ── Finalize git repo ─────────────────────────────────────────────────────
+  const finalCommitSummary = success ? 'Task completed successfully' : 'Task failed or incomplete';
+  await sandboxGit.commitFinal(finalCommitSummary);
+  const diff = await sandboxGit.generateDiff();
+  if (diff) {
+    await writeDiffPatch(outputDir, diff, logger);
+  }
+  
   const result: RunResult = {
     ...resultBase,
     finishedAt: finishedAt.toISOString(),
@@ -248,6 +326,7 @@ async function main(): Promise<void> {
     stopReason: loopResult.stopReason,
     errors: loopResult.errors,
     success,
+    costUsd: costBreakdown.total,
     successCriteria: successOutcome
       ? {
           command: successOutcome.command,
@@ -275,43 +354,48 @@ async function main(): Promise<void> {
     stopReason: result.stopReason, turnsUsed: result.turnsUsed,
     totalToolCalls: result.totalToolCalls, durationMs: result.durationMs,
   });
+
+  // Flush any pending traces to the OTel backend before the process exits.
+  await shutdownTracing();
 }
 
 // Top-level: write a result.json even on catastrophic failure, then exit 0
 // so PM2 records "stopped" (not "errored"). Real failures are in result.json.
-main()
-  .catch((err) => {
-    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    console.error(`[worker] fatal: ${msg}`);
-    try {
-      const root = rootDir();
-      const modelName = process.env.AI_ARENA_MODEL ?? 'unknown';
-      const runId = process.env.AI_ARENA_RUN_ID ?? `crash_${Date.now()}`;
-      const outputDir = path.join(root, 'outputs', modelName, runId);
-      fs.mkdirSync(outputDir, { recursive: true });
-      const finishedAt = new Date();
-      writeResultJson(path.join(outputDir, 'result.json'), {
-        model: modelName,
-        scenario: process.env.AI_ARENA_SCENARIO ?? 'unknown',
-        runId,
-        startedAt: finishedAt.toISOString(),
-        finishedAt: finishedAt.toISOString(),
-        durationMs: 0,
-        turnsUsed: 0,
-        maxTurns: 0,
-        totalToolCalls: 0,
-        toolsCalled: [],
-        tokenUsage: {},
-        stopReason: 'fatal_error',
-        errors: [msg],
-        success: false,
-      });
-    } catch {
-      /* nothing more we can do */
-    }
-  })
-  .finally(() => {
-    // Always exit 0: the orchestrator reads result.json to judge success, and a
-    // 0 exit keeps PM2 status "stopped" rather than triggering restarts/errored.
-    process.exit(0);
-  });
+// Guarded by an entry-point check so the module can be imported in tests.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  main()
+    .catch(async (err) => {
+      const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      process.stderr.write(`[worker] fatal error: ${msg}\n`);
+      try {
+        const root = rootDir();
+        const modelName = process.env.AI_ARENA_MODEL ?? 'unknown';
+        const runId = process.env.AI_ARENA_RUN_ID ?? `crash_${Date.now()}`;
+        const outputDir = path.join(root, 'outputs', modelName, runId);
+        fs.mkdirSync(outputDir, { recursive: true });
+        const finishedAt = new Date();
+        writeResultJson(path.join(outputDir, 'result.json'), {
+          model: modelName,
+          scenario: process.env.AI_ARENA_SCENARIO ?? 'unknown',
+          runId,
+          startedAt: finishedAt.toISOString(),
+          finishedAt: finishedAt.toISOString(),
+          durationMs: 0,
+          turnsUsed: 0,
+          maxTurns: 0,
+          totalToolCalls: 0,
+          toolsCalled: [],
+          tokenUsage: {},
+          stopReason: 'fatal_error',
+          errors: [msg],
+          success: false,
+        });
+      } catch {
+        /* nothing more we can do */
+      }
+      try { await shutdownTracing(); } catch { /* ignore */ }
+    })
+    .finally(() => {
+      process.exit(0);
+    });
+}

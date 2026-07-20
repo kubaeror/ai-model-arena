@@ -11,6 +11,28 @@ import { findProjectRoot } from '../paths.js';
  * metadata/paths, never conversation state.
  */
 
+// ── In-process cache (300 ms TTL) ─────────────────────────────────────────
+interface IndexCache { data: RunIndexFile; ts: number; }
+let _cache: IndexCache | null = null;
+const CACHE_TTL_MS = 300;
+
+function invalidateCache(): void { _cache = null; }
+
+// ── Async write lock ───────────────────────────────────────────────────────
+let writeLock: Promise<void> = Promise.resolve();
+
+async function withWriteLock<T>(fn: () => T): Promise<T> {
+  const prev = writeLock;
+  let release!: () => void;
+  writeLock = new Promise<void>((r) => { release = r; });
+  await prev;
+  try {
+    return fn();
+  } finally {
+    release();
+  }
+}
+
 export interface RunIndexModelEntry {
   model: string;
   runId: string;
@@ -36,7 +58,7 @@ export interface RunIndexRecord {
   startedAt: string;
   finishedAt: string | null;
   status: 'running' | 'completed' | 'stopped' | 'errored' | 'unknown';
-  source: 'cli' | 'dashboard';
+  source: 'cli' | 'dashboard' | 'scheduler';
   perModel: RunIndexModelEntry[];
   comparisonMdPath: string | null;
   comparisonJsonPath: string | null;
@@ -51,17 +73,26 @@ export function indexPath(): string {
 }
 
 export function loadRunIndex(): RunIndexFile {
+  const now = Date.now();
+  if (_cache && now - _cache.ts < CACHE_TTL_MS) return _cache.data;
   const p = indexPath();
-  if (!fs.existsSync(p)) return { runs: [] };
+  if (!fs.existsSync(p)) {
+    _cache = { data: { runs: [] }, ts: now };
+    return _cache.data;
+  }
   try {
     const data = JSON.parse(fs.readFileSync(p, 'utf8')) as RunIndexFile;
-    return data && Array.isArray(data.runs) ? data : { runs: [] };
+    const valid = data && Array.isArray(data.runs) ? data : { runs: [] };
+    _cache = { data: valid, ts: now };
+    return valid;
   } catch {
-    return { runs: [] };
+    _cache = { data: { runs: [] }, ts: now };
+    return _cache.data;
   }
 }
 
 export function saveRunIndex(idx: RunIndexFile): void {
+  invalidateCache();
   const p = indexPath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(idx, null, 2));
@@ -77,20 +108,27 @@ export function getRunRecord(runId: string): RunIndexRecord | undefined {
 }
 
 /** Insert or replace a record by runId. */
-export function upsertRun(record: RunIndexRecord): void {
-  const idx = loadRunIndex();
-  const i = idx.runs.findIndex((r) => r.runId === record.runId);
-  if (i >= 0) idx.runs[i] = record;
-  else idx.runs.unshift(record);
-  saveRunIndex(idx);
+export async function upsertRun(record: RunIndexRecord): Promise<void> {
+  await withWriteLock(() => {
+    const idx = loadRunIndex();
+    const i = idx.runs.findIndex((r) => r.runId === record.runId);
+    if (i >= 0) idx.runs[i] = record;
+    else idx.runs.unshift(record);
+    saveRunIndex(idx);
+  });
 }
 
 /** Apply a mutating function to a record, then persist. */
-export function updateRun(runId: string, mutator: (rec: RunIndexRecord) => void): RunIndexRecord | undefined {
-  const idx = loadRunIndex();
-  const rec = idx.runs.find((r) => r.runId === runId);
-  if (!rec) return undefined;
-  mutator(rec);
-  saveRunIndex(idx);
-  return rec;
+export async function updateRun(
+  runId: string,
+  mutator: (rec: RunIndexRecord) => void,
+): Promise<RunIndexRecord | undefined> {
+  return await withWriteLock(() => {
+    const idx = loadRunIndex();
+    const rec = idx.runs.find((r) => r.runId === runId);
+    if (!rec) return undefined;
+    mutator(rec);
+    saveRunIndex(idx);
+    return rec;
+  });
 }

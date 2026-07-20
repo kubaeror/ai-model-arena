@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { safeResolve } from '../sandbox/sandbox.js';
+import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import type { ToolExecutor, ToolExecutorMap } from '../types.js';
 
 const execAsync = promisify(exec);
@@ -98,7 +98,7 @@ export const runShellCommand: ToolExecutor = async (args, ctx) => {
       cwd: ctx.sandboxDir,
       timeout: ctx.shellTimeoutMs,
       maxBuffer: ctx.maxShellOutputBytes,
-      env: process.env,
+      env: sandboxEnv(),
       shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
     });
     return { content: formatShell(stdout, stderr, 0, ctx.maxShellOutputBytes), isError: false };
@@ -167,7 +167,7 @@ export const searchCode: ToolExecutor = async (args, ctx) => {
     }
     const lines = text.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      const line = lines[i]!;
       const hit = re
         ? re.test(line)
         : caseSensitive

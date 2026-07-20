@@ -4,6 +4,10 @@ import type {
   StarterFile,
   RunIndexRecord,
   ConversationFile,
+  AnomalyRecord,
+  TraceResponse,
+  ObservabilityStats,
+  WebhookRecord,
 } from './types.js';
 
 // In production the API is same-origin. In dev, Vite proxies /api → :4000.
@@ -26,6 +30,28 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
 }
+
+/**
+ * Raw fetch wrapper (returns a `Response`) for callers that need the full
+ * response (e.g. `.json()` / status inspection) rather than the typed
+ * `apiFetch<T>` helper. Adds the JWT bearer header + same-origin API base.
+ */
+async function request(path: string, init?: RequestInit): Promise<Response> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
+  return fetch(API_BASE + path, { ...init, headers });
+}
+
+/** Low-level HTTP namespace (get/post/patch/del) returning a `Response`. */
+export const api = {
+  get: (path: string, init?: RequestInit) => request(path, { ...init, method: 'GET' }),
+  post: (path: string, init?: RequestInit) => request(path, { ...init, method: 'POST' }),
+  patch: (path: string, init?: RequestInit) => request(path, { ...init, method: 'PATCH' }),
+  del: (path: string, init?: RequestInit) => request(path, { ...init, method: 'DELETE' }),
+};
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
@@ -169,3 +195,55 @@ export async function getRunLogs(runId: string, model: string): Promise<string> 
     `/api/runs/${encodeURIComponent(runId)}/models/${encodeURIComponent(model)}/logs`,
   );
 }
+
+// ── Traces ───────────────────────────────────────────────────────────────────
+export async function getTrace(runId: string, model?: string): Promise<TraceResponse> {
+  const q = model ? `?model=${encodeURIComponent(model)}` : '';
+  return apiFetch<TraceResponse>(`/api/traces/${encodeURIComponent(runId)}${q}`);
+}
+
+// ── Anomalies ────────────────────────────────────────────────────────────────
+export async function listAnomalies(params?: {
+  model?: string; type?: string; severity?: string; resolved?: boolean;
+  from?: string; to?: string; limit?: number; offset?: number;
+}): Promise<AnomalyRecord[]> {
+  const sp = new URLSearchParams();
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) sp.set(k, String(v));
+    }
+  }
+  const r = await apiFetch<{ anomalies: AnomalyRecord[] }>(`/api/anomalies?${sp.toString()}`);
+  return r.anomalies;
+}
+
+export async function resolveAnomaly(id: number, resolvedAs: 'resolved' | 'false_positive'): Promise<AnomalyRecord> {
+  const r = await apiFetch<{ anomaly: AnomalyRecord }>(`/api/anomalies/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ resolved_as: resolvedAs }),
+  });
+  return r.anomaly;
+}
+
+// ── Observability ────────────────────────────────────────────────────────────
+export async function getObservabilityStats(model?: string): Promise<ObservabilityStats> {
+  const q = model ? `?model=${encodeURIComponent(model)}` : '';
+  return apiFetch<ObservabilityStats>(`/api/observability/stats${q}`);
+}
+
+// ── Webhooks ─────────────────────────────────────────────────────────────────
+export async function listWebhooks(): Promise<WebhookRecord[]> {
+  const r = await apiFetch<{ webhooks: WebhookRecord[] }>(`/api/webhooks`);
+  return r.webhooks;
+}
+export async function registerWebhook(url: string, events: string[], secret?: string): Promise<WebhookRecord> {
+  const r = await apiFetch<{ webhook: WebhookRecord }>(`/api/webhooks`, {
+    method: 'POST',
+    body: JSON.stringify({ url, events, secret }),
+  });
+  return r.webhook;
+}
+export async function deleteWebhook(id: number): Promise<void> {
+  await apiFetch(`/api/webhooks/${id}`, { method: 'DELETE' });
+}
+

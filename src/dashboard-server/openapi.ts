@@ -1,0 +1,83 @@
+import type { Express } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import yaml from 'js-yaml';
+import { findProjectRoot } from '../paths.js';
+import { createLogger } from '../logger/pino-logger.js';
+
+const logger = createLogger('ai-arena:openapi');
+
+function specPath(): string {
+  return path.join(findProjectRoot(), 'openapi.yaml');
+}
+
+/** Read + parse the OpenAPI spec once (cached). */
+let cachedYaml: string | null = null;
+let cachedJson: unknown = null;
+
+function loadSpec(): { yaml: string; json: unknown } | null {
+  if (cachedYaml && cachedJson) return { yaml: cachedYaml, json: cachedJson };
+  const p = specPath();
+  if (!fs.existsSync(p)) {
+    logger.warn('openapi.yaml not found', { path: p });
+    return null;
+  }
+  cachedYaml = fs.readFileSync(p, 'utf8');
+  cachedJson = yaml.load(cachedYaml);
+  return { yaml: cachedYaml, json: cachedJson };
+}
+
+/**
+ * Mount the OpenAPI spec under `/api/docs` (and `/api/v1/docs`):
+ *   GET /api/docs         — Swagger UI HTML (renders the spec inline)
+ *   GET /api/docs/openapi.yaml — raw YAML
+ *   GET /api/docs/openapi.json — JSON
+ */
+export function mountOpenApi(app: Express): void {
+  app.get('/api/docs', (_req, res) => {
+    const spec = loadSpec();
+    if (!spec) { res.status(404).type('text/plain').send('openapi.yaml not found'); return; }
+    const html = swaggerUiHtml(spec.json as Record<string, unknown>);
+    res.type('text/html').send(html);
+  });
+
+  app.get('/api/docs/openapi.yaml', (_req, res) => {
+    const spec = loadSpec();
+    if (!spec) { res.status(404).send('not found'); return; }
+    res.type('text/yaml').send(spec.yaml);
+  });
+
+  app.get('/api/docs/openapi.json', (_req, res) => {
+    const spec = loadSpec();
+    if (!spec) { res.status(404).send('not found'); return; }
+    res.json(spec.json);
+  });
+
+  app.get('/api/v1/docs', (_req, res) => res.redirect(302, '/api/docs'));
+}
+
+function swaggerUiHtml(spec: Record<string, unknown>): string {
+  // Inline Swagger UI (CDN) so the dashboard serves interactive docs at /api/docs.
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>ai-model-arena API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
+  <style>body{margin:0}</style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = () => {
+      window.ui = SwaggerUIBundle({
+        spec: ${JSON.stringify(spec)},
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+      });
+    };
+  </script>
+</body>
+</html>`;
+}

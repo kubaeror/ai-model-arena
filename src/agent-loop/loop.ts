@@ -6,7 +6,7 @@ import type {
   ToolExecutorMap,
   TokenUsage,
 } from '../types.js';
-import type { ModelAdapter } from '../adapters/base.js';
+import type { ModelAdapter } from '../providers/adapters/base.js';
 import type { ConversationLogger } from '../logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../tools/schema.js';
 

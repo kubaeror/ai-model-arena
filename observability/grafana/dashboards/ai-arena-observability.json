@@ -1,0 +1,85 @@
+{
+  "uid": "ai-arena-observability",
+  "title": "ai-model-arena Observability",
+  "tags": ["ai-model-arena"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Runs (invoke_agent traces)",
+      "datasource": { "type": "jaeger", "uid": "Jaeger" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaeger", "uid": "Jaeger" },
+          "service": "ai-model-arena",
+          "operation": "invoke_agent",
+          "queryType": "search"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error traces",
+      "datasource": { "type": "jaeger", "uid": "Jaeger" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaeger", "uid": "Jaeger" },
+          "service": "ai-model-arena",
+          "operation": "invoke_agent",
+          "tags": ["error=true"],
+          "queryType": "search"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Chat spans (token volume proxy)",
+      "datasource": { "type": "jaeger", "uid": "Jaeger" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "description": "Count of `chat` spans (one per model API call). Enable OTEL_CAPTURE_CONTENT=true to record gen_ai.usage.* attributes on each span.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaeger", "uid": "Jaeger" },
+          "service": "ai-model-arena",
+          "operation": "chat",
+          "queryType": "search"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Recent traces",
+      "datasource": { "type": "jaeger", "uid": "Jaeger" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaeger", "uid": "Jaeger" },
+          "service": "ai-model-arena",
+          "operation": "invoke_agent",
+          "queryType": "search",
+          "limit": 50
+        }
+      ]
+    }
+  ]
+}

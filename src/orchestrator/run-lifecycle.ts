@@ -1,18 +1,32 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
 import type { StartOptions } from 'pm2';
 import type { Logger } from '../types.js';
-import { loadModelsConfig, findModel } from '../config.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
+import { loadBudgetConfig, checkBudget } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
+import { writeRunStats } from '../metrics/writeback.js';
+import { resolveModelForRun } from '../db/model-resolver.js';
+import { initDb } from '../db/client.js';
 import {
   upsertRun,
   updateRun,
   getRunRecord,
   type RunIndexModelEntry,
 } from './run-index.js';
+import { analyzeRun } from '../anomaly-detection/index.js';
+
+let anomalyAnalysisFailures = 0;
+let statsWritebackFailures = 0;
+
+/** Returns counts of post-run background task failures (non-fatal). */
+export function getPostRunFailureCounts(): { anomalyAnalysis: number; statsWriteback: number } {
+  return { anomalyAnalysis: anomalyAnalysisFailures, statsWriteback: statsWritebackFailures };
+}
 
 export interface PerModelSpec {
   model: string;
@@ -30,10 +44,10 @@ export interface RunSpec {
   scenario: string;
   ts: string;
   startedAt: string;
-  root: string;
-  modelsConfigPath: string;
-  scenariosDir: string;
-  comparisonBase: string;
+  root?: string;
+  modelsConfigPath?: string;
+  scenariosDir?: string;
+  comparisonBase?: string;
   models: PerModelSpec[];
 }
 
@@ -43,7 +57,9 @@ export interface RunStartOptions {
   modelsConfigPath?: string;
   scenariosDir?: string;
   logger?: Logger;
-  source?: 'cli' | 'dashboard';
+  source?: 'cli' | 'dashboard' | 'scheduler';
+  forceBudget?: boolean;
+  timeoutMs?: number;
 }
 
 export interface PerModelStatus {
@@ -65,11 +81,11 @@ export async function ensureBuilt(root: string, logger: Logger): Promise<void> {
   if (fs.existsSync(worker)) return;
   logger.info('Compiled worker not found — building project (npm run build)...');
   try {
-    execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], {
-      cwd: root,
-      stdio: 'inherit',
-      shell: process.platform === 'win32',
-    });
+    await execFileAsync(
+      process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      ['run', 'build'],
+      { cwd: root, shell: process.platform === 'win32' },
+    );
   } catch (err) {
     throw new Error(
       `Failed to build automatically. Run "npm run build" first. (${
@@ -82,10 +98,15 @@ export async function ensureBuilt(root: string, logger: Logger): Promise<void> {
 /** Validate models + compute all run paths (no PM2, no spawning). */
 export function createRunSpec(opts: RunStartOptions): RunSpec {
   const root = pm2h.projectRoot();
-  const modelsConfigPath = opts.modelsConfigPath ?? path.join(root, 'configs', 'models.yaml');
   const scenariosDir = opts.scenariosDir ?? path.join(root, 'configs', 'scenarios');
-  const models = loadModelsConfig(modelsConfigPath);
-  for (const name of opts.models) findModel(models.models, name);
+  // Initialize the catalog DB so resolveModelForRun can query the models table.
+  initDb(path.join(root, 'outputs', 'arena.db'));
+  for (const name of opts.models) {
+    const resolved = resolveModelForRun(name);
+    if (!resolved) {
+      throw new Error(`Model not found in catalog: ${name}. Run catalog sync first.`);
+    }
+  }
 
   const ts = pm2h.timestamp();
   const runId = `${opts.scenario}_${ts}`;
@@ -111,7 +132,7 @@ export function createRunSpec(opts: RunStartOptions): RunSpec {
     ts,
     startedAt: new Date().toISOString(),
     root,
-    modelsConfigPath,
+    modelsConfigPath: opts.modelsConfigPath,
     scenariosDir,
     comparisonBase: path.join(root, 'outputs', 'comparisons', runId),
     models: perModel,
@@ -128,18 +149,18 @@ export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<vo
         AI_ARENA_MODEL: m.model,
         AI_ARENA_SCENARIO: spec.scenario,
         AI_ARENA_RUN_ID: spec.runId,
-        AI_ARENA_ROOT: spec.root,
+        AI_ARENA_ROOT: spec.root!,
         AI_ARENA_MODELS_CONFIG: spec.modelsConfigPath,
         AI_ARENA_SCENARIOS_DIR: spec.scenariosDir,
       };
       const startOpts: StartOptions = {
         name: m.procName,
-        script: pm2h.workerScriptPath(spec.root),
+        script: pm2h.workerScriptPath(spec.root!),
         interpreter: 'node',
         exec_mode: 'fork',
         autorestart: false,
         max_restarts: 0,
-        cwd: spec.root,
+        cwd: spec.root!,
         time: true,
         merge_logs: true,
         out_file: m.logFile,
@@ -155,13 +176,13 @@ export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<vo
 }
 
 /** Register a run (status=running) in the index. */
-export function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' = 'cli'): void {
+export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli'): Promise<void> {
   const perModel: RunIndexModelEntry[] = spec.models.map((m) => ({
     model: m.model, runId: spec.runId, procName: m.procName, outputDir: m.outputDir,
     sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
     reportPath: m.reportPath, logFile: m.logFile, status: 'running',
   }));
-  upsertRun({
+  await upsertRun({
     runId: spec.runId, scenario: spec.scenario, models: spec.models.map((m) => m.model),
     startedAt: spec.startedAt, finishedAt: null, status: 'running', source, perModel,
     comparisonMdPath: null, comparisonJsonPath: null,
@@ -173,9 +194,28 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   const root = pm2h.projectRoot();
   const logger = opts.logger ?? createLogger('ai-arena:orchestrator');
   await ensureBuilt(root, logger);
+  
+  // Load budget config for enforcement (pricing now comes from the SQLite catalog)
+  loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);
+  
+  // Check budget for each model before starting
+  for (const modelName of opts.models) {
+    const budgetCheck = checkBudget(modelName, root, opts.forceBudget ?? false, logger);
+    if (!budgetCheck.allowed) {
+      throw new Error(budgetCheck.reason ?? `Budget exceeded for ${modelName}`);
+    }
+    if (budgetCheck.percentUsed >= 80) {
+      logger.warn(`Budget threshold approach for ${modelName}`, { 
+        spent: budgetCheck.spentUsd, 
+        limit: budgetCheck.limitUsd, 
+        percent: budgetCheck.percentUsed 
+      });
+    }
+  }
+  
   const spec = createRunSpec(opts);
   await spawnRunWorkers(spec, logger);
-  registerRun(spec, opts.source ?? 'cli');
+  await registerRun(spec, opts.source ?? 'cli');
   return spec;
 }
 
@@ -248,8 +288,8 @@ function aggregate(root: string, input: AggregateInput): {
   return { entries, mdPath, jsonPath };
 }
 
-function patchIndexAfterFinalize(runId: string, mdPath: string, jsonPath: string, perModel: RunIndexModelEntry[]): void {
-  updateRun(runId, (rec) => {
+async function patchIndexAfterFinalize(runId: string, mdPath: string, jsonPath: string, perModel: RunIndexModelEntry[]): Promise<void> {
+  await updateRun(runId, (rec) => {
     rec.status = 'completed';
     rec.finishedAt = new Date().toISOString();
     rec.comparisonMdPath = mdPath;
@@ -267,7 +307,7 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
   mdPath: string;
   jsonPath: string;
 }> {
-  const { entries, mdPath, jsonPath } = aggregate(spec.root, {
+  const { entries, mdPath, jsonPath } = aggregate(spec.root!, {
     runId: spec.runId, scenario: spec.scenario, startedAt: spec.startedAt,
     models: spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
@@ -282,8 +322,13 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
       ? { ...base, status: 'completed', success: r.success, turnsUsed: r.turnsUsed, totalToolCalls: r.totalToolCalls, stopReason: r.stopReason, durationMs: r.durationMs }
       : { ...base, status: 'errored' };
   });
-  patchIndexAfterFinalize(spec.runId, mdPath, jsonPath, perModel);
+  await patchIndexAfterFinalize(spec.runId, mdPath, jsonPath, perModel);
   logger.info('Comparison written', { md: mdPath, json: jsonPath });
+  // Run anomaly detection over the just-completed run (best-effort, non-blocking).
+  void analyzeRun(spec.runId, logger).catch((e) => {
+    anomalyAnalysisFailures++;
+    logger.warn('Anomaly analysis failed', { runId: spec.runId, error: e instanceof Error ? e.message : String(e), totalFailures: anomalyAnalysisFailures });
+  });
   return { entries, mdPath, jsonPath };
 }
 
@@ -307,8 +352,18 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
       ? { ...m, status: 'completed', success: r.success, turnsUsed: r.turnsUsed, totalToolCalls: r.totalToolCalls, stopReason: r.stopReason, durationMs: r.durationMs }
       : { ...m, status: 'errored' };
   });
-  patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
+  await patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
   logger.info('Finalized run via watcher', { runId, md: mdPath });
+  // Run anomaly detection over the just-completed run (best-effort, non-blocking).
+  void analyzeRun(runId, logger).catch((e) => {
+    anomalyAnalysisFailures++;
+    logger.warn('Anomaly analysis failed', { runId, error: e instanceof Error ? e.message : String(e), totalFailures: anomalyAnalysisFailures });
+  });
+  // Write per-model runtime stats back to the SQLite catalog (best-effort, non-fatal).
+  void writeRunStats(runId, root).catch((e) => {
+    statsWritebackFailures++;
+    logger.warn('writeRunStats failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e), totalFailures: statsWritebackFailures });
+  });
 }
 
 /** Stop a running run's PM2 processes (keeps them in the PM2 list). */
@@ -321,7 +376,7 @@ export async function stopRun(runId: string): Promise<void> {
   } finally {
     await pm2h.pm2Disconnect();
   }
-  updateRun(runId, (r) => { r.status = 'stopped'; });
+  await updateRun(runId, (r) => { r.status = 'stopped'; });
 }
 
 /** Restart a run's PM2 processes (re-runs the workers with the same runId). */
@@ -334,7 +389,7 @@ export async function restartRun(runId: string): Promise<void> {
   } finally {
     await pm2h.pm2Disconnect();
   }
-  updateRun(runId, (r) => {
+  await updateRun(runId, (r) => {
     r.status = 'running';
     r.finishedAt = null;
     for (const m of r.perModel) { m.status = 'running'; m.success = undefined; }

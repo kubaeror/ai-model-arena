@@ -2,12 +2,13 @@ import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useRunLive } from '../hooks/useLive.js';
-import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, stopRun, restartRun } from '../lib/api.js';
+import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, stopRun, restartRun, getTrace } from '../lib/api.js';
 import { Button, Card, Badge, Select, Spinner } from '../components/ui.js';
 import { ConversationView } from '../components/ConversationView.js';
 import { CodeEditor } from '../components/CodeEditor.js';
+import { TraceWaterfall } from '../components/TraceWaterfall.js';
 
-type Tab = 'conversation' | 'files' | 'logs';
+type Tab = 'conversation' | 'files' | 'logs' | 'trace';
 
 export function RunDetail() {
   const params = useParams<{ runId: string }>();
@@ -68,7 +69,7 @@ export function RunDetail() {
       </div>
 
       <div className="flex gap-1 border-b border-border">
-        {(['conversation', 'files', 'logs'] as Tab[]).map((t) => (
+        {(['conversation', 'files', 'logs', 'trace'] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm capitalize ${tab === t ? 'border-b-2 border-primary text-foreground' : 'text-muted hover:text-foreground'}`}>{t}</button>
         ))}
       </div>
@@ -80,6 +81,7 @@ export function RunDetail() {
       )}
       {tab === 'files' && <FilesPanel runId={runId} model={activeModel} />}
       {tab === 'logs' && <LogsPanel runId={runId} model={activeModel} liveLines={live.logLines} />}
+      {tab === 'trace' && <TracePanel runId={runId} model={activeModel} />}
     </div>
   );
 }
@@ -144,6 +146,30 @@ function LogsPanel({ runId, model, liveLines }: { runId: string; model: string; 
   return (
     <Card className="h-[60vh] overflow-auto nice-scroll">
       <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap text-muted">{lines.join('\n') || '(no logs yet)'}</pre>
+    </Card>
+  );
+}
+
+function TracePanel({ runId, model }: { runId: string; model: string }) {
+  const traceQuery = useQuery({
+    queryKey: ['trace', runId, model],
+    queryFn: () => getTrace(runId, model || undefined),
+    enabled: !!runId,
+    refetchInterval: 5000,
+  });
+  if (traceQuery.isLoading) {
+    return <div className="p-4 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading trace…</div>;
+  }
+  const trace = traceQuery.data?.traces.find((t) => t.model === model) ?? traceQuery.data?.traces[0];
+  return (
+    <Card className="h-[60vh] overflow-auto nice-scroll p-4">
+      {trace?.externalUrl ? (
+        <div className="mb-3 flex items-center gap-2 text-xs">
+          <span className="text-muted">External trace UI:</span>
+          <a className="text-blue-400 hover:underline" href={trace.externalUrl} target="_blank" rel="noreferrer">{trace.externalUrl}</a>
+        </div>
+      ) : null}
+      <TraceWaterfall trace={trace} />
     </Card>
   );
 }

@@ -1,0 +1,23 @@
+# ai-model-arena schedule configuration
+# Defines recurring jobs using cron expressions
+
+schedules:
+  - id: nightly-regression
+    scenario: express-rest
+    models:
+      - gpt-4o
+      - claude-3.7
+    cron: "0 3 * * *"  # 3:00 AM daily
+    enabled: true
+    notifications:
+      - slack-runs
+    options:
+      forceBudget: false
+      timeoutMs: 1800000
+  
+  # Add more schedules as needed
+  # - id: weekly-benchmark
+  #   scenario: auth-system
+  #   models: [gpt-4o, claude-3.7, ollama-llama3]
+  #   cron: "0 4 * * 1"  # Monday 4:00 AM
+  #   enabled: true

@@ -29,6 +29,7 @@ export interface RunResult {
     outputContainsPassed?: boolean;
     passed?: boolean;
   };
+  costUsd?: number;
 }
 
 export function writeResultJson(filePath: string, result: RunResult): void {

@@ -9,6 +9,7 @@ import {
   type ScenarioConfig,
 } from '../../config.js';
 import { findProjectRoot } from '../../paths.js';
+import { isWithin } from '../../sandbox/sandbox.js';
 
 function scenariosDir(): string {
   return path.join(findProjectRoot(), 'configs', 'scenarios');
@@ -20,18 +21,30 @@ interface StarterFile {
 }
 
 /** Write inline starter files into configs/scenarios/templates/<safe-name>/. */
+const MAX_STARTER_FILE_BYTES = 1 * 1024 * 1024; // 1 MB per file
+const MAX_STARTER_FILES = 50;
+
 function writeStarterFiles(name: string, files: StarterFile[]): string {
   const safe = name.replace(/[^a-zA-Z0-9_-]/g, '-');
-  const templateDir = path.join(scenariosDir(), 'templates', safe);
+  const templateDir = path.resolve(path.join(scenariosDir(), 'templates', safe));
   fs.rmSync(templateDir, { recursive: true, force: true });
   fs.mkdirSync(templateDir, { recursive: true });
-  for (const f of files) {
-    const rel = String(f.path ?? '').split('\\').join('/').replace(/^\/+/, '');
-    const abs = path.resolve(templateDir, rel);
-    // Path-traversal guard: keep writes inside the template dir.
-    if (!abs.startsWith(templateDir + path.sep) && abs !== templateDir) continue;
+
+  const limited = files.slice(0, MAX_STARTER_FILES);
+  for (const f of limited) {
+    const relNormalized = String(f.path ?? '')
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '');
+    if (!relNormalized) continue;
+
+    const abs = path.resolve(templateDir, relNormalized);
+    if (!isWithin(templateDir, abs)) continue;
+
+    const content = String(f.content ?? '');
+    if (Buffer.byteLength(content) > MAX_STARTER_FILE_BYTES) continue;
+
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, String(f.content ?? ''));
+    fs.writeFileSync(abs, content);
   }
   return `templates/${safe}`;
 }
@@ -64,6 +77,15 @@ function writeScenarioYaml(filePath: string, config: ScenarioConfig): ScenarioCo
 export function createScenariosRouter(): Router {
   const router = Router();
 
+  function resolveAndValidate(name: string): string | null {
+    // Allow only simple alphanumeric names — no path separators or shell chars.
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) return null;
+    const resolved = resolveScenarioPath(scenariosDir(), name);
+    // Defence in depth: confirm resolved path is within scenariosDir.
+    if (!isWithin(scenariosDir(), resolved)) return null;
+    return resolved;
+  }
+
   // GET /api/scenarios — list all
   router.get('/', (_req, res) => {
     const dir = scenariosDir();
@@ -83,7 +105,8 @@ export function createScenariosRouter(): Router {
 
   // GET /api/scenarios/:name — one scenario + its starter files
   router.get('/:name', (req, res) => {
-    const p = resolveScenarioPath(scenariosDir(), req.params.name);
+    const p = resolveAndValidate(req.params.name);
+    if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
       res.status(404).json({ error: 'Scenario not found' });
       return;
@@ -112,7 +135,8 @@ export function createScenariosRouter(): Router {
 
   // PUT /api/scenarios/:name — edit (optionally rename)
   router.put('/:name', (req, res) => {
-    const p = resolveScenarioPath(scenariosDir(), req.params.name);
+    const p = resolveAndValidate(req.params.name);
+    if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
       res.status(404).json({ error: 'Scenario not found' });
       return;
@@ -134,7 +158,8 @@ export function createScenariosRouter(): Router {
 
   // DELETE /api/scenarios/:name
   router.delete('/:name', (req, res) => {
-    const p = resolveScenarioPath(scenariosDir(), req.params.name);
+    const p = resolveAndValidate(req.params.name);
+    if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
       res.status(404).json({ error: 'Scenario not found' });
       return;

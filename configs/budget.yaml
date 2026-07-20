@@ -1,0 +1,23 @@
+# ai-model-arena budget limits
+# All amounts in USD. Set to null to disable a specific limit.
+
+global:
+  daily: 50
+  monthly: 500
+
+# Per-model overrides (optional)
+models:
+  gpt-4o:
+    daily: 20
+    monthly: 150
+  claude-3.7:
+    daily: 25
+    monthly: 200
+
+# Notification thresholds (percentage of budget)
+thresholds:
+  warn: 80
+  block: 100
+
+# State file path (stores cumulative spend)
+stateFile: outputs/.budget-state.json

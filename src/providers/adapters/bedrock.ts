@@ -1,0 +1,61 @@
+import type { ChatMessage, ModelResponse, ToolDefinition } from '../../types.js';
+import type { ModelAdapter, SendOpts } from './base.js';
+import { BaseAdapter, HttpError } from './base.js';
+import type { ProviderDescriptor } from '../types.js';
+import type { CreateAdapterOpts } from '../registry.js';
+
+/**
+ * Bedrock adapter. Delegates to an OpenAI-compatible gateway URL (set via
+ * AWS_BEDROCK_GATEWAY_URL env or provider apiBase). When no gateway is set,
+ * construction throws with a clear message — native SigV4 is out of scope.
+ */
+export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
+  private modelId: string;
+  private gatewayUrl?: string;
+  private apiKey?: string;
+
+  constructor(_descriptor: ProviderDescriptor, modelId: string, opts: CreateAdapterOpts) {
+    super(opts.logger);
+    this.modelId = modelId;
+    this.gatewayUrl = opts.baseUrl ?? process.env.AWS_BEDROCK_GATEWAY_URL;
+    this.apiKey = opts.apiKey ?? process.env.AWS_BEDROCK_GATEWAY_KEY;
+    if (!this.gatewayUrl) {
+      throw new Error('BedrockAdapter requires AWS_BEDROCK_GATEWAY_URL (or provider apiBase) — native SigV4 not implemented');
+    }
+  }
+
+  supportsStreaming(): boolean { return true; }
+  supportsReasoning(): boolean { return false; }
+  supportsPromptCaching(): boolean { return false; }
+
+  async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
+    return this.withRetry(async () => {
+      const body: Record<string, unknown> = {
+        model: this.modelId,
+        messages: messages.map(m => ({ role: m.role, content: m.content, ...(m.toolCalls ? { tool_calls: m.toolCalls } : {}) })),
+      };
+      if (tools.length > 0) body.tools = tools;
+      if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+      if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
+      const res = await fetch(`${this.gatewayUrl}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new HttpError(res.status, text, `Bedrock ${res.status}: ${text.slice(0, 200)}`);
+      }
+      const json = (await res.json()) as { choices: Array<{ message: { content: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> }; finish_reason: string }>; usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } };
+      const choice = json.choices[0];
+      if (!choice) {
+        return { text: null, toolCalls: [], usage: {}, stopReason: undefined, raw: json };
+      }
+      return {
+        text: choice.message.content ?? null,
+        toolCalls: (choice.message.tool_calls ?? []).map(tc => ({ id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments || '{}') })),
+        usage: { prompt: json.usage.prompt_tokens, completion: json.usage.completion_tokens, total: json.usage.total_tokens },
+        stopReason: choice.finish_reason,
+        raw: json,
+      };
+    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+  }
+}

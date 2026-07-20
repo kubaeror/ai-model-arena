@@ -1,0 +1,369 @@
+openapi: 3.0.3
+info:
+  title: ai-model-arena API
+  version: 1.0.0
+  description: |
+    Public REST API for ai-model-arena — multi-model agentic coding arena.
+    All endpoints are versioned under `/api/v1/` and protected by API-key
+    auth (`X-API-Key` header) with per-key rate limiting. Interactive docs are
+    served at `/api/docs`. Run-management endpoints used by the dashboard SPA
+    are also available under `/api/*` via JWT auth.
+  contact:
+    name: ai-model-arena
+servers:
+  - url: http://localhost:4000/api/v1
+    description: Local dashboard server
+security:
+  - ApiKeyAuth: []
+tags:
+  - name: models
+  - name: scenarios
+  - name: runs
+  - name: cost
+  - name: tool-analytics
+  - name: export
+  - name: traces
+  - name: anomalies
+  - name: observability
+  - name: webhooks
+paths:
+  /models:
+    get:
+      tags: [models]
+      summary: List configured models
+      responses:
+        '200':
+          description: Model list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items: { $ref: '#/components/schemas/Model' }
+  /scenarios:
+    get:
+      tags: [scenarios]
+      summary: List scenarios
+      responses: { '200': { description: Scenario list } }
+  /runs:
+    get:
+      tags: [runs]
+      summary: List runs (newest first)
+      responses: { '200': { description: Run list } }
+    post:
+      tags: [runs]
+      summary: Trigger a new run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenario, models]
+              properties:
+                scenario: { type: string }
+                models: { type: array, items: { type: string } }
+      responses: { '202': { description: Run started } }
+  /runs/{runId}:
+    get:
+      tags: [runs]
+      summary: Get a run + per-model PM2 status
+      parameters: [{ $ref: '#/components/parameters/RunId' }]
+      responses: { '200': { description: Run detail } }
+  /runs/{runId}/stop:
+    post:
+      tags: [runs]
+      summary: Stop a running run
+      parameters: [{ $ref: '#/components/parameters/RunId' }]
+      responses: { '202': { description: Stop requested } }
+  /runs/{runId}/restart:
+    post:
+      tags: [runs]
+      summary: Restart a run
+      parameters: [{ $ref: '#/components/parameters/RunId' }]
+      responses: { '202': { description: Restart requested } }
+  /runs/{runId}/models/{model}/conversation:
+    get:
+      tags: [runs]
+      summary: Get conversation.json for a model run
+      parameters: [{ $ref: '#/components/parameters/RunId' }, { $ref: '#/components/parameters/Model' }]
+      responses: { '200': { description: Conversation } }
+  /runs/{runId}/models/{model}/report:
+    get:
+      tags: [runs]
+      summary: Get report.md for a model run
+      parameters: [{ $ref: '#/components/parameters/RunId' }, { $ref: '#/components/parameters/Model' }]
+      responses: { '200': { description: Markdown report } }
+  /cost:
+    get:
+      tags: [cost]
+      summary: Cost leaderboard by model
+      parameters:
+        - in: query
+          name: model
+          schema: { type: string }
+      responses: { '200': { description: Cost leaderboard } }
+  /analytics/tools:
+    get:
+      tags: [tool-analytics]
+      summary: Tool-call distribution + loop incidents
+      parameters:
+        - in: query
+          name: model
+          schema: { type: string }
+      responses: { '200': { description: Tool analytics } }
+  /export/csv:
+    get:
+      tags: [export]
+      summary: Export all runs as CSV
+      responses: { '200': { description: CSV } }
+  /runs/{runId}/export/csv:
+    get:
+      tags: [export]
+      summary: Export a single run's conversation as CSV
+      parameters: [{ $ref: '#/components/parameters/RunId' }]
+      responses: { '200': { description: CSV } }
+  /traces/{runId}:
+    get:
+      tags: [traces]
+      summary: Stored span metadata tree for a run
+      description: |
+        Returns per-model trace metadata reconstructed from the locally stored
+        `trace-meta.json`. When an external OTel backend is configured, each
+        trace also carries an `externalUrl` into Jaeger/Grafana.
+      parameters:
+        - { $ref: '#/components/parameters/RunId' }
+        - in: query
+          name: model
+          schema: { type: string }
+      responses: { '200': { description: Trace tree } }
+  /anomalies:
+    get:
+      tags: [anomalies]
+      summary: List detected anomalies
+      parameters:
+        - in: query
+          name: model
+          schema: { type: string }
+        - in: query
+          name: type
+          schema: { $ref: '#/components/schemas/AnomalyType' }
+        - in: query
+          name: severity
+          schema: { $ref: '#/components/schemas/AnomalySeverity' }
+        - in: query
+          name: resolved
+          schema: { type: boolean }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+      responses: { '200': { description: Anomaly list } }
+  /anomalies/{id}:
+    get:
+      tags: [anomalies]
+      summary: Full anomaly detail incl. related run + span data
+      parameters: [{ $ref: '#/components/parameters/AnomalyId' }]
+      responses: { '200': { description: Anomaly detail } }
+    patch:
+      tags: [anomalies]
+      summary: Mark anomaly resolved / false positive
+      parameters: [{ $ref: '#/components/parameters/AnomalyId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolved_as]
+              properties:
+                resolved_as:
+                  type: string
+                  enum: [resolved, false_positive]
+      responses: { '200': { description: Updated anomaly } }
+  /observability/stats:
+    get:
+      tags: [observability]
+      summary: Aggregated latency/error/baseline stats
+      parameters:
+        - in: query
+          name: model
+          schema: { type: string }
+      responses: { '200': { description: Observability stats } }
+  /observability/health:
+    get:
+      tags: [observability]
+      summary: Healthcheck (OTel exporter, SQLite, PM2)
+      responses: { '200': { description: Healthy }, '503': { description: Degraded } }
+  /webhooks:
+    get:
+      tags: [webhooks]
+      summary: List registered webhooks
+      responses: { '200': { description: Webhook list } }
+    post:
+      tags: [webhooks]
+      summary: Register a webhook URL for events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string, format: uri }
+                events:
+                  type: array
+                  items:
+                    type: string
+                    enum: [run_completed, anomaly_detected, budget_exceeded]
+                secret: { type: string }
+      responses: { '201': { description: Webhook registered } }
+  /webhooks/{id}:
+    delete:
+      tags: [webhooks]
+      summary: Remove a webhook
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses: { '204': { description: Deleted }, '404': { description: Not found } }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key from configs/api-keys.yaml. Rate-limited per key.
+  parameters:
+    RunId:
+      in: path
+      name: runId
+      required: true
+      schema: { type: string }
+    Model:
+      in: path
+      name: model
+      required: true
+      schema: { type: string }
+    AnomalyId:
+      in: path
+      name: id
+      required: true
+      schema: { type: integer }
+  /api/models:
+    get:
+      summary: List catalog models
+      tags: [Catalog]
+      parameters:
+        - { name: provider, in: query, schema: { type: string } }
+        - { name: reasoning, in: query, schema: { type: string, enum: ['1', '0'] } }
+        - { name: tool_call, in: query, schema: { type: string, enum: ['1', '0'] } }
+        - { name: min_context, in: query, schema: { type: integer } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, context] } }
+      responses:
+        '200': { description: Model list }
+  /api/models/{id}:
+    get:
+      summary: Full model detail (caps + pricing + benchmarks + runtime stats)
+      tags: [Catalog]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Model detail }
+        '404': { description: Not found }
+  /api/providers:
+    get:
+      summary: List all providers (builtin + custom)
+      tags: [Catalog]
+      responses: { '200': { description: Provider list } }
+    post:
+      summary: Add custom OpenAI-compatible provider
+      tags: [Catalog]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { id: {type: string}, name: {type: string}, apiBase: {type: string}, authScheme: {type: string}, envVar: {type: string}, adapter: {type: string} } } } } }
+      responses: { '201': { description: Created } }
+  /api/providers/{id}:
+    delete:
+      summary: Remove custom provider
+      tags: [Catalog]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Deleted } }
+  /api/benchmarks:
+    get:
+      summary: List benchmarks (filter by name/source/model)
+      tags: [Catalog]
+      parameters:
+        - { name: name, in: query, schema: { type: string } }
+        - { name: source, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+      responses: { '200': { description: Benchmark list } }
+  /api/benchmarks/{modelId}:
+    get:
+      summary: Benchmarks for one model
+      tags: [Catalog]
+      parameters: [{ name: modelId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Benchmarks } }
+  /api/pricing:
+    get:
+      summary: Pricing table
+      tags: [Catalog]
+      parameters: [{ name: model, in: query, schema: { type: string } }]
+      responses: { '200': { description: Pricing } }
+  /api/metrics/runtime:
+    get:
+      summary: Arena-measured runtime stats
+      tags: [Metrics]
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+      responses: { '200': { description: Runtime stats } }
+  /api/metrics/tps:
+    get:
+      summary: TPS leaderboard (arena measurements)
+      tags: [Metrics]
+      responses: { '200': { description: TPS leaderboard } }
+  /api/cache/stats:
+    get:
+      summary: Cache state per source
+      tags: [Cache]
+      responses: { '200': { description: Cache states } }
+  /api/cache/leaderboard:
+    get:
+      summary: Combined catalog benchmarks + arena measurements
+      tags: [Cache]
+      responses: { '200': { description: Leaderboard } }
+  /api/cache/refresh:
+    post:
+      summary: Force refresh a catalog source
+      tags: [Cache]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { source: { type: string, enum: [models.dev, modelbench, zeroeval] } } } } } }
+      responses: { '200': { description: Refresh result } }
+  schemas:
+    Model:
+      type: object
+      properties:
+        name: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        maxTurns: { type: integer }
+        temperature: { type: number }
+        maxTokens: { type: integer }
+    AnomalyType:
+      type: string
+      enum: [latency, loop, token_spike, cost_spike, error_rate, silent_failure]
+    AnomalySeverity:
+      type: string
+      enum: [low, medium, high, critical]
+

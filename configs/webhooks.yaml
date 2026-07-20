@@ -1,0 +1,14 @@
+# ai-model-arena webhook subscriptions (seed defaults).
+# Webhooks are normally registered via the API (POST /api/v1/webhooks) and
+# stored in SQLite (outputs/arena.db). This file documents the supported
+# events and an optional seed list applied on first run.
+
+# Supported events:
+#   run_completed      — fired when a run finalises
+#   anomaly_detected   — fired when an anomaly record is created
+#   budget_exceeded    — fired when a budget threshold is breached
+
+seed: []
+  # - url: https://example.com/hook
+  #   events: [run_completed, anomaly_detected]
+  #   secret: ${WEBHOOK_SECRET}   # optional, used to HMAC-sign deliveries

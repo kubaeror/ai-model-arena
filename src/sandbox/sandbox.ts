@@ -72,3 +72,39 @@ export function isWithin(sandboxDir: string, targetAbs: string): boolean {
   // absolute (which happens when the two are on different Windows roots).
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
+
+/**
+ * Sensitive environment variable names/prefixes stripped from sandboxed commands.
+ *
+ * Matching: `key === prefix` (exact) OR `key.startsWith(prefix)` (prefix).
+ * Entries without a trailing `_` act as both exact names AND prefixes — i.e.,
+ * OPENAI_API_KEY blocks OPENAI_API_KEY itself and OPENAI_API_KEY_2, etc.
+ * ARENA_API_KEY_ (with trailing `_`) blocks ARENA_API_KEY_CI, ARENA_API_KEY_READONLY, etc.
+ * DASHBOARD_JWT_SECRET and DASHBOARD_PASSWORD are exact names that also cover
+ * any variable starting with those strings.
+ *
+ * To add a new secret family, append the common prefix here.
+ */
+const BLOCKED_ENV_PREFIXES = [
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'GOOGLE_API_KEY',
+  'DASHBOARD_JWT_SECRET',
+  'DASHBOARD_PASSWORD',
+  'ARENA_API_KEY_',
+];
+
+/**
+ * Returns a copy of process.env with all sensitive credentials stripped.
+ * Use this instead of process.env when spawning LLM-controlled subprocesses.
+ */
+export function sandboxEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    const blocked = BLOCKED_ENV_PREFIXES.some(
+      (prefix) => key === prefix || key.startsWith(prefix),
+    );
+    if (!blocked) env[key] = value;
+  }
+  return env;
+}

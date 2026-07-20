@@ -94,22 +94,17 @@ function printComparisonTable(entries: ComparisonEntry[]): void {
     };
   });
   const cols: (keyof (typeof rows)[number])[] = ['model', 'success', 'turns', 'tools', 'duration', 'stop'];
-  const widths = cols.map((c) => Math.max(c.length, ...rows.map((r) => String(r[c]).length)));
-  const header = cols.map((c, i) => c.padEnd(widths[i])).join(' | ');
+  const widths = cols.map((c) => Math.max(c.length, ...rows.map((r) => String(r[c] ?? '').length)));
+  const header = cols.map((c, i) => c.padEnd(widths[i]!)).join(' | ');
   const sep = widths.map((w) => '-'.repeat(w)).join('-+-');
-  const body = rows.map((r) => cols.map((c, i) => String(r[c]).padEnd(widths[i])).join(' | ')).join('\n');
+  const body = rows.map((r) => cols.map((c, i) => String(r[c] ?? '').padEnd(widths[i]!)).join(' | ')).join('\n');
   console.log('\n' + header + '\n' + sep + '\n' + body + '\n');
 }
 
 /** All currently-registered arena PM2 processes (running or stopped). */
 export async function listArenaProcesses(): Promise<Pm2ProcessStatus[]> {
-  await pm2h.pm2Connect();
-  try {
-    const list = await pm2h.pm2List();
-    return list.filter((p) => p.name?.startsWith(pm2h.ARENA_PREFIX));
-  } finally {
-    await pm2h.pm2Disconnect();
-  }
+  const list = await pm2h.pm2ListOnce();
+  return list.filter((p) => p.name?.startsWith(pm2h.ARENA_PREFIX));
 }
 
 /** Print a status table of all arena PM2 processes (CLI `status` command). */
@@ -130,10 +125,10 @@ export async function printStatus(): Promise<void> {
     exitCode: p.pm2_env?.exit_code != null ? String(p.pm2_env.exit_code) : '-',
   }));
   const cols: (keyof (typeof rows)[number])[] = ['name', 'status', 'pid', 'cpu', 'mem', 'restarts', 'exitCode'];
-  const widths = cols.map((c) => Math.max(c.length, ...rows.map((r) => String(r[c]).length)));
-  const header = cols.map((c, i) => c.padEnd(widths[i])).join(' | ');
+  const widths = cols.map((c) => Math.max(c.length, ...rows.map((r) => String(r[c] ?? '').length)));
+  const header = cols.map((c, i) => c.padEnd(widths[i]!)).join(' | ');
   const sep = widths.map((w) => '-'.repeat(w)).join('-+-');
-  const body = rows.map((r) => cols.map((c, i) => String(r[c]).padEnd(widths[i])).join(' | ')).join('\n');
+  const body = rows.map((r) => cols.map((c, i) => String(r[c] ?? '').padEnd(widths[i]!)).join(' | ')).join('\n');
   console.log('\n' + header + '\n' + sep + '\n' + body + '\n');
 }
 
@@ -156,7 +151,7 @@ export async function tailLogs(model: string, lines = 200): Promise<void> {
     console.log(`No log files found for model "${model}" in ${dir}`);
     return;
   }
-  const latest = path.join(dir, files[0].f);
+  const latest = path.join(dir, files[0]!.f);
   const content = fs.readFileSync(latest, 'utf8');
   const tail = content.split(/\r?\n/).slice(-lines).join('\n');
   console.log(`--- ${latest} (last ${lines} lines) ---`);
