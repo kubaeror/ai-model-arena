@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
 import { fetchSync } from '../../src/catalog/sync.js';
-import { resolveModelForRun } from '../../src/worker.js';
+import { resolveModelForRun } from '../../src/db/model-resolver.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {

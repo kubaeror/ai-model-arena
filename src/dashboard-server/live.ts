@@ -301,7 +301,7 @@ export class LiveHub {
 
   private schedulePoll(): void {
     this.pollTimer = setTimeout(() => {
-      Promise.all([
+      void Promise.all([
         this.pollConversationsAsync().catch((e) =>
           this.logger.warn('pollConversations error', { error: String(e) }),
         ),
