@@ -1,66 +1,59 @@
 import { Router } from 'express';
-import fs from 'node:fs';
-import path from 'node:path';
-import yaml from 'js-yaml';
-import {
-  loadModelsConfig,
-  ModelConfigSchema,
-  ModelsFileSchema,
-  type ModelConfig,
-} from '../../config.js';
-import { findProjectRoot } from '../../paths.js';
-
-function modelsPath(): string {
-  return path.join(findProjectRoot(), 'configs', 'models.yaml');
-}
+import { getDb } from '../../db/client.js';
+import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
+import { BUILTIN_PROVIDERS } from '../../providers/index.js';
+import { z } from 'zod';
 
 /**
- * Model configs only ever contain `apiKeyEnv` (the NAME of an env var), never a
- * raw key value — so returning them is safe. We strip nothing because there is
- * no secret to strip; the env var name is exactly what the UI should show.
+ * Legacy model-management router. Previously read/wrote configs/models.yaml.
+ * Now proxies to the SQLite catalog: lists catalog models, and treats
+ * "add/update/delete model" as custom-provider operations (since models
+ * themselves come from the models.dev sync).
  */
-function sanitize(m: ModelConfig): ModelConfig {
-  return m;
-}
-
-function persistModels(models: ModelConfig[]): ModelConfig[] {
-  const validated = ModelsFileSchema.parse({ models });
-  fs.mkdirSync(path.dirname(modelsPath()), { recursive: true });
-  fs.writeFileSync(modelsPath(), yaml.dump({ models: validated.models }, { lineWidth: 120 }));
-  return validated.models;
-}
-
 export function createModelsRouter(): Router {
   const router = Router();
 
-  // GET /api/models — list configured models
+  // GET /api/models - list catalog models
   router.get('/', (_req, res) => {
-    const { models } = loadModelsConfig(modelsPath());
-    res.json({ models: models.map(sanitize) });
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT m.id, m.name, m.family, m.provider_id, m.reasoning, m.tool_call,
+        m.context_limit, m.output_limit, m.status, p.input, p.output, p.cache_read, p.cache_write
+      FROM models m LEFT JOIN pricing p ON p.model_id = m.id AND p.tier_size IS NULL
+      ORDER BY m.name ASC
+    `).all();
+    res.json({ models: rows });
   });
 
-  // POST /api/models — add or update a model (upsert by name)
+  // POST /api/models - register a custom OpenAI-compatible provider/model entry
   router.post('/', (req, res) => {
-    const parsed = ModelConfigSchema.parse(req.body);
-    const file = loadModelsConfig(modelsPath());
-    const idx = file.models.findIndex((m) => m.name === parsed.name);
-    if (idx >= 0) file.models[idx] = parsed;
-    else file.models.push(parsed);
-    const saved = persistModels(file.models);
-    res.status(idx >= 0 ? 200 : 201).json({ models: saved.map(sanitize) });
-  });
-
-  // DELETE /api/models/:name — remove a model
-  router.delete('/:name', (req, res) => {
-    const name = req.params.name;
-    const file = loadModelsConfig(modelsPath());
-    const next = file.models.filter((m) => m.name !== name);
-    if (next.length === file.models.length) {
-      res.status(404).json({ error: `Model "${name}" not found` });
+    const schema = z.object({
+      name: z.string().min(1).max(128),
+      apiBase: z.string().url().optional(),
+      authScheme: z.enum(['bearer', 'x-api-key', 'none']).default('bearer'),
+      envVar: z.string().optional(),
+      adapter: z.enum(['openai-compat', 'anthropic', 'google', 'bedrock']).default('openai-compat'),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid model input', details: parsed.error.flatten() });
       return;
     }
-    const saved = persistModels(next);
-    res.json({ models: saved.map(sanitize) });
+    const id = parsed.data.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+    upsertCustomProvider(getDb(), { id, name: parsed.data.name, apiBase: parsed.data.apiBase, authScheme: parsed.data.authScheme, envVar: parsed.data.envVar, adapter: parsed.data.adapter });
+    res.status(201).json({ ok: true, id });
+  });
+
+  // DELETE /api/models/:name - remove a custom provider by id
+  router.delete('/:name', (req, res) => {
+    deleteCustomProvider(getDb(), req.params.name);
+    res.json({ ok: true });
+  });
+
+  // Expose built-in + custom providers alongside models for the launcher UI.
+  router.get('/providers', (_req, res) => {
+    const custom = listCustomProviders(getDb()).map(r => ({ ...r, is_builtin: Boolean(r.is_builtin) }));
+    res.json({ builtin: BUILTIN_PROVIDERS, custom });
   });
 
   return router;

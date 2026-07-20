@@ -38,7 +38,7 @@ import { initTracing, shutdownTracing } from './observability/tracing.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { findProjectRoot } from './paths.js';
 import type { ToolExecutionContext } from './types.js';
-import { loadPricingConfig, computeCost } from './cost-tracking/index.js';
+import { computeCost } from './cost-tracking/index.js';
 
 /** Shell metacharacters that enable command injection. Rejected in successCriteria.command. */
 const SHELL_METACHAR_RE = /[`$(){}|;&<>\\]/;
@@ -203,9 +203,6 @@ async function main(): Promise<void> {
   const sandboxDir = path.join(outputDir, 'files');
   fs.mkdirSync(outputDir, { recursive: true });
   fs.mkdirSync(sandboxDir, { recursive: true });
-
-  // ── Load pricing config for cost tracking ───────────────────────────────────
-  loadPricingConfig(path.join(root, 'configs', 'pricing.yaml'), logger);
 
   // ── Git integration ───────────────────────────────────────────────────────
   const sandboxGit = new SandboxGit({ sandboxDir, modelName, logger });

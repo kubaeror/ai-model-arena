@@ -1,32 +1,44 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import yaml from 'js-yaml';
 import type { Logger } from '../types.js';
-import { PricingConfigSchema, type PricingConfig, type ModelPricing, type TokenUsage, type CostBreakdown } from './types.js';
+import { type PricingConfig, type ModelPricing, type TokenUsage, type CostBreakdown } from './types.js';
+import { getDb } from '../db/client.js';
 
 let pricingConfig: PricingConfig | null = null;
 
-export function loadPricingConfig(configPath: string, logger?: Logger): PricingConfig {
+/**
+ * Pricing is now sourced from the SQLite catalog (`pricing` table, populated
+ * by models.dev sync). This function is retained as a no-op for backwards
+ * compatibility with callers that previously loaded `configs/pricing.yaml`.
+ */
+export function loadPricingConfig(_configPath: string, _logger?: Logger): PricingConfig {
   if (pricingConfig) return pricingConfig;
-  
-  const resolvedPath = path.resolve(configPath);
-  if (!fs.existsSync(resolvedPath)) {
-    const fallback: PricingConfig = { models: {} };
-    logger?.warn(`Pricing config not found at ${resolvedPath}, using empty config`);
-    pricingConfig = fallback;
-    return fallback;
+  pricingConfig = { models: {} };
+  return pricingConfig;
+}
+
+/** Look up per-model pricing from the SQLite catalog. Returns null if not found. */
+export function getModelPricing(modelId: string): { input: number | null; output: number | null; cache_read: number | null; cache_write: number | null } | null {
+  try {
+    const db = getDb();
+    const direct = db.prepare('SELECT input, output, cache_read, cache_write FROM pricing WHERE model_id = ? AND tier_size IS NULL').get(modelId) as { input: number | null; output: number | null; cache_read: number | null; cache_write: number | null } | undefined;
+    if (direct) return direct;
+    // Fall back: treat `modelId` as a friendly name and resolve via the catalog.
+    const row = db.prepare('SELECT id FROM models WHERE name = ? OR id = ? LIMIT 1').get(modelId, modelId) as { id: string } | undefined;
+    if (!row) return null;
+    const fallback = db.prepare('SELECT input, output, cache_read, cache_write FROM pricing WHERE model_id = ? AND tier_size IS NULL').get(row.id) as { input: number | null; output: number | null; cache_read: number | null; cache_write: number | null } | undefined;
+    return fallback ?? null;
+  } catch {
+    return null;
   }
-  
-  const content = fs.readFileSync(resolvedPath, 'utf8');
-  const parsed = yaml.load(content);
-  const validated = PricingConfigSchema.parse(parsed);
-  pricingConfig = validated;
-  return validated;
 }
 
 export function getPricing(modelName: string): ModelPricing | undefined {
-  if (!pricingConfig) return undefined;
-  return pricingConfig.models[modelName];
+  const p = getModelPricing(modelName);
+  if (!p) return undefined;
+  return {
+    input: p.input ?? 0,
+    output: p.output ?? 0,
+    cached: p.cache_read ?? 0,
+  };
 }
 
 export function computeCost(modelName: string, usage: TokenUsage): CostBreakdown {
@@ -34,11 +46,11 @@ export function computeCost(modelName: string, usage: TokenUsage): CostBreakdown
   if (!pricing) {
     return { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
   }
-  
+
   const inputCost = (usage.prompt / 1000) * pricing.input;
   const outputCost = (usage.completion / 1000) * pricing.output;
   const cachedCost = ((usage.cached ?? 0) / 1000) * (pricing.cached ?? 0);
-  
+
   return {
     inputCost,
     outputCost,

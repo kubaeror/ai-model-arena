@@ -5,7 +5,7 @@ import type { StartOptions } from 'pm2';
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
-import { loadBudgetConfig, loadPricingConfig, checkBudget } from '../cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../worker.js';
@@ -185,8 +185,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   const logger = opts.logger ?? createLogger('ai-arena:orchestrator');
   await ensureBuilt(root, logger);
   
-  // Load budget and pricing configs for enforcement
-  loadPricingConfig(path.join(root, 'configs', 'pricing.yaml'), logger);
+  // Load budget config for enforcement (pricing now comes from the SQLite catalog)
   loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);
   
   // Check budget for each model before starting

@@ -1,5 +1,5 @@
 import type { ChatMessage, ModelResponse, ToolDefinition, ToolExecutorMap } from '../types.js';
-import type { ModelAdapter } from '../adapters/base.js';
+import type { ModelAdapter } from '../providers/adapters/base.js';
 import { runAgentLoop, type AgentLoopOptions, type AgentLoopResult } from '../agent-loop/loop.js';
 import { getTracer, externalTraceUrl, isTracingEnabled } from './tracing.js';
 import { withSpan, truncate } from './span-helpers.js';
@@ -56,7 +56,14 @@ function wrapAdapter(
       return response;
     });
   };
-  return { sendMessage };
+  return {
+    sendMessage,
+    supportsStreaming: () => adapter.supportsStreaming(),
+    supportsReasoning: () => adapter.supportsReasoning(),
+    supportsPromptCaching: () => adapter.supportsPromptCaching(),
+    ...(adapter.buildCacheBreakpoints ? { buildCacheBreakpoints: (m: ChatMessage[]) => adapter.buildCacheBreakpoints!(m) } : {}),
+    ...(adapter.sendMessageStream ? { sendMessageStream: (m: ChatMessage[], t: ToolDefinition[]) => adapter.sendMessageStream!(m, t) } : {}),
+  };
 }
 
 /** Wrap every tool executor so each call opens an `execute_tool` child span. */

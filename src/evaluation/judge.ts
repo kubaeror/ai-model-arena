@@ -2,8 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { Logger } from '../types.js';
-import type { ModelConfig } from '../config.js';
-import { createAdapter } from '../adapters/index.js';
+import { ProviderRegistry, loadBuiltins } from '../providers/index.js';
+import { getDb } from '../db/client.js';
+import { resolveModelForRun } from '../worker.js';
 import type { EvaluationConfig, JudgeResult, JudgeScore, Rubric } from './types.js';
 import { EvaluationConfigSchema } from './types.js';
 
@@ -70,14 +71,22 @@ export async function runJudgeScoring(
   runId: string,
   task: string,
   files: Record<string, string>,
-  modelConfig: ModelConfig,
   config: EvaluationConfig,
   logger?: Logger
 ): Promise<JudgeResult | null> {
   const judgeConfig = config.judge;
   if (!judgeConfig?.enabled) return null;
 
-  const adapter = createAdapter(modelConfig, logger?.child('judge'));
+  const resolved = resolveModelForRun(judgeConfig.model);
+  if (!resolved) {
+    logger?.warn('Judge model not found in catalog', { model: judgeConfig.model });
+    return null;
+  }
+  const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
+  const registry = new ProviderRegistry();
+  loadBuiltins(registry);
+  registry.loadCustomFromDb(getDb());
+  const adapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger?.child('judge') });
   
   const prompt = buildJudgePrompt(config.rubric, task, files);
   
