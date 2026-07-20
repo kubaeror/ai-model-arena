@@ -111,6 +111,35 @@ export const catalog_cache_state = sqliteTable('catalog_cache_state', {
   next_refresh: text('next_refresh').notNull(),
 });
 
+export const anomalies = sqliteTable('anomalies', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  run_id: text('run_id').notNull(),
+  model: text('model').notNull(),
+  type: text('type').notNull(),
+  severity: text('severity').notNull(),
+  description: text('description').notNull(),
+  detected_at: text('detected_at').notNull(),
+  resolved: integer('resolved').notNull().default(0),
+  resolved_at: text('resolved_at'),
+  resolved_as: text('resolved_as'),
+  metadata_json: text('metadata_json'),
+}, (table) => [
+  index('idx_anomalies_run').on(table.run_id),
+  index('idx_anomalies_model').on(table.model),
+  index('idx_anomalies_type').on(table.type),
+  index('idx_anomalies_resolved').on(table.resolved),
+  index('idx_anomalies_detected').on(table.detected_at),
+]);
+
+export const webhooks = sqliteTable('webhooks', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  url: text('url').notNull(),
+  events: text('events').notNull(),
+  secret: text('secret'),
+  created_at: text('created_at').notNull(),
+  active: integer('active').notNull().default(1),
+});
+
 // ── Legacy type exports (kept for existing consumers of these interfaces) ──
 
 export interface ProviderRow {

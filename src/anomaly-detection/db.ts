@@ -1,14 +1,13 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { findProjectRoot } from '../paths.js';
+import { getDb as getCentralDb } from '../db/client.js';
 
 /**
  * SQLite store for detected anomalies + webhook subscriptions.
  *
- * A single `outputs/arena.db` database is shared by the worker (writes on
- * anomaly detection) and the dashboard server (reads + PATCH). The connection
- * is opened lazily and cached for the process lifetime.
+ * Tables are managed by Drizzle migrations now; this module shares the
+ * central DB singleton from `src/db/client.ts`.
  */
 
 export type AnomalyType =
@@ -35,65 +34,16 @@ export interface AnomalyRecord {
   metadata_json: string | null;
 }
 
-let db: Database.Database | null = null;
-
 export function dbPath(): string {
   return path.join(findProjectRoot(), 'outputs', 'arena.db');
 }
 
-function migrate(database: Database.Database): void {
-  database.pragma('journal_mode = WAL');
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS anomalies (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      run_id TEXT NOT NULL,
-      model TEXT NOT NULL,
-      type TEXT NOT NULL,
-      severity TEXT NOT NULL,
-      description TEXT NOT NULL,
-      detected_at TEXT NOT NULL,
-      resolved INTEGER NOT NULL DEFAULT 0,
-      resolved_at TEXT,
-      resolved_as TEXT,
-      metadata_json TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_anomalies_run ON anomalies(run_id);
-    CREATE INDEX IF NOT EXISTS idx_anomalies_model ON anomalies(model);
-    CREATE INDEX IF NOT EXISTS idx_anomalies_type ON anomalies(type);
-    CREATE INDEX IF NOT EXISTS idx_anomalies_resolved ON anomalies(resolved);
-    CREATE INDEX IF NOT EXISTS idx_anomalies_detected ON anomalies(detected_at);
-  `);
-  // Webhooks table (added in the same migration step).
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS webhooks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      url TEXT NOT NULL,
-      events TEXT NOT NULL,
-      secret TEXT,
-      created_at TEXT NOT NULL,
-      active INTEGER NOT NULL DEFAULT 1
-    );
-  `);
-}
-
-/** Open (and migrate) the shared SQLite database. Cached per process. */
+/** Access the shared DB singleton (initialise via src/db/client.ts first). */
 export function getDb(): Database.Database {
-  if (db) return db;
-  const p = dbPath();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  const database = new Database(p);
-  migrate(database);
-  db = database;
-  return database;
+  return getCentralDb();
 }
 
-/** Close the database connection (mainly for tests / shutdown). */
-export function closeDb(): void {
-  if (db) {
-    db.close();
-    db = null;
-  }
-}
+export { closeDb } from '../db/client.js';
 
 export interface NewAnomaly {
   run_id: string;
