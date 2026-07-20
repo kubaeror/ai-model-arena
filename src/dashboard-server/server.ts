@@ -25,6 +25,9 @@ import { createAnomaliesRouter } from './routes/anomalies.js';
 import { createObservabilityRouter } from './routes/observability.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createProvidersRouter } from './routes/providers.js';
+import { createCatalogRouter } from './routes/catalog.js';
+import { createMetricsRouter } from './routes/metrics.js';
+import { createCacheRouter } from './routes/cache.js';
 import { mountOpenApi } from './openapi.js';
 
 const logger = createLogger('ai-arena:dashboard');
@@ -106,6 +109,9 @@ async function start(): Promise<void> {
   app.use('/api/observability', requireAuth(auth), createObservabilityRouter());
   app.use('/api/webhooks', requireAuth(auth), createWebhooksRouter());
   app.use('/api/providers', requireAuth(auth), createProvidersRouter());
+  app.use('/api/catalog', requireAuth(auth), createCatalogRouter());
+  app.use('/api/metrics', requireAuth(auth), createMetricsRouter());
+  app.use('/api/cache', requireAuth(auth), createCacheRouter());
 
   // ── Public API (API key auth + rate limiting), versioned under /api/v1 ────────
   app.use('/api/v1/models', requireApiKey(['models:read']), createModelsRouter());
@@ -118,6 +124,9 @@ async function start(): Promise<void> {
   app.use('/api/v1/observability', requireApiKey(['observability:read']), createObservabilityRouter());
   app.use('/api/v1/webhooks', requireApiKey(['webhooks:write']), createWebhooksRouter());
   app.use('/api/v1/providers', requireApiKey(['providers:read']), createProvidersRouter());
+  app.use('/api/v1/catalog', requireApiKey(['catalog:read']), createCatalogRouter());
+  app.use('/api/v1/metrics', requireApiKey(['metrics:read']), createMetricsRouter());
+  app.use('/api/v1/cache', requireApiKey(['cache:read']), createCacheRouter());
 
   // ── Public API (API key auth) ──────────────────────────────────────────────
   app.use('/api/analytics', requireApiKey(['analytics:read']), createAnalyticsRouter());
