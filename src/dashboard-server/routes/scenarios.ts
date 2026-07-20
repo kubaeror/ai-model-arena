@@ -78,8 +78,12 @@ export function createScenariosRouter(): Router {
   const router = Router();
 
   function resolveAndValidate(name: string): string | null {
-    if (path.isAbsolute(name) || name.includes('..')) return null;
-    return resolveScenarioPath(scenariosDir(), name);
+    // Allow only simple alphanumeric names — no path separators or shell chars.
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) return null;
+    const resolved = resolveScenarioPath(scenariosDir(), name);
+    // Defence in depth: confirm resolved path is within scenariosDir.
+    if (!isWithin(scenariosDir(), resolved)) return null;
+    return resolved;
   }
 
   // GET /api/scenarios — list all
