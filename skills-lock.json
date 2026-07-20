@@ -25,6 +25,12 @@
       "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
       "computedHash": "569299a60c8e93880f3b3c1eca55578f58f7e1a4155876edb4cb814da3d6b3ea"
     },
+    "kubernetes-skill": {
+      "source": "lukasniessen/kubernetes-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "ae582a14b61fc959184cb356e481e1e31ce9999d6a9a9cafe9cd0763516f4fcc"
+    },
     "redesign-existing-projects": {
       "source": "leonxlnx/taste-skill",
       "sourceType": "github",
