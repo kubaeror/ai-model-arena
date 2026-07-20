@@ -168,6 +168,42 @@ export const run_models = pgTable('run_models', {
   duration_ms: integer('duration_ms'),
 });
 
+export const sessions = pgTable('sessions', {
+  id: text('id').primaryKey(),
+  prompt_id: text('prompt_id'),
+  prompt_version: integer('prompt_version'),
+  model: text('model'),
+  status: text('status').notNull(),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});
+
+export const messages = pgTable('messages', {
+  id: text('id').primaryKey(),
+  session_id: text('session_id').notNull().references(() => sessions.id),
+  turn: integer('turn').notNull(),
+  role: text('role').notNull(),
+  content: text('content'),
+  tool_calls: text('tool_calls'),
+  tool_call_id: text('tool_call_id'),
+  token_input: integer('token_input'),
+  token_output: integer('token_output'),
+  created_at: text('created_at').notNull(),
+});
+
+export const model_calls = pgTable('model_calls', {
+  id: text('id').primaryKey(),
+  session_id: text('session_id').notNull().references(() => sessions.id),
+  turn: integer('turn').notNull(),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  request_hash: text('request_hash').notNull(),
+  response_text: text('response_text'),
+  usage: text('usage'),
+  latency_ms: integer('latency_ms'),
+  created_at: text('created_at').notNull(),
+});
+
 // ── Legacy type exports (kept for existing consumers) ──
 
 export interface ProviderRow {
