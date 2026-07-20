@@ -1,6 +1,10 @@
 import { Router } from 'express';
-import fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import { listRuns } from '../../orchestrator/orchestrator.js';
+
+interface AnalyticsToolsCache { key: string; data: ToolAnalyticsResponse; ts: number; }
+let analyticsToolsCache: AnalyticsToolsCache | null = null;
+const ANALYTICS_TTL_MS = 30_000;
 
 interface ToolStatsAggregated {
   name: string;
@@ -29,22 +33,11 @@ interface ToolAnalyticsResponse {
   loopIncidents: LoopIncident[];
 }
 
-function readResultFile(resultPath: string): Record<string, unknown> | null {
-  if (!fs.existsSync(resultPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-  } catch {
-    return null;
-  }
+async function readResultFile(resultPath: string): Promise<Record<string, unknown> | null> {
+  try { return JSON.parse(await fsp.readFile(resultPath, 'utf8')); } catch { return null; }
 }
-
-function readConversationFile(convPath: string): Record<string, unknown> | null {
-  if (!fs.existsSync(convPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(convPath, 'utf8'));
-  } catch {
-    return null;
-  }
+async function readConversationFile(convPath: string): Promise<Record<string, unknown> | null> {
+  try { return JSON.parse(await fsp.readFile(convPath, 'utf8')); } catch { return null; }
 }
 
 function extractToolCallsFromConversation(conv: Record<string, unknown>): Array<{ turn: number; name: string; success: boolean }> {
@@ -111,8 +104,13 @@ function detectLoopsInConversation(conv: Record<string, unknown>): LoopIncident[
 export function createAnalyticsRouter(): Router {
   const router = Router();
   
-  router.get('/tools', (req, res) => {
+  router.get('/tools', async (req, res) => {
     const { model: filterModel, scenario: filterScenario, from, to } = req.query as Record<string, string | undefined>;
+    const cacheKey = `${filterModel ?? ''}:${filterScenario ?? ''}:${from ?? ''}:${to ?? ''}`;
+    if (analyticsToolsCache && analyticsToolsCache.key === cacheKey && (Date.now() - analyticsToolsCache.ts) < ANALYTICS_TTL_MS) {
+      res.json(analyticsToolsCache.data);
+      return;
+    }
     const runs = listRuns();
     
     let filteredRuns = runs;
@@ -146,8 +144,8 @@ export function createAnalyticsRouter(): Router {
       for (const perModel of run.perModel) {
         if (filterModel && perModel.model !== filterModel) continue;
         
-        const result = readResultFile(perModel.resultPath);
-        const conv = readConversationFile(perModel.conversationPath);
+        const result = await readResultFile(perModel.resultPath);
+        const conv = await readConversationFile(perModel.conversationPath);
         
         if (conv) {
           const loops = detectLoopsInConversation(conv);
@@ -200,10 +198,11 @@ export function createAnalyticsRouter(): Router {
       loopIncidents: allLoops.slice(0, 50),
     };
     
+    analyticsToolsCache = { key: cacheKey, data: response, ts: Date.now() };
     res.json(response);
   });
   
-  router.get('/cost', (req, res) => {
+  router.get('/cost', async (req, res) => {
     const runs = listRuns();
     const filterModel = req.query.model as string | undefined;
     
@@ -213,7 +212,7 @@ export function createAnalyticsRouter(): Router {
       for (const perModel of run.perModel) {
         if (filterModel && perModel.model !== filterModel) continue;
         
-        const result = readResultFile(perModel.resultPath);
+        const result = await readResultFile(perModel.resultPath);
         if (!result) continue;
         
         const modelName = perModel.model;

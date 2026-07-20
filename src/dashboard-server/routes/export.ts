@@ -1,25 +1,15 @@
 import { Router } from 'express';
-import fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { listRuns, getRunRecord } from '../../orchestrator/orchestrator.js';
 
-function readResultFile(resultPath: string): Record<string, unknown> | null {
-  if (!fs.existsSync(resultPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-  } catch {
-    return null;
-  }
+async function readResultFile(resultPath: string): Promise<Record<string, unknown> | null> {
+  try { return JSON.parse(await fsp.readFile(resultPath, 'utf8')); } catch { return null; }
 }
 
-function readJudgeScore(outputDir: string): Record<string, unknown> | null {
+async function readJudgeScore(outputDir: string): Promise<Record<string, unknown> | null> {
   const judgePath = path.join(outputDir, 'judge_score.json');
-  if (!fs.existsSync(judgePath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(judgePath, 'utf8'));
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(await fsp.readFile(judgePath, 'utf8')); } catch { return null; }
 }
 
 function escapeCSV(str: string): string {
@@ -39,7 +29,7 @@ interface ExportFilters {
 export function createExportRouter(): Router {
   const router = Router();
   
-  router.get('/csv', (req, res) => {
+  router.get('/csv', async (req, res) => {
     const { model: filterModel, scenario: filterScenario, from, to } = req.query as ExportFilters;
     const runs = listRuns();
     
@@ -68,10 +58,10 @@ export function createExportRouter(): Router {
       for (const perModel of run.perModel) {
         if (filterModel && perModel.model !== filterModel) continue;
         
-        const result = readResultFile(perModel.resultPath);
+        const result = await readResultFile(perModel.resultPath);
         if (!result) continue;
         
-        const judgeScore = readJudgeScore(perModel.outputDir);
+        const judgeScore = await readJudgeScore(perModel.outputDir);
         const judgeAvg = (judgeScore?.averageScore as number) ?? '';
         const tokenUsage = result.tokenUsage as Record<string, number> | undefined;
         const totalTokens = (tokenUsage?.prompt ?? 0) + (tokenUsage?.completion ?? 0);
@@ -99,7 +89,7 @@ export function createExportRouter(): Router {
     res.send(csv);
   });
   
-  router.get('/runs/:runId/csv', (req, res) => {
+  router.get('/runs/:runId/csv', async (req, res) => {
     const { runId } = req.params;
     const run = getRunRecord(runId);
     if (!run) {
@@ -111,10 +101,15 @@ export function createExportRouter(): Router {
     rows.push(['turn_number', 'role', 'content_summary', 'tool_name', 'tool_success']);
     
     for (const perModel of run.perModel) {
-      if (!fs.existsSync(perModel.conversationPath)) continue;
+      let raw: string;
+      try {
+        raw = await fsp.readFile(perModel.conversationPath, 'utf8');
+      } catch {
+        continue;
+      }
       
       try {
-        const conv = JSON.parse(fs.readFileSync(perModel.conversationPath, 'utf8'));
+        const conv = JSON.parse(raw);
         const entries = (conv.entries as Array<Record<string, unknown>>) ?? [];
         
         let currentTurn = 0;

@@ -168,6 +168,9 @@ export async function writeDiffPatch(outputDir: string, diff: string, logger?: L
 
 export async function readDiffPatch(outputDir: string): Promise<string | null> {
   const patchPath = path.join(outputDir, 'diff.patch');
-  if (!fs.existsSync(patchPath)) return null;
-  return fs.readFileSync(patchPath, 'utf8');
+  try {
+    return await fs.promises.readFile(patchPath, 'utf8');
+  } catch {
+    return null;
+  }
 }

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import {
   listRuns,
@@ -35,10 +36,13 @@ function walkSandbox(dir: string, base: string, acc: string[] = []): string[] {
   return acc;
 }
 
-function readTail(filePath: string, lines = 400): string {
-  if (!fs.existsSync(filePath)) return '';
-  const content = fs.readFileSync(filePath, 'utf8');
-  return content.split(/\r?\n/).slice(-lines).join('\n');
+async function readTail(filePath: string, lines = 400): Promise<string> {
+  try {
+    const content = await fsp.readFile(filePath, 'utf8');
+    return content.split(/\r?\n/).slice(-lines).join('\n');
+  } catch {
+    return '';
+  }
 }
 
 export function createRunsRouter(): Router {
@@ -104,27 +108,28 @@ export function createRunsRouter(): Router {
   });
 
   // GET /api/runs/:runId/models/:model/conversation
-  router.get('/:runId/models/:model/conversation', (req, res) => {
+  router.get('/:runId/models/:model/conversation', async (req, res) => {
     const entry = findEntry(req.params.runId, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
     }
-    if (!fs.existsSync(entry.conversationPath)) {
+    try {
+      const raw = await fsp.readFile(entry.conversationPath, 'utf8');
+      res.json({ model: req.params.model, conversation: JSON.parse(raw) });
+    } catch {
       res.json({ model: req.params.model, conversation: { entries: [] } });
-      return;
     }
-    res.json({ model: req.params.model, conversation: JSON.parse(fs.readFileSync(entry.conversationPath, 'utf8')) });
   });
 
   // GET /api/runs/:runId/models/:model/report
-  router.get('/:runId/models/:model/report', (req, res) => {
+  router.get('/:runId/models/:model/report', async (req, res) => {
     const entry = findEntry(req.params.runId, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
     }
-    res.type('text/markdown').send(readTail(entry.reportPath, 100000) || '(report not available yet)');
+    res.type('text/markdown').send(await readTail(entry.reportPath, 100000) || '(report not available yet)');
   });
 
   // GET /api/runs/:runId/models/:model/files — list sandbox files
@@ -142,7 +147,7 @@ export function createRunsRouter(): Router {
   });
 
   // GET /api/runs/:runId/models/:model/files/* — read one sandbox file
-  router.get('/:runId/models/:model/files/*', (req, res) => {
+  router.get('/:runId/models/:model/files/*', async (req, res) => {
     const entry = findEntry(req.params.runId, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -157,21 +162,22 @@ export function createRunsRouter(): Router {
       res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
       return;
     }
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+    try {
+      const content = await fsp.readFile(abs, 'utf8');
+      res.type('text/plain').send(content);
+    } catch {
       res.status(404).json({ error: 'File not found' });
-      return;
     }
-    res.type('text/plain').send(fs.readFileSync(abs, 'utf8'));
   });
 
   // GET /api/runs/:runId/models/:model/logs — tail PM2 log
-  router.get('/:runId/models/:model/logs', (req, res) => {
+  router.get('/:runId/models/:model/logs', async (req, res) => {
     const entry = findEntry(req.params.runId, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
     }
-    res.type('text/plain').send(readTail(entry.logFile, 400));
+    res.type('text/plain').send(await readTail(entry.logFile, 400));
   });
 
   // POST /api/runs/:runId/stop
