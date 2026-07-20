@@ -303,7 +303,7 @@ async function main(): Promise<void> {
   const costBreakdown = computeCost(modelName, {
     prompt: loopResult.tokenUsage.prompt ?? 0,
     completion: loopResult.tokenUsage.completion ?? 0,
-    cached: loopResult.tokenUsage.total ?? 0,
+    cached: loopResult.tokenUsage.cacheReadTokens ?? 0,
   });
   
   // ── Finalize git repo ─────────────────────────────────────────────────────
