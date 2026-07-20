@@ -1,19 +1,5 @@
-import type { Logger } from '../types.js';
-import { type PricingConfig, type ModelPricing, type TokenUsage, type CostBreakdown } from './types.js';
+import { type ModelPricing, type TokenUsage, type CostBreakdown } from './types.js';
 import { getDb } from '../db/client.js';
-
-let pricingConfig: PricingConfig | null = null;
-
-/**
- * Pricing is now sourced from the SQLite catalog (`pricing` table, populated
- * by models.dev sync). This function is retained as a no-op for backwards
- * compatibility with callers that previously loaded `configs/pricing.yaml`.
- */
-export function loadPricingConfig(_configPath: string, _logger?: Logger): PricingConfig {
-  if (pricingConfig) return pricingConfig;
-  pricingConfig = { models: {} };
-  return pricingConfig;
-}
 
 /** Look up per-model pricing from the SQLite catalog. Returns null if not found. */
 export function getModelPricing(modelId: string): { input: number | null; output: number | null; cache_read: number | null; cache_write: number | null } | null {
@@ -47,8 +33,8 @@ export function computeCost(modelName: string, usage: TokenUsage): CostBreakdown
     return { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
   }
 
-  const inputCost = (usage.prompt / 1000) * pricing.input;
-  const outputCost = (usage.completion / 1000) * pricing.output;
+  const inputCost = ((usage.prompt ?? 0) / 1000) * pricing.input;
+  const outputCost = ((usage.completion ?? 0) / 1000) * pricing.output;
   const cachedCost = ((usage.cached ?? 0) / 1000) * (pricing.cached ?? 0);
 
   return {
@@ -65,6 +51,5 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-export function resetPricingCache(): void {
-  pricingConfig = null;
-}
+/** No-op — pricing is sourced exclusively from SQLite. Retained for import compatibility. */
+export function resetPricingCache(): void {}

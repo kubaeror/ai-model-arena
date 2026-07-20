@@ -84,9 +84,15 @@ export async function dispatchNotification(
   }
   
   const results: NotificationResult[] = [];
-  for (const name of channelNames) {
-    const result = await sendNotification(name, event, logger);
-    results.push(result);
+  const settled = await Promise.allSettled(
+    channelNames.map((name) => sendNotification(name, event, logger)),
+  );
+  for (const outcome of settled) {
+    results.push(
+      outcome.status === 'fulfilled'
+        ? outcome.value
+        : { channel: 'unknown', success: false, error: String(outcome.reason), timestamp: new Date().toISOString() },
+    );
   }
   
   return results;

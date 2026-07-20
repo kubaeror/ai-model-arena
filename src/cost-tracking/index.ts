@@ -1,5 +1,5 @@
 export * from './types.js';
-export { loadPricingConfig, getPricing, computeCost, formatCost, resetPricingCache } from './pricing.js';
+export { getPricing, computeCost, formatCost, resetPricingCache } from './pricing.js';
 export { 
   loadBudgetConfig, 
   checkBudget, 
