@@ -16,6 +16,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "tsx --test tests/**/*.test.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/db-migrate.ts",
     "test:db": "tsx --test tests/db/**/*.test.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dashboard:dev": "concurrently -k -n api,web -c green,cyan \"tsx src/dashboard-server/server.ts\" \"npm --prefix src/dashboard-client run dev\"",
@@ -30,6 +32,7 @@
     "commander": "^12.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
     "express-rate-limit": "^8.6.0",
     "helmet": "^8.3.0",
@@ -51,13 +54,9 @@
     "@typescript-eslint/eslint-plugin": "^8.64.0",
     "@typescript-eslint/parser": "^8.64.0",
     "concurrently": "^9.1.0",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^10.7.0",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3"
-  },
-  "allowScripts": {
-    "better-sqlite3@12.11.1": true,
-    "esbuild@0.28.1": true,
-    "protobufjs@7.6.5": true
   }
 }
