@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
 import type { StartOptions } from 'pm2';
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
@@ -71,11 +73,11 @@ export async function ensureBuilt(root: string, logger: Logger): Promise<void> {
   if (fs.existsSync(worker)) return;
   logger.info('Compiled worker not found — building project (npm run build)...');
   try {
-    execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], {
-      cwd: root,
-      stdio: 'inherit',
-      shell: process.platform === 'win32',
-    });
+    await execFileAsync(
+      process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      ['run', 'build'],
+      { cwd: root, shell: process.platform === 'win32' },
+    );
   } catch (err) {
     throw new Error(
       `Failed to build automatically. Run "npm run build" first. (${

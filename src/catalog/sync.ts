@@ -24,9 +24,16 @@ const PROVIDER_ADAPTER_MAP: Record<string, 'openai-compat' | 'anthropic' | 'goog
 };
 
 const DEFAULT_API_URL = 'https://models.dev/api.json';
-const REFRESH_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 
-export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl: DEFAULT_API_URL }): Promise<SyncResult> {
+function getApiUrl(): string {
+  return process.env.MODELS_DEV_API_URL ?? DEFAULT_API_URL;
+}
+function getRefreshIntervalMs(): number {
+  const days = Number(process.env.CATALOG_REFRESH_INTERVAL_DAYS ?? '30');
+  return (Number.isFinite(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
+}
+
+export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl: getApiUrl() }): Promise<SyncResult> {
   void source;
   const db = getDb();
   try {
@@ -123,7 +130,7 @@ function upsertCatalog(db: Database, data: ModelsDevResponse): number {
 
 function updateCacheState(db: Database, source: string, status: string, error: string | undefined, count: number): void {
   const now = new Date();
-  const next = new Date(now.getTime() + REFRESH_INTERVAL_MS).toISOString();
+  const next = new Date(now.getTime() + getRefreshIntervalMs()).toISOString();
   db.prepare(`
     INSERT INTO catalog_cache_state (source, last_fetch, last_status, last_error, count, next_refresh)
     VALUES (@source, @last_fetch, @last_status, @last_error, @count, @next_refresh)
