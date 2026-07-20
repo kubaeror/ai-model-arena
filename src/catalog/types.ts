@@ -58,3 +58,29 @@ export const ModelsDevResponseSchema = z.record(z.string(), ModelsDevProviderSch
 export type ModelsDevModel = z.infer<typeof ModelsDevModelSchema>;
 export type ModelsDevProvider = z.infer<typeof ModelsDevProviderSchema>;
 export type ModelsDevResponse = z.infer<typeof ModelsDevResponseSchema>;
+
+export const ModelbenchModelSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  developer: z.string().optional(),
+  context_length: z.number().optional(),
+  input_price_per_million: z.number().optional(),
+  output_price_per_million: z.number().optional(),
+  cached_input_price_per_million: z.number().optional(),
+  intelligence_score: z.number().optional(),
+  coding_score: z.number().optional(),
+  agentic_score: z.number().optional(),
+  speed_tps: z.number().optional(),
+  benchmark_data: z.record(z.string(), z.unknown()).optional(),
+  source: z.string().optional(),
+}).passthrough();
+
+export const ModelbenchResponseSchema = z.object({
+  data: z.array(ModelbenchModelSchema),
+  meta: z.object({ page: z.number(), limit: z.number(), total: z.number() }).optional(),
+});
+
+export const ZeroEvalModelSchema = z.record(z.string(), z.unknown());
+
+export type ModelbenchModel = z.infer<typeof ModelbenchModelSchema>;
+export type ModelbenchResponse = z.infer<typeof ModelbenchResponseSchema>;
