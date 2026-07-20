@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: arena
+      POSTGRES_PASSWORD: arena
+      POSTGRES_DB: arena
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+  runner:
+    build: .
+    environment:
+      DB_DRIVER: postgres
+      DATABASE_URL: postgres://arena:arena@postgres:5432/arena
+      QUEUE_DRIVER: memory
+      OUTPUT_ROOT: /var/arena/outputs
+    depends_on:
+      - postgres
+    volumes:
+      - outputs:/var/arena/outputs
+    command: ["node", "dist/runner.js"]
+
+  dashboard:
+    build: .
+    environment:
+      DB_DRIVER: postgres
+      DATABASE_URL: postgres://arena:arena@postgres:5432/arena
+      DASHBOARD_PORT: "4000"
+      DASHBOARD_USERNAME: admin
+      DASHBOARD_PASSWORD: change-me
+    depends_on:
+      - postgres
+    ports:
+      - "4000:4000"
+    command: ["node", "dist/dashboard-server/server.js"]
+
+volumes:
+  pgdata:
+  redisdata:
+  outputs:
