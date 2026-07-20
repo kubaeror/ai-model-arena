@@ -16,9 +16,11 @@
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import { Command } from 'commander';
 import { findProjectRoot } from './paths.js';
 import { createLogger } from './logger/pino-logger.js';
+import { initDb } from './db/client.js';
 import { listRuns, getRunRecord } from './orchestrator/run-index.js';
 import {
   runScenarioForModels,
@@ -131,9 +133,80 @@ program
   .requiredOption('-s, --suite <name>', 'Suite name (configs/regression/<name>.yaml)')
   .option('-m, --model <name>', 'Run for a specific model only')
   .option('--update-baseline', 'Update baselines after run', false)
-  .action(async (_opts) => {
-    process.stderr.write('\nError: The `regress` command is not yet implemented.\n');
-    process.exit(1);
+  .action(async (opts: { suite: string; model?: string; updateBaseline: boolean }) => {
+    const { suite, model: filterModel, updateBaseline } = opts;
+    const root = rootDir();
+    const configPath = path.join(root, 'configs', 'regression', `${suite}.yaml`);
+    if (!fs.existsSync(configPath)) {
+      process.stderr.write(`\nError: Regression suite config not found: ${configPath}\n`);
+      process.exit(1);
+    }
+    const { RegressionSuiteConfigSchema } = await import('./evaluation/regression-config.js');
+    const raw = yaml.load(fs.readFileSync(configPath, 'utf8'));
+    const config = RegressionSuiteConfigSchema.parse(raw);
+    const models = filterModel ? config.models.filter((m) => m === filterModel) : config.models;
+    if (models.length === 0) {
+      process.stderr.write(`\nError: No matching models (filter: ${filterModel ?? 'none'})\n`);
+      process.exit(1);
+    }
+
+    const baselineDir = path.resolve(root, config.baselineDir);
+    const logger = createLogger('ai-arena:regress');
+    initDb(path.join(root, 'outputs', 'arena.db'));
+
+    const { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath } =
+      await import('./evaluation/regression.js');
+    const { readJudgeResult } = await import('./evaluation/judge.js');
+    void readJudgeResult; // used in getCurrentRunResult below
+
+    const result = await runRegressionSuite(
+      suite,
+      models,
+      config.scenarios,
+      baselineDir,
+      config.thresholds,
+      async (mdl, scenario) => {
+        const runs = listRuns().filter(
+          (r) => r.scenario === scenario && r.models.includes(mdl) && r.status === 'completed',
+        );
+        if (runs.length === 0) return null;
+        const rec = runs[0]!;
+        const perModel = rec.perModel.find((m) => m.model === mdl);
+        if (!perModel) return null;
+        try {
+          return JSON.parse(fs.readFileSync(perModel.resultPath, 'utf8'));
+        } catch {
+          return null;
+        }
+      },
+      logger,
+    );
+
+    if (updateBaseline) {
+      for (const sr of result.scenarioResults) {
+        if (sr.success && sr.current) {
+          const snap = createBaselineSnapshot(sr.current, sr.judge ?? null);
+          const bPath = getBaselinePath(baselineDir, sr.current.model, sr.scenario);
+          saveBaselineSnapshot(bPath, snap, logger);
+        }
+      }
+      console.log('\nBaselines updated.');
+    }
+
+    const passed = result.passed;
+    const failedCount = result.scenarioResults.filter(
+      (sr) => sr.regression && !sr.regression.passed,
+    ).length;
+    console.log(`\nRegression suite: ${suite}`);
+    console.log(`Status: ${passed ? 'PASSED' : `FAILED -- ${failedCount} regression(s)`}`);
+    for (const sr of result.scenarioResults) {
+      const icon = sr.regression?.passed === false ? 'FAIL' : 'PASS';
+      console.log(`  [${icon}] ${sr.scenario}`);
+      for (const reg of sr.regression?.regressions ?? []) {
+        console.log(`    ${reg.metric}: ${reg.baseline} -> ${reg.current} (delta ${reg.change.toFixed(2)}, threshold ${reg.threshold})`);
+      }
+    }
+    process.exit(passed ? 0 : 1);
   });
 
 // ── schedule ──────────────────────────────────────────────────────────────────
@@ -275,7 +348,7 @@ program
   .description('Print the diff for a specific run.')
   .argument('<runId>', 'Run ID')
   .option('-m, --model <name>', 'Model name (required if run has multiple models)')
-  .action((runId: string, opts: { model?: string }) => {
+  .action(async (runId: string, opts: { model?: string }) => {
     const run = getRunRecord(runId);
     if (!run) {
       console.error(`Run not found: ${runId}`);
@@ -297,7 +370,7 @@ program
       process.exit(1);
     }
     
-    const diff = readDiffPatch(entry.outputDir);
+    const diff = await readDiffPatch(entry.outputDir);
     if (!diff) {
       console.log('\nNo diff available for this run (diff.patch not found).\n');
     } else {
