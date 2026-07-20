@@ -20,6 +20,7 @@ export interface AgentLoopOptions {
   toolCtx: ToolExecutionContext;
   conv: ConversationLogger;
   logger: Logger;
+  onTurnComplete?: (turn: number, messages: ChatMessage[]) => Promise<void>;
 }
 
 export interface AgentLoopResult {
@@ -45,7 +46,7 @@ function truncate(s: string, max = MAX_TOOL_RESULT_CHARS): string {
  * tool calls. Every step is mirrored into the ConversationLogger for durability.
  */
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopResult> {
-  const { adapter, tools, executors, systemPrompt, task, maxTurns, toolCtx, conv, logger } = opts;
+  const { adapter, tools, executors, systemPrompt, task, maxTurns, toolCtx, conv, logger, onTurnComplete } = opts;
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
@@ -136,6 +137,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       stopReason = 'task_complete';
       logger.info('Agent signalled task_complete', { turn });
       break;
+    }
+
+    if (onTurnComplete) {
+      try { await onTurnComplete(turn, messages); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
     }
   }
 
