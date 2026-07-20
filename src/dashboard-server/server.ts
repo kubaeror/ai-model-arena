@@ -9,6 +9,9 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { findProjectRoot } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
+import { initDb } from '../db/client.js';
+import { ensureFresh } from '../catalog/cache.js';
+import { startCatalogCron } from '../catalog/cron.js';
 import { loadAuthConfig, requireAuth, verifyCredentials, signToken, type AuthedRequest } from './auth.js';
 import { loadApiKeysConfig, requireApiKey } from './auth-api.js';
 import { LiveHub } from './live.js';
@@ -30,7 +33,7 @@ function clientDist(): string {
   return path.join(findProjectRoot(), 'src', 'dashboard-client', 'dist');
 }
 
-function start(): void {
+async function start(): Promise<void> {
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
   const auth = loadAuthConfig();
   if (auth.generatedPassword) {
@@ -40,6 +43,20 @@ function start(): void {
   }
   const root = findProjectRoot();
   const allowedOrigins = (process.env.DASHBOARD_CORS_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+
+  const dbPath = path.join(root, 'outputs', 'arena.db');
+  initDb(dbPath);
+  logger.info('SQLite catalog DB initialized', { dbPath });
+
+  // Boot: block on stale catalog sources
+  for (const source of ['models.dev', 'modelbench', 'zeroeval'] as const) {
+    try {
+      await ensureFresh(source);
+    } catch (err) {
+      logger.warn('Boot catalog sync failed (continuing with stale data)', { source, err: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  startCatalogCron(logger);
 
   const app = express();
   const corsOrigins = allowedOrigins.length
@@ -150,4 +167,7 @@ function start(): void {
   process.on('SIGTERM', shutdown);
 }
 
-start();
+start().catch((err) => {
+  logger.error('Dashboard server failed to start', { err: err instanceof Error ? err.message : String(err) });
+  process.exit(1);
+});
