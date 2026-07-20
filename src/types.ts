@@ -29,6 +29,12 @@ export interface TokenUsage {
   prompt?: number;
   completion?: number;
   total?: number;
+  /** Prompt cache read tokens (Anthropic cache_read_input_tokens, OpenAI cached_tokens). */
+  cacheReadTokens?: number;
+  /** Prompt cache write tokens (Anthropic cache_creation_input_tokens). */
+  cacheWriteTokens?: number;
+  /** Computed: cacheReadTokens / prompt. Populated by metrics layer, not adapters. */
+  cacheHitRate?: number;
 }
 
 /** Normalised response from any model adapter. */
