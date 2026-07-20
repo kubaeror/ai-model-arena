@@ -3,12 +3,13 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { StartOptions } from 'pm2';
 import type { Logger } from '../types.js';
-import { loadModelsConfig, findModel } from '../config.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, loadPricingConfig, checkBudget } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
+import { resolveModelForRun } from '../worker.js';
+import { initDb } from '../db/client.js';
 import {
   upsertRun,
   updateRun,
@@ -87,10 +88,15 @@ export async function ensureBuilt(root: string, logger: Logger): Promise<void> {
 /** Validate models + compute all run paths (no PM2, no spawning). */
 export function createRunSpec(opts: RunStartOptions): RunSpec {
   const root = pm2h.projectRoot();
-  const modelsConfigPath = opts.modelsConfigPath ?? path.join(root, 'configs', 'models.yaml');
   const scenariosDir = opts.scenariosDir ?? path.join(root, 'configs', 'scenarios');
-  const models = loadModelsConfig(modelsConfigPath);
-  for (const name of opts.models) findModel(models.models, name);
+  // Initialize the catalog DB so resolveModelForRun can query the models table.
+  initDb(path.join(root, 'outputs', 'arena.db'));
+  for (const name of opts.models) {
+    const resolved = resolveModelForRun(name);
+    if (!resolved) {
+      throw new Error(`Model not found in catalog: ${name}. Run catalog sync first.`);
+    }
+  }
 
   const ts = pm2h.timestamp();
   const runId = `${opts.scenario}_${ts}`;
@@ -116,7 +122,7 @@ export function createRunSpec(opts: RunStartOptions): RunSpec {
     ts,
     startedAt: new Date().toISOString(),
     root,
-    modelsConfigPath,
+    modelsConfigPath: opts.modelsConfigPath,
     scenariosDir,
     comparisonBase: path.join(root, 'outputs', 'comparisons', runId),
     models: perModel,
