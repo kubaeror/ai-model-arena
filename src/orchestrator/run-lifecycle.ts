@@ -8,6 +8,7 @@ import { writeComparison, type ComparisonEntry } from '../logger/comparison-logg
 import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, loadPricingConfig, checkBudget } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
+import { writeRunStats } from '../metrics/writeback.js';
 import {
   upsertRun,
   updateRun,
@@ -340,6 +341,10 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
   // Run anomaly detection over the just-completed run (best-effort, non-blocking).
   void analyzeRun(runId, logger).catch((e) =>
     logger.warn('Anomaly analysis failed', { runId, error: e instanceof Error ? e.message : String(e) }),
+  );
+  // Write per-model runtime stats back to the SQLite catalog (best-effort, non-fatal).
+  void writeRunStats(runId, root).catch((e) =>
+    logger.warn('writeRunStats failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e) }),
   );
 }
 
