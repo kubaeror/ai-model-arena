@@ -4,7 +4,7 @@ import yaml from 'js-yaml';
 import type { Logger } from '../types.js';
 import { ProviderRegistry, loadBuiltins } from '../providers/index.js';
 import { getDb } from '../db/client.js';
-import { resolveModelForRun } from '../worker.js';
+import { resolveModelForRun } from '../db/model-resolver.js';
 import type { EvaluationConfig, JudgeResult, JudgeScore, Rubric } from './types.js';
 import { EvaluationConfigSchema } from './types.js';
 

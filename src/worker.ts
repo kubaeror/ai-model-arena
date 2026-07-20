@@ -33,7 +33,7 @@ import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { initDb, getDb } from './db/client.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
-import type { ModelRow, ProviderRow } from './db/schema.js';
+import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
 import { initTracing, shutdownTracing } from './observability/tracing.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { findProjectRoot } from './paths.js';
@@ -52,41 +52,9 @@ function scenarioDir(root: string): string {
   return process.env.AI_ARENA_SCENARIOS_DIR ?? path.join(root, 'configs', 'scenarios');
 }
 
-export interface ResolvedModel {
-  canonicalId: string;
-  providerId: string;
-  apiModelId: string;
-  adapterKind: ProviderRow['adapter'];
-  envVar: string | null;
-  contextLimit: number | null;
-  maxTurns: number;
-  temperature: number;
-  maxTokens: number;
-}
-
-export function resolveModelForRun(friendlyName: string): ResolvedModel | null {
-  const db = getDb();
-  const row = db.prepare(`
-    SELECT m.*, mp.api_model_id, p.env_var, p.adapter as provider_adapter
-    FROM models m
-    JOIN model_providers mp ON mp.model_id = m.id
-    JOIN providers p ON p.id = m.provider_id
-    WHERE m.name = ? OR m.id = ?
-    LIMIT 1
-  `).get(friendlyName, friendlyName) as (ModelRow & { api_model_id: string; env_var: string | null; provider_adapter: string }) | undefined;
-  if (!row) return null;
-  return {
-    canonicalId: row.id,
-    providerId: row.provider_id,
-    apiModelId: row.api_model_id,
-    adapterKind: row.provider_adapter as ProviderRow['adapter'],
-    envVar: row.env_var,
-    contextLimit: row.context_limit,
-    maxTurns: 20,
-    temperature: 0.2,
-    maxTokens: row.output_limit ?? 4096,
-  };
-}
+// ResolvedModel and resolveModelForRun are re-exported from model-resolver.ts
+// so that orchestrator/evaluation do not need to import this entry-point script.
+export type { ResolvedModel };
 
 interface SuccessOutcome {
   command?: string;

@@ -8,7 +8,7 @@ import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, checkBudget } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
-import { resolveModelForRun } from '../worker.js';
+import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/client.js';
 import {
   upsertRun,
