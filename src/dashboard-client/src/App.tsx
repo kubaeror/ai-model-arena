@@ -10,6 +10,7 @@ import { ModelDetail } from './pages/ModelDetail';
 import { Leaderboard } from './pages/Leaderboard';
 import { Compare } from './pages/Compare';
 import { Ops } from './pages/Ops';
+import { Observability } from './pages/Observability';
 import { RunDetail } from './pages/RunDetail';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
@@ -35,6 +36,7 @@ function Shell() {
               <Route path="/leaderboard" element={<Leaderboard />} />
               <Route path="/compare" element={<Compare />} />
               <Route path="/ops" element={<Ops />} />
+              <Route path="/observability" element={<Observability />} />
               <Route path="/runs/:runId" element={<RunDetail />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />

@@ -9,6 +9,7 @@ const LINKS = [
   { to: '/leaderboard', label: 'Leaderboard' },
   { to: '/compare', label: 'Compare' },
   { to: '/ops', label: 'Ops' },
+  { to: '/observability', label: 'Observability' },
   { to: '/settings', label: 'Settings' },
 ];
 

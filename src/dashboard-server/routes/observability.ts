@@ -1,13 +1,15 @@
 import { Router } from 'express';
 import { computeObservabilityStats } from '../../observability/stats.js';
-import { exporterEndpoint, isTracingEnabled } from '../../observability/tracing.js';
 import { getDb, closeDb } from '../../anomaly-detection/db.js';
 import * as pm2h from '../../orchestrator/pm2-helpers.js';
+import { listRuns } from '../../orchestrator/run-index.js';
+import { readTraceIndex } from '../../observability/trace-meta.js';
 
 /**
  * Observability API:
- *  GET /api/v1/observability/stats   — aggregated latency/error/baseline stats
- *  GET /api/v1/observability/health   — healthcheck for OTel exporter, SQLite, PM2
+ *  GET /api/v1/observability/stats          — aggregated latency/error/baseline stats
+ *  GET /api/v1/observability/recent-traces  — recent traces across all runs
+ *  GET /api/v1/observability/health          — healthcheck for OTel exporter, SQLite, PM2
  */
 export function createObservabilityRouter(): Router {
   const router = Router();
@@ -22,14 +24,45 @@ export function createObservabilityRouter(): Router {
     }
   });
 
-  // GET /health — healthcheck for external monitoring of ai-model-arena itself.
-  router.get('/health', async (_req, res) => {
-    const otel = {
-      enabled: isTracingEnabled(),
-      exporterEndpoint: exporterEndpoint() ?? null,
-      reachable: exporterEndpoint() ? 'configured' : 'not_configured',
-    };
+  // GET /recent-traces — latest N traces across all runs.
+  router.get('/recent-traces', (req, res) => {
+    const limit = Math.min(
+      Number(req.query.limit) || 50,
+      200,
+    );
+    try {
+      const runs = listRuns();
+      const entries: Array<{
+        runId: string;
+        model: string;
+        scenario: string;
+        spanCount: number;
+        totalDurationMs: number;
+        errorCount: number;
+      }> = [];
+      for (const run of runs) {
+        if (entries.length >= limit) break;
+        for (const pm of run.perModel) {
+          if (entries.length >= limit) break;
+          const idx = readTraceIndex(pm.outputDir);
+          entries.push({
+            runId: run.runId,
+            model: pm.model,
+            scenario: run.scenario,
+            spanCount: idx?.span_count ?? 0,
+            totalDurationMs: idx?.total_duration_ms ?? 0,
+            errorCount: idx?.error_count ?? 0,
+          });
+        }
+      }
+      res.json({ traces: entries });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
 
+  // GET /health — healthcheck for SQLite + PM2.
+  router.get('/health', async (_req, res) => {
     let sqlite: { ok: boolean; error?: string } = { ok: false };
     try {
       const db = getDb();
@@ -52,7 +85,7 @@ export function createObservabilityRouter(): Router {
     }
 
     const healthy = sqlite.ok && pm2Bus.ok;
-    res.status(healthy ? 200 : 503).json({ healthy, otel, sqlite, pm2Bus, timestamp: new Date().toISOString() });
+    res.status(healthy ? 200 : 503).json({ healthy, sqlite, pm2Bus, timestamp: new Date().toISOString() });
   });
 
   return router;

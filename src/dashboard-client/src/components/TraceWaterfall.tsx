@@ -4,8 +4,7 @@ import type { SpanMeta, TraceTree } from '../lib/types.js';
 /**
  * In-app span waterfall rendered from the locally stored trace metadata
  * (no OTel backend needed). Each span is a duration bar, color-coded by type:
- * chat = blue, execute_tool = orange, error = red, root = slate. When an
- * external trace URL is present, a link out to Jaeger/Grafana is shown.
+ * chat = blue, execute_tool = orange, error = red, root = slate.
  */
 function spanColor(span: SpanMeta): string {
   if (span.status === 'error') return 'bg-red-500';
@@ -35,7 +34,7 @@ export function TraceWaterfall({ trace }: { trace: TraceTree | undefined }) {
     return <div className="p-4 text-muted text-sm">No trace data available for this run.</div>;
   }
   if (trace.traceId == null) {
-    return <div className="p-4 text-muted text-sm">Tracing was disabled for this run (set OTEL_ENABLED=true + OTEL_EXPORTER_OTLP_ENDPOINT to capture spans).</div>;
+    return <div className="p-4 text-muted text-sm">Tracing was disabled for this run.</div>;
   }
   if (!spans.length) {
     return <div className="p-4 text-muted text-sm">No spans recorded.</div>;
@@ -49,11 +48,6 @@ export function TraceWaterfall({ trace }: { trace: TraceTree | undefined }) {
         <span>trace <code className="text-foreground">{trace.traceId}</code></span>
         <span>· {trace.spanCount} spans</span>
         <span>· {trace.errorCount} errors</span>
-        {trace.externalUrl && (
-          <a className="text-blue-400 hover:underline" href={trace.externalUrl} target="_blank" rel="noreferrer">
-            Open in external trace UI ↗
-          </a>
-        )}
       </div>
       <div className="space-y-1">
         {spans.map((s) => {

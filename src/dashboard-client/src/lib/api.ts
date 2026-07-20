@@ -7,6 +7,7 @@ import type {
   AnomalyRecord,
   TraceResponse,
   ObservabilityStats,
+  RecentTraceEntry,
   WebhookRecord,
 } from './types.js';
 
@@ -229,6 +230,12 @@ export async function resolveAnomaly(id: number, resolvedAs: 'resolved' | 'false
 export async function getObservabilityStats(model?: string): Promise<ObservabilityStats> {
   const q = model ? `?model=${encodeURIComponent(model)}` : '';
   return apiFetch<ObservabilityStats>(`/api/observability/stats${q}`);
+}
+
+export async function getRecentTraces(limit?: number): Promise<RecentTraceEntry[]> {
+  const q = limit ? `?limit=${limit}` : '';
+  const r = await apiFetch<{ traces: RecentTraceEntry[] }>(`/api/observability/recent-traces${q}`);
+  return r.traces;
 }
 
 // ── Webhooks ─────────────────────────────────────────────────────────────────

@@ -163,12 +163,6 @@ function TracePanel({ runId, model }: { runId: string; model: string }) {
   const trace = traceQuery.data?.traces.find((t) => t.model === model) ?? traceQuery.data?.traces[0];
   return (
     <Card className="h-[60vh] overflow-auto nice-scroll p-4">
-      {trace?.externalUrl ? (
-        <div className="mb-3 flex items-center gap-2 text-xs">
-          <span className="text-muted">External trace UI:</span>
-          <a className="text-blue-400 hover:underline" href={trace.externalUrl} target="_blank" rel="noreferrer">{trace.externalUrl}</a>
-        </div>
-      ) : null}
       <TraceWaterfall trace={trace} />
     </Card>
   );

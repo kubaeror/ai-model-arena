@@ -560,31 +560,12 @@ increases payload size).
 A lightweight local copy of each run's trace metadata is written to
 `outputs/<model>/<runId>/trace-meta.json` (+ an `index.json` summary with
 `trace_id`, `span_count`, `total_duration_ms`, `error_count`) so the dashboard
-can link straight into Jaeger/Grafana and render an in-app waterfall without
-querying the OTel backend.
-
-### Start the local observability stack
-
-```bash
-docker compose -f docker-compose.observability.yml up -d
-```
-
-This brings up:
-- **OTel Collector** on `:4318` (OTLP/HTTP) — receives traces from the arena.
-- **Jaeger UI** on `http://localhost:16686` — browse traces per run.
-- **Grafana** on `http://localhost:3000` — a pre-built *ai-model-arena Observability* dashboard (token volume, latency, error rate) with Jaeger as the auto-provisioned datasource.
-
-Then point the arena at the collector in your `.env`:
-
-```bash
-OTEL_ENABLED=true
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-OTEL_TRACE_UI_BASE_URL=http://localhost:16686   # dashboard deep-links into Jaeger
-```
+can render an in-app span waterfall. The **Observability** page provides
+aggregate stats (run count, error rate, latency breakdown, recent traces) from
+this local data — no external backend required.
 
 To view a trace for a specific run: open the run in the dashboard and click the
-**Trace** tab — it shows an in-app span waterfall and a deep-link into Jaeger
-using the stored `trace_id`. You can also call `GET /api/v1/traces/:runId`.
+**Trace** tab for an in-app span waterfall. You can also call `GET /api/v1/traces/:runId`.
 
 ## Anomaly Detection
 
@@ -691,8 +672,7 @@ ai-arena run --scenario express-rest --models gpt-4o
 ```
 
 Each model worker now emits a full trace tree. Open the run in the dashboard →
-**Trace** tab, or browse it in Jaeger at
-`http://localhost:16686/trace/<trace_id>` (the dashboard prints the link).
+**Trace** tab for an in-app span waterfall.
 
 ### Simulate an anomaly
 

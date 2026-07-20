@@ -146,14 +146,12 @@ export interface TraceTree {
   spanCount: number;
   totalDurationMs: number;
   errorCount: number;
-  externalUrl: string | null;
   spans: SpanMeta[];
 }
 
 export interface TraceResponse {
   runId: string;
   scenario: string;
-  externalBackend: boolean;
   traces: TraceTree[];
 }
 
@@ -171,5 +169,14 @@ export interface ObservabilityStats {
   latency: Array<{ model: string; tool: string; count: number; avgMs: number; p95Ms: number; p99Ms: number }>;
   models: Array<{ model: string; runs: number; errorRate: number; anomalies: number; unresolvedAnomalies: number }>;
   baselines: Array<{ model: string; scenario: string; sampleCount: number; avgTokens: number; avgCostUsd: number }>;
+}
+
+export interface RecentTraceEntry {
+  runId: string;
+  model: string;
+  scenario: string;
+  spanCount: number;
+  totalDurationMs: number;
+  errorCount: number;
 }
 

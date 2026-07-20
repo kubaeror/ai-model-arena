@@ -34,7 +34,6 @@ import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { initDb, getDb } from './db/client.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
-import { initTracing, shutdownTracing } from './observability/tracing.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { findProjectRoot } from './paths.js';
 import type { ToolExecutionContext } from './types.js';
@@ -131,10 +130,6 @@ async function main(): Promise<void> {
   const root = rootDir();
   const logger = createLogger('ai-arena:worker', process.env.LOG_LEVEL);
 
-  // Initialise OpenTelemetry before any work that should be traced. The OTLP
-  // exporter honours OTEL_EXPORTER_OTLP_ENDPOINT; no-op when OTEL_ENABLED=false.
-  initTracing();
-
   const modelName = process.env.AI_ARENA_MODEL;
   const scenarioName = process.env.AI_ARENA_SCENARIO;
   const runId = process.env.AI_ARENA_RUN_ID;
@@ -160,7 +155,6 @@ async function main(): Promise<void> {
       durationMs: 0, turnsUsed: 0, maxTurns: 0, totalToolCalls: 0, toolsCalled: [],
       tokenUsage: {}, stopReason: 'setup_error', errors: [msg], success: false,
     });
-    await shutdownTracing();
     return;
   }
 
@@ -283,7 +277,6 @@ async function main(): Promise<void> {
     logger.error('Agent loop crashed', { error: msg });
     conv.append({ type: 'error', content: `Agent loop crashed: ${msg}` });
     fail([`Agent loop crashed: ${msg}`]);
-    await shutdownTracing();
     return;
   }
 
@@ -355,8 +348,6 @@ async function main(): Promise<void> {
     totalToolCalls: result.totalToolCalls, durationMs: result.durationMs,
   });
 
-  // Flush any pending traces to the OTel backend before the process exits.
-  await shutdownTracing();
 }
 
 // Top-level: write a result.json even on catastrophic failure, then exit 0
@@ -393,7 +384,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
       } catch {
         /* nothing more we can do */
       }
-      try { await shutdownTracing(); } catch { /* ignore */ }
     })
     .finally(() => {
       process.exit(0);

@@ -12,10 +12,7 @@ const EnvSchema = z.object({
   DASHBOARD_CORS_ORIGIN: z.string().default(''),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   OTEL_ENABLED: z.string().default('true'),
-  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
   OTEL_CAPTURE_CONTENT: z.string().default('false'),
-  OTEL_TRACE_UI_BASE_URL: z.string().default(''),
-  OTEL_SERVICE_NAME: z.string().default('ai-model-arena'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

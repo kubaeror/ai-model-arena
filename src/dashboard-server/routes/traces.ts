@@ -1,15 +1,13 @@
 import { Router } from 'express';
 import { getRunRecord } from '../../orchestrator/run-index.js';
 import { readTraceMeta, type TraceMeta } from '../../observability/trace-meta.js';
-import { externalTraceUrl, exporterEndpoint } from '../../observability/tracing.js';
 
 /**
  * GET /api/v1/traces/:runId — stored span metadata tree for a run.
  *
  * Returns the per-model trace metadata reconstructed from the locally stored
- * `trace-meta.json` files. When an external OTel backend + trace UI are
- * configured (`OTEL_EXPORTER_OTLP_ENDPOINT` + `OTEL_TRACE_UI_BASE_URL`), each
- * trace also carries an `externalUrl` linking straight into Jaeger/Grafana.
+ * `trace-meta.json` files. Traces are rendered in-app via the TraceWaterfall
+ * component and the Observability page — no external backend required.
  */
 export function createTracesRouter(): Router {
   const router = Router();
@@ -23,7 +21,6 @@ export function createTracesRouter(): Router {
       return;
     }
 
-    const externalBackend = Boolean(exporterEndpoint());
     const traces = rec.perModel
       .filter((pm) => !modelFilter || pm.model === modelFilter)
       .map((pm) => {
@@ -35,7 +32,6 @@ export function createTracesRouter(): Router {
             spanCount: 0,
             totalDurationMs: 0,
             errorCount: 0,
-            externalUrl: null,
             spans: [],
           };
         }
@@ -45,7 +41,6 @@ export function createTracesRouter(): Router {
           spanCount: meta.spanCount,
           totalDurationMs: meta.totalDurationMs,
           errorCount: meta.errorCount,
-          externalUrl: meta.externalUrl ?? externalTraceUrl(meta.traceId),
           spans: meta.spans,
         };
       });
@@ -53,7 +48,6 @@ export function createTracesRouter(): Router {
     res.json({
       runId,
       scenario: rec.scenario,
-      externalBackend,
       traces,
     });
   });

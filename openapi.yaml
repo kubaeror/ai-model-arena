@@ -131,8 +131,8 @@ paths:
       summary: Stored span metadata tree for a run
       description: |
         Returns per-model trace metadata reconstructed from the locally stored
-        `trace-meta.json`. When an external OTel backend is configured, each
-        trace also carries an `externalUrl` into Jaeger/Grafana.
+        `trace-meta.json`. Traces are rendered in-app via the TraceWaterfall
+        component and Observability page — no external backend required.
       parameters:
         - { $ref: '#/components/parameters/RunId' }
         - in: query

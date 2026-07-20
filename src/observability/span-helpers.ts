@@ -1,7 +1,6 @@
-import { trace, context, type Span, type Tracer, type Attributes } from '@opentelemetry/api';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { randomUUID } from 'node:crypto';
+import { getCurrentSpan, runInSpan } from './span-context.js';
 import type { TraceRecorder, SpanType } from './trace-meta.js';
-import { captureContent } from './tracing.js';
 
 export const MAX_ARG_CHARS = 2000;
 
@@ -10,52 +9,38 @@ export function truncate(s: string, max = MAX_ARG_CHARS): string {
   return s.length <= max ? s : s.slice(0, max) + '…[truncated]';
 }
 
-/** The spanId currently active in the OTel context, if any. */
-function activeSpanId(): string | null {
-  const s = trace.getSpan(context.active());
-  return s?.spanContext()?.spanId ?? null;
+/** Whether full prompt/completion content should be captured into span attributes. */
+export function captureContent(): boolean {
+  return process.env.OTEL_CAPTURE_CONTENT === 'true';
 }
 
-export type SpanStatus = 'ok' | 'error' | 'unset';
-
 /**
- * Run `fn` inside a new OTel span that is the active context for its duration.
- * The span is ended automatically (success => OK, throw => ERROR + recorded
- * exception). Metadata is mirrored into the local `TraceRecorder` so the
- * dashboard can reconstruct the tree without the OTel backend.
- *
- * Parent linking is automatic: the new span is a child of whatever span is
- * active when `withSpan` is called (OTel context propagation via async_hooks).
+ * Run `fn` inside a span tracked by the local TraceRecorder. Each span gets
+ * a crypto-random spanId. The traceId comes from the recorder. Parent-child
+ * linking uses Node.js AsyncLocalStorage for automatic context propagation
+ * across async boundaries — no OTel backend required.
  */
 export async function withSpan<T>(
-  tracer: Tracer,
   name: string,
   type: SpanType,
   recorder: TraceRecorder,
   attributes: Record<string, unknown>,
-  fn: (span: Span, spanId: string) => Promise<T>,
+  fn: (spanId: string) => Promise<T>,
 ): Promise<T> {
-  const parentSpanId = activeSpanId();
-  const span = tracer.startSpan(name, { attributes: attributes as Attributes });
-  const spanId = span.spanContext().spanId;
-  recorder.recordNew(spanId, span.spanContext().traceId, name, type, parentSpanId, attributes);
-  return context.with(trace.setSpan(context.active(), span), async () => {
+  const spanId = randomUUID();
+  const parentSpan = getCurrentSpan();
+  const parentSpanId = parentSpan?.spanId ?? null;
+  recorder.recordNew(spanId, recorder.traceId, name, type, parentSpanId, attributes);
+  return runInSpan({ spanId, parentSpanId }, () => (async () => {
     try {
-      const result = await fn(span, spanId);
+      const result = await fn(spanId);
       recorder.endSpan(spanId, 'ok');
-      span.setStatus({ code: SpanStatusCode.OK });
       return result;
     } catch (err) {
       recorder.endSpan(spanId, 'error');
       const msg = err instanceof Error ? err.message : String(err);
       recorder.addAttribute(spanId, 'error.message', msg);
-      span.setStatus({ code: SpanStatusCode.ERROR, message: msg });
-      span.recordException(err as Error);
       throw err;
-    } finally {
-      span.end();
     }
-  });
+  })() as unknown) as Promise<T>;
 }
-
-export { captureContent };

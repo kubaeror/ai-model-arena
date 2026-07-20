@@ -5,8 +5,7 @@ import path from 'node:path';
  * Lightweight, locally-stored mirror of a run's trace tree. This is *not* a
  * replacement for the OTel backend — it only holds enough span metadata
  * (ids, types, durations, statuses, key attributes) for the dashboard to
- * render an in-app waterfall and to link out to the full trace in
- * Jaeger/Grafana without querying the OTel backend.
+ * render an in-app waterfall and record span metadata locally.
  */
 
 export type SpanType = 'root' | 'chat' | 'execute_tool' | 'other';
