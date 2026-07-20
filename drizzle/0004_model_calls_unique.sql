@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `uq_model_calls_session_turn` ON `model_calls` (`session_id`,`turn`);

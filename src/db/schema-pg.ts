@@ -202,7 +202,9 @@ export const model_calls = pgTable('model_calls', {
   usage: text('usage'),
   latency_ms: integer('latency_ms'),
   created_at: text('created_at').notNull(),
-});
+}, (table) => [
+  uniqueIndex('uq_model_calls_session_turn').on(table.session_id, table.turn),
+]);
 
 // ── Legacy type exports (kept for existing consumers) ──
 
