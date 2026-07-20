@@ -54,6 +54,7 @@ export class LiveHub {
   private logSize = new Map<string, number>();
   private logger = createLogger('ai-arena:live');
   private timers: NodeJS.Timeout[] = [];
+  private pollTimer: NodeJS.Timeout | null = null;
 
   constructor(server: Server, auth: AuthConfig) {
     this.wss = new WebSocketServer({
@@ -298,19 +299,33 @@ export class LiveHub {
     this.broadcast({ type: 'process_status', processes });
   }
 
+  private schedulePoll(): void {
+    this.pollTimer = setTimeout(() => {
+      Promise.all([
+        this.pollConversationsAsync().catch((e) =>
+          this.logger.warn('pollConversations error', { error: String(e) }),
+        ),
+        this.pollLogsAsync().catch((e) =>
+          this.logger.warn('pollLogs error', { error: String(e) }),
+        ),
+      ]).finally(() => {
+        if (this.pollTimer !== null) this.schedulePoll();
+      });
+    }, 1000);
+  }
+
   start(): void {
     this.timers.push(setInterval(() => { void this.broadcastProcessStatus(); }, 2000));
-    this.timers.push(setInterval(() => {
-      void this.pollConversationsAsync()
-        .catch((e) => this.logger.warn('pollConversations error', { error: String(e) }));
-      void this.pollLogsAsync()
-        .catch((e) => this.logger.warn('pollLogs error', { error: String(e) }));
-    }, 1000));
+    this.schedulePoll();
     this.timers.push(setInterval(() => { void this.finalizeRuns(); }, 3000));
     void this.broadcastProcessStatus();
   }
 
   close(): void {
+    if (this.pollTimer !== null) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     this.wss.close();
