@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
+import { z } from 'zod/v4';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
 import { wrapFileContent } from '../security/prompt-injection.js';
@@ -13,6 +14,24 @@ const MAX_READ_BYTES = 200 * 1024; // 200 KB per read
 const MAX_LIST_FILES = 5000;
 const MAX_SEARCH_MATCHES = 200;
 const MAX_WRITE_BYTES = 5 * 1024 * 1024; // 5 MB per write
+
+// Tool argument Zod schemas
+const ReadFileArgs = z.object({ path: z.string().min(1) }).strict();
+const WriteFileArgs = z.object({ path: z.string().min(1), content: z.string() }).strict();
+const ListFilesArgs = z.object({ path: z.string().optional().default('.'), recursive: z.boolean().optional().default(true) }).strict();
+const RunShellArgs = z.object({ command: z.string().min(1) }).strict();
+const SearchCodeArgs = z.object({
+  query: z.string().min(1),
+  regex: z.boolean().optional().default(false),
+  caseSensitive: z.boolean().optional().default(false),
+}).strict();
+const TaskCompleteArgs = z.object({ summary: z.string().optional().default('') }).strict();
+
+function validateArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): { ok: true; data: T } | { ok: false; error: string } {
+  const result = schema.safeParse(args);
+  if (result.success) return { ok: true, data: result.data };
+  return { ok: false, error: `Invalid arguments: ${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
+}
 
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache', '.npm']);
 
@@ -40,13 +59,11 @@ function toRel(sandboxDir: string, abs: string): string {
   return path.relative(sandboxDir, abs).replace(/\\/g, '/');
 }
 
-function fmtBool(v: unknown, def: boolean): boolean {
-  return typeof v === 'boolean' ? v : def;
-}
-
 // ── read_file ───────────────────────────────────────────────────────────────
 export const readFile: ToolExecutor = async (args, ctx) => {
-  const rel = String(args.path ?? '');
+  const v = validateArgs(ReadFileArgs, args);
+  if (!v.ok) return { content: v.error, isError: true };
+  const { path: rel } = v.data;
   if (!rel) return { content: 'Error: "path" is required.', isError: true };
   const abs = safeResolve(ctx.sandboxDir, rel);
   if (!fs.existsSync(abs)) return { content: `Error: file not found: ${rel}`, isError: true };
@@ -62,9 +79,10 @@ export const readFile: ToolExecutor = async (args, ctx) => {
 
 // ── write_file ──────────────────────────────────────────────────────────────
 export const writeFile: ToolExecutor = async (args, ctx) => {
-  const rel = String(args.path ?? '');
+  const v = validateArgs(WriteFileArgs, args);
+  if (!v.ok) return { content: v.error, isError: true };
+  const { path: rel, content } = v.data;
   if (!rel) return { content: 'Error: "path" is required.', isError: true };
-  const content = String(args.content ?? '');
   const byteLen = Buffer.byteLength(content, 'utf8');
   if (byteLen > MAX_WRITE_BYTES) {
     return { content: `Error: content is ${byteLen} bytes, exceeds max write size of ${MAX_WRITE_BYTES} bytes.`, isError: true };
@@ -77,9 +95,11 @@ export const writeFile: ToolExecutor = async (args, ctx) => {
 
 // ── list_files ──────────────────────────────────────────────────────────────
 export const listFiles: ToolExecutor = async (args, ctx) => {
-  let rel = String(args.path ?? '.');
+  const v = validateArgs(ListFilesArgs, args);
+  if (!v.ok) return { content: v.error, isError: true };
+  let rel = v.data.path;
+  const recursive = v.data.recursive;
   if (rel === '') rel = '.';
-  const recursive = fmtBool(args.recursive, true);
   const abs = safeResolve(ctx.sandboxDir, rel);
   if (!fs.existsSync(abs)) return { content: `Error: directory not found: ${rel}`, isError: true };
   if (!fs.statSync(abs).isDirectory()) return { content: `Error: not a directory: ${rel}`, isError: true };
@@ -99,7 +119,9 @@ function formatShell(stdout: string, stderr: string, code: number | string | nul
 }
 
 export const runShellCommand: ToolExecutor = async (args, ctx) => {
-  const command = String(args.command ?? '');
+  const v = validateArgs(RunShellArgs, args);
+  if (!v.ok) return { content: v.error, isError: true };
+  const { command } = v.data;
   if (!command.trim()) return { content: 'Error: "command" is required.', isError: true };
   if (!isShellCommandAllowed(command, ctx.shellPolicy)) {
     return {
@@ -155,10 +177,10 @@ export const runShellCommand: ToolExecutor = async (args, ctx) => {
 
 // ── search_code ──────────────────────────────────────────────────────────────
 export const searchCode: ToolExecutor = async (args, ctx) => {
-  const query = String(args.query ?? '');
+  const v = validateArgs(SearchCodeArgs, args);
+  if (!v.ok) return { content: v.error, isError: true };
+  const { query, regex: useRegex, caseSensitive } = v.data;
   if (!query) return { content: 'Error: "query" is required.', isError: true };
-  const useRegex = fmtBool(args.regex, false);
-  const caseSensitive = fmtBool(args.caseSensitive, false);
 
   let re: RegExp | null = null;
   if (useRegex) {
@@ -203,7 +225,9 @@ export const searchCode: ToolExecutor = async (args, ctx) => {
 
 // ── task_complete ─────────────────────────────────────────────────────────────
 export const taskComplete: ToolExecutor = async (args) => {
-  const summary = String(args.summary ?? '');
+  const v = validateArgs(TaskCompleteArgs, args);
+  if (!v.ok) return { content: `Error: ${v.error}`, isError: true };
+  const { summary } = v.data;
   return { content: `Task marked as complete. ${summary}`.trim(), isError: false };
 };
 

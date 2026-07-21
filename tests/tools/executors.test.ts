@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { readFile, writeFile } from '../../src/tools/executors.js';
+import { readFile, writeFile, listFiles, runShellCommand } from '../../src/tools/executors.js';
 import type { ToolExecutionContext } from '../../src/types.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-exec-'));
@@ -68,5 +68,36 @@ describe('writeFile limits', () => {
     const r = await writeFile({ path: 'huge.txt', content: huge }, ctx);
     assert.strictEqual(r.isError, true);
     assert.ok(r.content.includes('exceeds'));
+  });
+});
+
+describe('tool argument validation', () => {
+  before(() => fs.mkdirSync(sandbox, { recursive: true }));
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('writeFile rejects missing path', async () => {
+    const r = await writeFile({ content: 'test' } as any, ctx);
+    assert.strictEqual(r.isError, true);
+    assert.ok(r.content.includes('path'), 'should reject missing path');
+  });
+
+  it('writeFile rejects extra properties', async () => {
+    const r = await writeFile({ path: 'ok.txt', content: 'test', extra: 'bad' } as any, ctx);
+    assert.strictEqual(r.isError, true);
+  });
+
+  it('readFile rejects missing path', async () => {
+    const r = await readFile({} as any, ctx);
+    assert.strictEqual(r.isError, true);
+  });
+
+  it('runShellCommand rejects missing command', async () => {
+    const r = await runShellCommand({} as any, ctx);
+    assert.strictEqual(r.isError, true);
+  });
+
+  it('listFiles rejects non-boolean recursive', async () => {
+    const r = await listFiles({ recursive: 'yes' } as any, ctx);
+    assert.strictEqual(r.isError, true);
   });
 });
