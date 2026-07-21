@@ -23,7 +23,8 @@ services:
     environment:
       DB_DRIVER: postgres
       DATABASE_URL: postgres://arena:arena@postgres:5432/arena
-      QUEUE_DRIVER: memory
+      QUEUE_DRIVER: redis
+      REDIS_URL: redis://redis:6379
       OUTPUT_ROOT: /var/arena/outputs
     depends_on:
       - postgres

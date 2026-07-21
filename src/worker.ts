@@ -176,7 +176,7 @@ async function main(): Promise<void> {
     scenario: scenarioName,
     runId,
     startedAt: startedAt.toISOString(),
-  }, { dbSink: store, sessionId: session.id });
+  }, { dbSink: store, sessionId: session.id, disableFile: true });
 
   const toolCtx: ToolExecutionContext = {
     sandboxDir,

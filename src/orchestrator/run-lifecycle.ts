@@ -12,6 +12,8 @@ import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/client.js';
 import { outputRoot, dbPath } from '../paths.js';
+import { createQueue } from '../queue/index.js';
+import type { Task } from '../queue/types.js';
 import {
   upsertRun,
   updateRun,
@@ -30,6 +32,7 @@ export function getPostRunFailureCounts(): { anomalyAnalysis: number; statsWrite
 
 export interface PerModelSpec {
   model: string;
+  providerId: string;
   procName: string;
   outputDir: string;
   sandboxDir: string;
@@ -110,12 +113,14 @@ export function createRunSpec(opts: RunStartOptions): RunSpec {
   const ts = pm2h.timestamp();
   const runId = `${opts.scenario}_${ts}`;
   const perModel: PerModelSpec[] = opts.models.map((model) => {
+    const resolved = resolveModelForRun(model);
     const procName = pm2h.sanitizeName(`${pm2h.ARENA_PREFIX}${model}-${opts.scenario}-${ts}`);
     const outputDir = path.join(outputRoot(), model, runId);
     const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
     fs.mkdirSync(pm2LogDir, { recursive: true });
     return {
       model,
+      providerId: resolved?.providerId ?? 'unknown',
       procName,
       outputDir,
       sandboxDir: path.join(outputDir, 'files'),
@@ -213,48 +218,60 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   }
   
   const spec = createRunSpec(opts);
-  await spawnRunWorkers(spec, logger);
+  const runId = spec.runId;
+
+  // Enqueue tasks for each model instead of spawning PM2 workers
+  const queue = createQueue();
+  for (const m of spec.models) {
+    const resolved = resolveModelForRun(m.model);
+    const task: Task = {
+      taskId: `${runId}-${m.model}`,
+      sessionId: `${runId}-${m.model}`,
+      provider: resolved?.providerId ?? 'unknown',
+      model: m.model,
+      scenario: spec.scenario,
+      config: {
+        modelRunId: runId,
+        outputDir: m.outputDir,
+        maxTurns: resolved?.maxTurns ?? 20,
+      },
+      enqueuedAt: new Date().toISOString(),
+      attempts: 0,
+    };
+    await queue.enqueue(task);
+  }
+
   await registerRun(spec, opts.source ?? 'cli');
+  logger.info('Run enqueued', { runId, models: spec.models.map(m => m.model), tasks: spec.models.length });
   return spec;
 }
 
-/** Query live PM2 status for each model in a run. */
+/** Query live status for each model in a run from the runs table. */
 export async function checkRunStatus(spec: RunSpec): Promise<PerModelStatus[]> {
-  await pm2h.pm2Connect();
-  try {
-    const list = await pm2h.pm2List();
-    return spec.models.map((m) => {
-      const p = list.find((x) => x.name === m.procName);
-      return {
-        model: m.model, procName: m.procName, status: p?.pm2_env?.status ?? 'absent',
-        pid: p?.pid ?? null, cpu: p?.monit?.cpu, memory: p?.monit?.memory,
-        uptime: p?.pm2_env?.pm_uptime, restarts: p?.pm2_env?.unstable_restarts,
-        exitCode: p?.pm2_env?.exit_code ?? null, online: p ? pm2h.isOnline(p) : false,
-      };
-    });
-  } finally {
-    await pm2h.pm2Disconnect();
-  }
+  const rec = getRunRecord(spec.runId);
+  return spec.models.map((m) => {
+    const pm = rec?.perModel.find((x) => x.model === m.model);
+    return {
+      model: m.model, procName: m.procName,
+      status: pm?.status ?? (rec ? 'completed' : 'absent'),
+      pid: null,
+      cpu: undefined, memory: undefined,
+      uptime: undefined, restarts: 0,
+      exitCode: null, online: pm?.status === 'running',
+    };
+  });
 }
 
-export async function isRunComplete(spec: RunSpec): Promise<boolean> {
-  return (await checkRunStatus(spec)).every((s) => !s.online);
+export function isRunComplete(spec: RunSpec): Promise<boolean> {
+  const statuses = checkRunStatus(spec);
+  return statuses.then(ss => ss.every((s: PerModelStatus) => !s.online));
 }
 
-/** True iff every model's worker process in a run (looked up by runId) is stopped. */
+/** True iff every model in a run is stopped (from the runs table). */
 export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
   const rec = getRunRecord(runId);
   if (!rec || rec.perModel.length === 0) return true;
-  await pm2h.pm2Connect();
-  try {
-    const list = await pm2h.pm2List();
-    return rec.perModel.every((m) => {
-      const p = list.find((x) => x.name === m.procName);
-      return !p || !pm2h.isOnline(p);
-    });
-  } finally {
-    await pm2h.pm2Disconnect();
-  }
+  return rec.perModel.every((m) => m.status !== 'running');
 }
 
 interface AggregateInput {
@@ -365,29 +382,17 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
   });
 }
 
-/** Stop a running run's PM2 processes (keeps them in the PM2 list). */
+/** Stop a running run (marks as stopped in the index). */
 export async function stopRun(runId: string): Promise<void> {
   const rec = getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
-  await pm2h.pm2Connect();
-  try {
-    for (const m of rec.perModel) await pm2h.pm2Stop(m.procName).catch(() => undefined);
-  } finally {
-    await pm2h.pm2Disconnect();
-  }
   await updateRun(runId, (r) => { r.status = 'stopped'; });
 }
 
-/** Restart a run's PM2 processes (re-runs the workers with the same runId). */
+/** Restart a run by re-enqueuing tasks. */
 export async function restartRun(runId: string): Promise<void> {
   const rec = getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
-  await pm2h.pm2Connect();
-  try {
-    for (const m of rec.perModel) await pm2h.pm2Restart(m.procName).catch(() => undefined);
-  } finally {
-    await pm2h.pm2Disconnect();
-  }
   await updateRun(runId, (r) => {
     r.status = 'running';
     r.finishedAt = null;

@@ -96,7 +96,7 @@ export function createRunsRouter(): Router {
     }
     const spec = {
       runId: rec.runId, scenario: rec.scenario, ts: '', startedAt: rec.startedAt,
-      models: rec.perModel.map((m) => ({ ...m })),
+      models: rec.perModel.map((m) => ({ model: m.model, providerId: 'unknown', procName: m.procName, outputDir: m.outputDir, sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath, reportPath: m.reportPath, logFile: m.logFile })),
     } satisfies RunSpec;
     let statuses: { model: string; status: string; online: boolean; exitCode: number | null }[] = [];
     try {

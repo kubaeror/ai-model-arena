@@ -33,9 +33,17 @@
 ### Dashboard frontend
 - React frontend pages not created (runners, prompts, queues, output-mappings)
 
-### Further wiring needed
-- Audit calls not wired to mutating endpoints (helper exists, not called)
-- PM2 stubs not fully removed (orchestrator still imports pm2-helpers)
-- Dual-write: ConversationLogger still writes files for worker path
-- `npm run dev -- run` still uses spawnRunWorkers path (now no-op)
-- proper-lockfile dependency unused (replaced by O_EXCL lock)
+### Further wiring needed (all fixed)
+- [x] Audit calls wired to all mutating endpoint handlers (runs, models, scenarios, providers, webhooks, anomalies)
+- [x] PM2 stubs consolidated — non-PM2 utilities extracted to `src/orchestrator/utils.ts`
+- [x] proper-lockfile dependency removed
+- [x] RBAC middleware applied to all route groups
+- [x] Secrets masking applied to all JSON responses
+- [x] Circuit breaker + fallback chain wired into runner
+- [x] Traceparent propagation wired into Redis + runner
+- [x] Redis ack/nack with DLQ support
+
+### Low-priority follow-up
+- `npm run dev -- run` still uses spawnRunWorkers path (now no-op; CLI run should use queue)
+- ConversationLogger: worker path still writes files (runner path uses disableFile: true)
+- Docker compose should switch QUEUE_DRIVER to redis for production parity
