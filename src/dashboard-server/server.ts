@@ -92,7 +92,7 @@ async function start(): Promise<void> {
     },
     crossOriginEmbedderPolicy: false,
   }));
-  app.use(express.json({ limit: '20mb' }));
+  app.use(express.json({ limit: '5mb' }));
 
   // ── Health check (public, unauthenticated) ──────────────────────────────
   app.get('/health', (_req, res) => {
