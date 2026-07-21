@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
+import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
@@ -10,7 +11,7 @@ import { loadBudgetConfig, checkBudget, addSpend } from '../cost-tracking/index.
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
-import { initDb } from '../db/index.js';
+import { initDb, getDb } from '../db/index.js';
 import { outputRoot, dbPath } from '../paths.js';
 import { createQueue } from '../queue/index.js';
 import type { Task } from '../queue/types.js';
@@ -21,6 +22,7 @@ import {
   type RunIndexModelEntry,
 } from './run-index.js';
 import { analyzeRun } from '../anomaly-detection/index.js';
+import { runJudgeScoring, loadEvaluationConfig } from '../evaluation/judge.js';
 
 let anomalyAnalysisFailures = 0;
 let statsWritebackFailures = 0;
@@ -374,6 +376,16 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
     // Record spend for budget tracking
     if (r && typeof r.costUsd === 'number' && r.costUsd > 0) {
       addSpend(m.model, r.costUsd, root, logger);
+      // Write to immutable cost ledger
+      try {
+        const db = getDb();
+        db.prepare(`INSERT INTO cost_ledger (run_id, model, cost_usd, currency, input_tokens, output_tokens, cache_read_tokens, total_tokens, pricing_version, recorded_at)
+          VALUES (?, ?, ?, 'USD', NULL, NULL, NULL, NULL, NULL, ?)`).run(
+          runId, m.model, r.costUsd, new Date().toISOString(),
+        );
+      } catch (e) {
+        logger.warn('cost ledger write failed (non-fatal)', { runId, model: m.model, err: String(e) });
+      }
     }
     return r
       ? { ...m, status: 'completed', success: r.success, turnsUsed: r.turnsUsed, totalToolCalls: r.totalToolCalls, stopReason: r.stopReason, durationMs: r.durationMs }
@@ -391,6 +403,30 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
     statsWritebackFailures++;
     logger.warn('writeRunStats failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e), totalFailures: statsWritebackFailures });
   });
+  // Run LLM judge scoring (best-effort, non-blocking).
+  void (async () => {
+    try {
+      const evalCfg = loadEvaluationConfig(path.join(root, 'configs', 'evaluation.yaml'), logger);
+      if (evalCfg.judge?.enabled) {
+        for (const m of rec.perModel) {
+          const resultPath = m.resultPath;
+          if (!fs.existsSync(resultPath)) continue;
+          const scenarioPath = path.join(root, 'configs', 'scenarios', `${rec.scenario}.yaml`);
+          const scenarioCfg = fs.existsSync(scenarioPath) ? (load(fs.readFileSync(scenarioPath, 'utf8')) as Record<string, unknown>) : null;
+          const task = (scenarioCfg?.task as string) ?? '';
+          const files: Record<string, string> = {};
+          try {
+            for (const f of fs.readdirSync(m.sandboxDir, { withFileTypes: true }).filter(e => e.isFile())) {
+              files[f.name] = fs.readFileSync(path.join(m.sandboxDir, f.name), 'utf8').slice(0, 4000);
+            }
+          } catch { /* sandbox may not exist */ }
+          await runJudgeScoring(m.model, runId, task, files, evalCfg, logger);
+        }
+      }
+    } catch (e) {
+      logger.warn('judge scoring failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e) });
+    }
+  })();
 }
 
 let killSwitchActive = false;
