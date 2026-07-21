@@ -85,7 +85,7 @@ async function start(): Promise<void> {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
         connectSrc: ["'self'", 'ws:', 'wss:'],
         imgSrc: ["'self'", 'data:'],
@@ -95,8 +95,15 @@ async function start(): Promise<void> {
   }));
   app.use(express.json({ limit: '5mb' }));
 
-  // ── Health check (public, unauthenticated) ──────────────────────────────
-  app.get('/health', (_req, res) => {
+  // ── Health check (rate-limited, public) ──────────────────────────────────
+  const healthLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    message: { error: 'Too many requests' },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.get('/health', healthLimiter, (_req, res) => {
     let dbOk = false;
     try {
       getDb().prepare('SELECT 1').get();
@@ -111,7 +118,14 @@ async function start(): Promise<void> {
   });
 
   // ── Prometheus metrics (public, unauthenticated) ─────────────────────────
-  app.get('/metrics', async (_req, res) => {
+  const metricsLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    message: { error: 'Too many requests' },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.get('/metrics', metricsLimiter, async (_req, res) => {
     try {
       await metricsHandler(_req, res);
     } catch (err) {

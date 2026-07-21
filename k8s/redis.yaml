@@ -59,6 +59,11 @@ spec:
                 secretKeyRef:
                   name: arena-db-auth
                   key: REDIS_PASSWORD
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: arena-db-auth
+                  key: REDIS_PASSWORD
           ports:
             - containerPort: 6379
           volumeMounts:
@@ -73,12 +78,12 @@ spec:
               memory: 256Mi
           livenessProbe:
             exec:
-              command: ["redis-cli", "-a", "$(REDIS_PASSWORD)", "ping"]
+              command: ["redis-cli", "ping"]
             initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
             exec:
-              command: ["redis-cli", "-a", "$(REDIS_PASSWORD)", "ping"]
+              command: ["redis-cli", "ping"]
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:

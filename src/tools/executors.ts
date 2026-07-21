@@ -1,14 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
 import { z } from 'zod/v4';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
 import { wrapFileContent } from '../security/prompt-injection.js';
 import type { ToolExecutor, ToolExecutorMap } from '../types.js';
-
-const execAsync = promisify(exec);
 
 const MAX_READ_BYTES = 200 * 1024; // 200 KB per read
 const MAX_LIST_FILES = 5000;
@@ -131,12 +128,32 @@ export const runShellCommand: ToolExecutor = async (args, ctx) => {
   }
 
   try {
-    const { stdout, stderr } = await execAsync(command, {
+    const proc = exec(command, {
       cwd: ctx.sandboxDir,
       timeout: ctx.shellTimeoutMs,
       maxBuffer: ctx.maxShellOutputBytes,
       env: sandboxEnv(),
       shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+      windowsHide: true,
+      killSignal: 'SIGKILL',
+    });
+    const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      proc.on('close', (code) => {
+        if (code === 0) resolve({ stdout, stderr });
+        else reject(Object.assign(new Error(`exit code ${code}`), { stdout, stderr, code }));
+      });
+      proc.on('error', reject);
+      const timer = setTimeout(() => {
+        // Kill entire process tree on timeout — send SIGKILL to process group
+        try {
+          if (proc.pid) process.kill(-proc.pid, 'SIGKILL');
+        } catch { /* already dead */ }
+      }, ctx.shellTimeoutMs);
+      proc.on('close', () => clearTimeout(timer));
     });
     return { content: formatShell(stdout, stderr, 0, ctx.maxShellOutputBytes), isError: false };
   } catch (err) {

@@ -1,6 +1,7 @@
 import type { Express } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { load } from 'js-yaml';
 import { findProjectRoot } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
@@ -37,7 +38,9 @@ export function mountOpenApi(app: Express): void {
   app.get('/api/docs', (_req, res) => {
     const spec = loadSpec();
     if (!spec) { res.status(404).type('text/plain').send('openapi.yaml not found'); return; }
-    const html = swaggerUiHtml(spec.json as Record<string, unknown>);
+    const nonce = crypto.randomBytes(16).toString('base64');
+    const html = swaggerUiHtml(spec.json as Record<string, unknown>, nonce);
+    res.setHeader('Content-Security-Policy', `script-src 'self' 'nonce-${nonce}' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; default-src 'self'`);
     res.type('text/html').send(html);
   });
 
@@ -56,20 +59,20 @@ export function mountOpenApi(app: Express): void {
   app.get('/api/v1/docs', (_req, res) => res.redirect(302, '/api/docs'));
 }
 
-function swaggerUiHtml(spec: Record<string, unknown>): string {
-  // Inline Swagger UI (CDN) so the dashboard serves interactive docs at /api/docs.
+function swaggerUiHtml(spec: Record<string, unknown>, nonce: string): string {
+  // Inline Swagger UI with CSP nonce for script tags
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <title>ai-model-arena API</title>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
-  <style>body{margin:0}</style>
+  <style nonce="${nonce}">body{margin:0}</style>
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-  <script>
+  <script nonce="${nonce}" src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script nonce="${nonce}">
     window.onload = () => {
       window.ui = SwaggerUIBundle({
         spec: ${JSON.stringify(spec)},

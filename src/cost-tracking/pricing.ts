@@ -33,9 +33,18 @@ export function computeCost(modelName: string, usage: TokenUsage): CostBreakdown
     return { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
   }
 
-  const inputCost = ((usage.prompt ?? 0) / 1000) * pricing.input;
-  const outputCost = ((usage.completion ?? 0) / 1000) * pricing.output;
-  const cachedCost = ((usage.cached ?? 0) / 1000) * (pricing.cached ?? 0);
+  const totalTokens = (usage.prompt ?? 0) + (usage.completion ?? 0);
+  // Use tiered pricing if context exceeds 200K tokens and tiered rates exist
+  const isOver200k = totalTokens > 200_000;
+  const tieredPricing = isOver200k ? getTieredPricing(modelName) : null;
+
+  const inputPrice = tieredPricing?.input ?? pricing.input;
+  const outputPrice = tieredPricing?.output ?? pricing.output;
+  const cachedPrice = tieredPricing?.cache_read ?? (pricing.cached ?? 0);
+
+  const inputCost = ((usage.prompt ?? 0) / 1000) * inputPrice;
+  const outputCost = ((usage.completion ?? 0) / 1000) * outputPrice;
+  const cachedCost = ((usage.cached ?? 0) / 1000) * cachedPrice;
 
   return {
     inputCost,
@@ -43,6 +52,23 @@ export function computeCost(modelName: string, usage: TokenUsage): CostBreakdown
     cachedCost,
     total: inputCost + outputCost + cachedCost,
   };
+}
+
+function getTieredPricing(modelId: string): { input: number; output: number; cache_read: number } | null {
+  try {
+    const db = getDb();
+    const row = db.prepare(
+      'SELECT over_200k_input, over_200k_output, over_200k_cache_read FROM pricing WHERE model_id = ? AND over_200k_input IS NOT NULL LIMIT 1',
+    ).get(modelId) as Record<string, number | null> | undefined;
+    if (!row || row.over_200k_input == null) return null;
+    return {
+      input: row.over_200k_input,
+      output: row.over_200k_output ?? row.over_200k_input,
+      cache_read: row.over_200k_cache_read ?? 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function formatCost(usd: number): string {
