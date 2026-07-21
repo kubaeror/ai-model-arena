@@ -34,6 +34,7 @@ import { createCatalogRouter } from './routes/catalog.js';
 import { createMetricsRouter } from './routes/metrics.js';
 import { createCacheRouter } from './routes/cache.js';
 import { registerRunnerRoutes } from './routes/runners.js';
+import { registerQueueRoutes } from './routes/queues.js';
 import { mountOpenApi } from './openapi.js';
 
 const logger = createLogger('ai-arena:dashboard');
@@ -170,6 +171,23 @@ async function start(): Promise<void> {
 
   // ── Runner management (k8s API) ──────────────────────────────────────────
   registerRunnerRoutes(app);
+
+  // ── Ops / kill switch (admin only) ───────────────────────────────────────
+  const { activateKillSwitch, deactivateKillSwitch, isKillSwitchActive } = await import('../orchestrator/run-lifecycle.js');
+  app.post('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), (_req, res) => {
+    activateKillSwitch();
+    res.json({ active: true });
+  });
+  app.delete('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), (_req, res) => {
+    deactivateKillSwitch();
+    res.json({ active: false });
+  });
+  app.get('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), (_req, res) => {
+    res.json({ active: isKillSwitchActive() });
+  });
+
+  // ── Queue & DLQ routes ───────────────────────────────────────────────────
+  registerQueueRoutes(app);
 
   // ── Public API (API key auth + rate limiting), versioned under /api/v1 ────────
   app.use('/api/v1/models', requireApiKey(['models:read']), createModelsRouter());

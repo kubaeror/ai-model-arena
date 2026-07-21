@@ -73,6 +73,14 @@ export class InMemoryQueue implements TaskQueue {
     return this.pending.length + this.inFlight.size;
   }
 
+  async deadLetterSize(): Promise<number> {
+    return this.dead.length;
+  }
+
+  async deadLetterPeek(limit: number): Promise<Task[]> {
+    return this.dead.slice(0, limit);
+  }
+
   async close(): Promise<void> {
     // No-op — in-memory state is lost on process exit.
   }
