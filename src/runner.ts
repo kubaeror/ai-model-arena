@@ -63,7 +63,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         scenario: scenarioName,
         runId: modelRunId,
         startedAt: new Date().toISOString(),
-      });
+      }, { disableFile: true });
 
       const toolCtx: ToolExecutionContext = {
         sandboxDir,

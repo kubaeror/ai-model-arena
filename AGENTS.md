@@ -8,7 +8,7 @@ Spawns isolated PM2 worker processes per model, each running an agentic coding l
 - **Runtime**: Node.js >= 20.11, TypeScript (ESM, strict)
 - **Backend**: Express.js REST API + WebSocket (port 4000)
 - **Frontend**: React 18 + Vite + TanStack Query + Tailwind CSS + CodeMirror
-- **Process**: PM2 (programmatic API)
+- **Process**: Queue-based (Redis Streams or in-memory) + long-lived runner
 - **Config**: YAML + Zod validation
 - **Logging**: Pino (structured JSON)
 

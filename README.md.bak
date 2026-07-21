@@ -1,6 +1,6 @@
 # ai-model-arena
 
-Automated, multi-model **agentic coding** arena. For each configured AI model, it runs an isolated "agentic coding" session where the model receives a task, has access to coding tools (read/write/list files, run shell commands, search code), and operates in its own sandboxed workspace — just like a real coding assistant working in a repo. Every conversation turn and tool call is logged, and all artifacts are saved into a per-model output folder. Sessions are managed via a **queue-based runner** deployable to Kubernetes with KEDA autoscaling.
+Automated, multi-model **agentic coding** arena. For each configured AI model, it spins up an isolated "agentic coding" session where the model receives a task, has access to coding tools (read/write/list files, run shell commands, search code), and operates in its own sandboxed workspace — just like a real coding assistant working in a repo. Every conversation turn and tool call is logged, and all artifacts are saved into a per-model output folder. Sessions are managed as separate processes via the **PM2 programmatic API**.
 
 > Run multiple models (OpenAI, Anthropic, local Ollama/LM Studio) on the same coding task, concurrently, and compare them.
 
@@ -9,7 +9,7 @@ Automated, multi-model **agentic coding** arena. For each configured AI model, i
 ## Features
 
 - **Per-model isolated sandboxed workspace** with a filesystem tool surface (`read_file`, `write_file`, `list_files`, `run_shell_command`, `search_code`, `task_complete`). Paths cannot escape the sandbox.
-- **Queue-based long-lived runner** (`src/runner.ts`) pulling tasks from Redis Streams or an in-memory queue, with KEDA autoscaling in k8s.
+- **PM2-managed workers** — one process per model, spawned/monitored via the `pm2` npm package (programmatic API, not just the CLI).
 - **Provider adapters** implementing a shared `sendMessage(messages, tools)` interface: OpenAI (Chat Completions + function calling), Anthropic (Messages API + tool use), and a generic OpenAI-compatible adapter for local models (Ollama / LM Studio).
 - **Agent loop**: prompt → model output → execute tool calls → append results → repeat; stops on `max_turns` or when the model calls `task_complete`.
 - **Retry with exponential backoff** for API calls (429 / 5xx / network), configurable per model.
@@ -27,9 +27,9 @@ ai-arena run --scenario express-rest --models gpt-4o,claude-3.7
         │
         ▼
  src/cli.ts  ──►  src/orchestrator/orchestrator.ts
-                   │  • creates a run record + sessions
-                   │  • enqueues tasks to the queue per model
-                   │  • polls run index until all models complete
+                   │  • builds dist/ if needed
+                   │  • pm2.connect() → pm2.start() one worker per model
+                   │  • polls until all workers stop
                    │  • reads each result.json → writes comparison.md/json
                    │
                    ▼  (one PM2 process per model)
@@ -51,10 +51,8 @@ ai-arena run --scenario express-rest --models gpt-4o,claude-3.7
 
 ```
 ai-model-arena/
-├─ Dockerfile                    # multi-stage, non-root user
-├─ docker-compose.yml            # dev: postgres + redis + runner + dashboard
-├─ k8s/                          # Kubernetes manifests (minikube target)
-├─ drizzle/                      # SQLite migrations (Drizzle Kit)
+├─ ecosystem.config.js            # PM2 process template (programmatic API is the real path)
+├─ configs/
 │  ├─ models.yaml                 # model registry (provider, model id, apiKeyEnv, maxTurns, retry…)
 │  └─ scenarios/
 │     ├─ express-rest.yaml        # sample scenario
@@ -68,8 +66,7 @@ ai-model-arena/
 │     └─ files/                   # final sandbox state (everything the model created/edited)
 ├─ src/
 │  ├─ cli.ts                      # entry: run | status | logs | cleanup
-│  ├─ runner.ts                   # long-lived queue-driven runner
-│  ├─ worker.ts                   # legacy: direct per-model session
+│  ├─ worker.ts                   # PM2-managed per-model session entry point
 │  ├─ config.ts                   # zod schemas + YAML loaders
 │  ├─ paths.ts                    # robust project-root discovery
 │  ├─ types.ts                    # shared interfaces
@@ -110,7 +107,7 @@ npm run build
 ## Usage
 
 ```bash
-# Run a scenario against one or more models concurrently.
+# Run a scenario against one or more models concurrently (one PM2 worker each).
 # Each run gets a unique timestamped run id — previous outputs are never overwritten.
 npm start -- run --scenario express-rest --models gpt-4o,claude-3.7
 # equivalent (after build):
@@ -133,10 +130,10 @@ npm run dev -- run --scenario express-rest --models gpt-4o
 Other commands:
 
 ```bash
-ai-arena status                      # list arena sessions from the runs index
-ai-arena logs --model <name>         # tail logs for a model
+ai-arena status                      # list PM2-managed arena sessions (running or stopped)
+ai-arena logs --model <name>         # tail the latest PM2 log file for a model
 ai-arena logs --model gpt-4o -n 500  # show the last 500 lines
-ai-arena cleanup                     # cancel in-flight tasks
+ai-arena cleanup                     # delete all ai-arena-* PM2 processes
 ```
 
 > The `ai-arena` bin is available after `npm install` (locally via `node dist/cli.js`). To call it as `ai-arena ...` from anywhere, run `npm link`.

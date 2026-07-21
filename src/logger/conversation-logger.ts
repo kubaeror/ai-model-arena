@@ -62,15 +62,17 @@ export class ConversationLogger {
   private dbSink?: ConversationDbSink;
   private sessionId?: string;
   private turn = 0;
+  private disableFile = false;
 
   constructor(
     private readonly filePath: string,
     meta: { model: string; scenario: string; runId: string; startedAt: string },
-    opts?: { dbSink?: ConversationDbSink; sessionId?: string },
+    opts?: { dbSink?: ConversationDbSink; sessionId?: string; disableFile?: boolean },
   ) {
     this.file = { ...meta, entries: [] };
     this.dbSink = opts?.dbSink;
     this.sessionId = opts?.sessionId;
+    this.disableFile = opts?.disableFile ?? false;
   }
 
   append(entry: Omit<ConversationEntry, 'timestamp'> & { timestamp?: string }): void {
@@ -111,6 +113,7 @@ export class ConversationLogger {
   }
 
   flush(): void {
+    if (this.disableFile) return;
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     fs.writeFileSync(this.filePath, JSON.stringify(this.file, null, 2));
   }

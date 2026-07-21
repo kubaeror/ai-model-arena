@@ -47,21 +47,21 @@ export function verifyCredentials(cfg: AuthConfig, username: string, password: s
   return timingSafeEqual(username, cfg.username) && timingSafeEqual(password, cfg.password);
 }
 
-export function signToken(cfg: AuthConfig, username: string): string {
-  return jwt.sign({ sub: username }, cfg.secret, { expiresIn: cfg.expiresIn as jwt.SignOptions['expiresIn'] });
+export function signToken(cfg: AuthConfig, username: string, role = 'admin'): string {
+  return jwt.sign({ sub: username, role }, cfg.secret, { expiresIn: cfg.expiresIn as jwt.SignOptions['expiresIn'] });
 }
 
-export function verifyToken(cfg: AuthConfig, token: string): { sub: string } | null {
+export function verifyToken(cfg: AuthConfig, token: string): { sub: string; role: string } | null {
   try {
-    const payload = jwt.verify(token, cfg.secret) as { sub?: string };
-    return { sub: payload.sub ?? 'unknown' };
+    const payload = jwt.verify(token, cfg.secret) as { sub?: string; role?: string };
+    return { sub: payload.sub ?? 'unknown', role: payload.role ?? 'viewer' };
   } catch {
     return null;
   }
 }
 
 export interface AuthedRequest extends Request {
-  user?: { sub: string };
+  user?: { sub: string; role: string };
 }
 
 function extractToken(req: Request): string | null {

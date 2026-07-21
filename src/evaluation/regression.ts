@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { outputRoot } from '../paths.js';
 import type { Logger } from '../types.js';
 import type { BaselineSnapshot, RegressionResult, JudgeResult } from './types.js';
 import type { RunResult } from '../logger/result-logger.js';
@@ -146,7 +147,7 @@ export async function runRegressionSuite(
         continue;
       }
       
-      const outputDir = path.join('outputs', model, currentResult.runId);
+      const outputDir = path.join(outputRoot(), model, currentResult.runId);
       const baselinePath = getBaselinePath(baselineDir, model, scenario);
       const baseline = loadBaselineSnapshot(baselinePath);
       

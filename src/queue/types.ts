@@ -9,6 +9,8 @@ export interface Task {
   config: Record<string, unknown>;
   enqueuedAt: string;
   attempts: number;
+  _redisId?: string;
+  _traceparent?: string;
 }
 
 export interface TaskQueue {

@@ -30,7 +30,9 @@ export class RedisStreamQueue implements TaskQueue {
   async enqueue(task: Task): Promise<void> {
     const stream = streamKey(this.config.streamPrefix, task.provider);
     await this.ensureGroup(stream);
-    await this.redis.xadd(stream, '*', 'task', JSON.stringify(task));
+    const fields: (string | number)[] = ['task', JSON.stringify(task)];
+    if (task._traceparent) fields.push('traceparent', task._traceparent);
+    await this.redis.xadd(stream, '*', ...fields);
   }
 
   async dequeue(timeoutMs = 30000): Promise<Task | null> {
@@ -56,21 +58,50 @@ export class RedisStreamQueue implements TaskQueue {
           taskData[fields[i]!] = fields[i + 1]!;
         }
         const task = JSON.parse(taskData.task ?? '{}') as Task;
-        (task as unknown as { _redisId: string })._redisId = id;
+        task._redisId = id;
+        if (taskData.traceparent) task._traceparent = taskData.traceparent;
         return task;
       }
     }
     return null;
   }
 
-  async ack(_taskId: string): Promise<void> {
-    // XACK requires the redis message id tracked on the task.
-    // Full impl wires the _redisId through the runner.
+  async ack(taskId: string): Promise<void> {
+    const provider = this.config.providerFilter;
+    if (!provider) return;
+    const stream = streamKey(this.config.streamPrefix, provider);
+    await this.redis.xack(stream, this.config.consumerGroup, taskId);
   }
 
-  async nack(_taskId: string, _reason?: string): Promise<void> {
-    // nack bumps attempts; over maxAttempts → DLQ.
-    // Full impl wires the _redisId through the runner.
+  async nack(taskId: string, reason?: string): Promise<void> {
+    const provider = this.config.providerFilter;
+    if (!provider) return;
+    const stream = streamKey(this.config.streamPrefix, provider);
+
+    // Claim the message to get its data
+    const msgs = await this.redis.xrange(stream, taskId, taskId);
+    if (msgs.length === 0) return;
+
+    const [, fields] = msgs[0]!;
+    const taskData: Record<string, string> = {};
+    for (let i = 0; i < fields.length; i += 2) taskData[fields[i]!] = fields[i + 1]!;
+    const task = JSON.parse(taskData.task ?? '{}}') as Task;
+    task.attempts = (task.attempts ?? 0) + 1;
+
+    if (task.attempts >= this.config.maxAttempts) {
+      const dlq = dlqStreamKey(this.config.streamPrefix, provider);
+      const dlqFields: (string | number)[] = ['task', JSON.stringify(task), 'reason', reason ?? ''];
+      await this.redis.xadd(dlq, '*', ...dlqFields);
+      await this.redis.xack(stream, this.config.consumerGroup, taskId);
+      await this.redis.xdel(stream, taskId);
+    } else {
+      // Re-add with bumped attempts to the same stream, then ACK+DEL old
+      const newFields: (string | number)[] = ['task', JSON.stringify(task)];
+      if (task._traceparent) newFields.push('traceparent', task._traceparent);
+      await this.redis.xadd(stream, '*', ...newFields);
+      await this.redis.xack(stream, this.config.consumerGroup, taskId);
+      await this.redis.xdel(stream, taskId);
+    }
   }
 
   async size(): Promise<number> {

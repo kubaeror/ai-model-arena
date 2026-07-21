@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import { getDb } from '../db/client.js';
+import { CronExpressionParser } from 'cron-parser';
 
 export async function tickScheduler(): Promise<void> {
   const db = getDb();
@@ -10,21 +12,34 @@ export async function tickScheduler(): Promise<void> {
   for (const row of rows) {
     const next = computeNextRun(String(row.cron), new Date(now));
     db.prepare('UPDATE schedules SET last_run = ?, next_run = ? WHERE id = ?').run(now, next, String(row.id));
+
+    const models = JSON.parse(String(row.models)) as string[];
+    for (const model of models) {
+      try {
+        const { createQueue } = await import('../queue/index.js');
+        const queue = createQueue();
+        await queue.enqueue({
+          taskId: `sched-${String(row.id)}-${model}-${Date.now()}`,
+          sessionId: crypto.randomUUID(),
+          provider: model.split(':')[0] ?? model,
+          model,
+          scenario: String(row.scenario),
+          config: {},
+          enqueuedAt: now,
+          attempts: 0,
+        });
+      } catch {
+        /* tick failure non-fatal */
+      }
+    }
   }
 }
 
 function computeNextRun(cron: string, from: Date): string {
-  const parts = cron.split(/\s+/);
-  if (parts.length !== 5) return new Date(from.getTime() + 3600000).toISOString();
-  // Simple cron: "* * * * *" → every minute; "0 * * * *" → every hour at :00
-  // For a full cron parser, a library would be used. Here we approximate.
-  const minute = parts[0] ?? '*';
-  const next = new Date(from);
-  if (minute !== '*') {
-    next.setMinutes(Number(minute));
-    if (next <= from) next.setHours(next.getHours() + 1);
-  } else {
-    next.setMinutes(next.getMinutes() + 1);
+  try {
+    const interval = CronExpressionParser.parse(cron);
+    return (interval.next().toDate() as Date).toISOString();
+  } catch {
+    return new Date(from.getTime() + 3600000).toISOString();
   }
-  return next.toISOString();
 }
