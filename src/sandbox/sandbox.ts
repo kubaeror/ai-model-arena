@@ -46,7 +46,8 @@ export function safeResolve(sandboxDir: string, relativePath: string): string {
   // Allow absolute paths only if they already resolve inside the sandbox.
   if (path.isAbsolute(relativePath)) {
     const abs = path.resolve(relativePath);
-    if (isWithin(sandboxDir, abs)) return abs;
+    const real = fs.existsSync(abs) ? fs.realpathSync(abs) : abs;
+    if (isWithin(sandboxDir, real)) return real;
     throw new Error(`Absolute path "${relativePath}" is outside the sandbox.`);
   }
 
@@ -56,10 +57,11 @@ export function safeResolve(sandboxDir: string, relativePath: string): string {
   }
 
   const target = path.resolve(sandboxDir, relativePath);
-  if (!isWithin(sandboxDir, target)) {
+  const real = fs.existsSync(target) ? fs.realpathSync(target) : target;
+  if (!isWithin(sandboxDir, real)) {
     throw new Error(`Path "${relativePath}" escapes the sandbox.`);
   }
-  return target;
+  return real;
 }
 
 /** True iff `targetAbs` is `sandboxDir` or a descendant of it. */
