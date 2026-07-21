@@ -1,7 +1,7 @@
 {
   "name": "ai-model-arena",
   "version": "0.1.0",
-  "description": "Automated, multi-model agentic coding arena with PM2-managed sandboxed sessions.",
+  "description": "Automated, multi-model agentic coding arena with k8s-managed sandboxed sessions.",
   "type": "module",
   "main": "dist/cli.js",
   "bin": {

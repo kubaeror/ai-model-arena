@@ -1,0 +1,21 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: arena-scheduler
+  namespace: ai-arena
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: scheduler
+              image: ai-arena/runner:latest
+              command: ["node", "scripts/scheduler-tick.js"]
+              envFrom:
+                - configMapRef:
+                    name: runner-config
+                - secretRef:
+                    name: provider-keys

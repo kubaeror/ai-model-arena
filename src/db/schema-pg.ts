@@ -248,6 +248,47 @@ export const files = pgTable('files', {
   produced_by_tool: text('produced_by_tool'),
 });
 
+export const prompts = pgTable('prompts', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description'),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});
+
+export const prompt_versions = pgTable('prompt_versions', {
+  id: text('id').primaryKey(),
+  prompt_id: text('prompt_id').notNull().references(() => prompts.id),
+  version: integer('version').notNull(),
+  system_prompt: text('system_prompt').notNull(),
+  task: text('task').notNull(),
+  config: text('config'),
+  tag: text('tag'),
+  created_at: text('created_at').notNull(),
+  created_by: text('created_by').notNull(),
+});
+
+export const output_mappings = pgTable('output_mappings', {
+  id: text('id').primaryKey(),
+  scope: text('scope').notNull(),
+  scope_id: text('scope_id').notNull(),
+  parent_folder: text('parent_folder').notNull(),
+  per_model_pattern: text('per_model_pattern').notNull(),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});
+
+export const schedules = pgTable('schedules', {
+  id: text('id').primaryKey(),
+  scenario: text('scenario').notNull(),
+  models: text('models').notNull(),
+  cron: text('cron').notNull(),
+  enabled: integer('enabled').notNull().default(1),
+  last_run: text('last_run'),
+  next_run: text('next_run'),
+  created_at: text('created_at').notNull(),
+});
+
 // ── Legacy type exports (kept for existing consumers) ──
 
 export interface ProviderRow {

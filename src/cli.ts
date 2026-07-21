@@ -116,7 +116,7 @@ program
 // ── cleanup ──────────────────────────────────────────────────────────────────
 program
   .command('cleanup')
-  .description('Delete all ai-arena PM2 processes (running or stopped).')
+  .description('Cancel all in-flight arena tasks.')
   .action(async () => {
     try {
       await cleanupArena();

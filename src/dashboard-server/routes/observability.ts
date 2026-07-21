@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { computeObservabilityStats } from '../../observability/stats.js';
 import { getDb, closeDb } from '../../anomaly-detection/db.js';
-import * as pm2h from '../../orchestrator/pm2-helpers.js';
 import { listRuns } from '../../orchestrator/run-index.js';
 import { readTraceIndex } from '../../observability/trace-meta.js';
 
@@ -61,12 +60,11 @@ export function createObservabilityRouter(): Router {
     }
   });
 
-  // GET /health — healthcheck for SQLite + PM2.
+  // GET /health — healthcheck for SQLite.
   router.get('/health', async (_req, res) => {
     let sqlite: { ok: boolean; error?: string } = { ok: false };
     try {
       const db = getDb();
-      // A trivial query proves the handle is live + file readable/writable.
       db.prepare('SELECT 1 AS ok').get();
       sqlite = { ok: true };
     } catch (err) {
@@ -74,18 +72,8 @@ export function createObservabilityRouter(): Router {
       closeDb();
     }
 
-    let pm2Bus: { ok: boolean; error?: string } = { ok: false };
-    try {
-      await pm2h.pm2Connect();
-      await pm2h.pm2List();
-      await pm2h.pm2Disconnect();
-      pm2Bus = { ok: true };
-    } catch (err) {
-      pm2Bus = { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-
-    const healthy = sqlite.ok && pm2Bus.ok;
-    res.status(healthy ? 200 : 503).json({ healthy, sqlite, pm2Bus, timestamp: new Date().toISOString() });
+    const healthy = sqlite.ok;
+    res.status(healthy ? 200 : 503).json({ healthy, sqlite, timestamp: new Date().toISOString() });
   });
 
   return router;

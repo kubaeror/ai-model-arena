@@ -11,7 +11,6 @@ import {
 } from '../orchestrator/orchestrator.js';
 import * as pm2h from '../orchestrator/pm2-helpers.js';
 import { isOnline, DASHBOARD_PROC_NAME } from '../orchestrator/pm2-helpers.js';
-import type { Pm2ProcessStatus } from 'pm2';
 import { verifyToken, type AuthConfig } from './auth.js';
 import { createLogger } from '../logger/pino-logger.js';
 
@@ -110,7 +109,7 @@ export class LiveHub {
     return map;
   }
 
-  private enrich(procs: Pm2ProcessStatus[]): ProcStatus[] {
+  private enrich(procs: any[]): ProcStatus[] {
     const meta = this.procMetaMap();
     return procs
       .filter((p) => p.name && p.name !== DASHBOARD_PROC_NAME)

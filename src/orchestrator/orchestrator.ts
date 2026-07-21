@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Pm2ProcessStatus } from 'pm2';
 import { createLogger } from '../logger/pino-logger.js';
 import { outputRoot } from '../paths.js';
 import type { ComparisonEntry } from '../logger/comparison-logger.js';
@@ -103,7 +102,7 @@ function printComparisonTable(entries: ComparisonEntry[]): void {
 }
 
 /** All currently-registered arena PM2 processes (running or stopped). */
-export async function listArenaProcesses(): Promise<Pm2ProcessStatus[]> {
+export async function listArenaProcesses(): Promise<any[]> {
   const list = await pm2h.pm2ListOnce();
   return list.filter((p) => p.name?.startsWith(pm2h.ARENA_PREFIX));
 }

@@ -3,7 +3,6 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
-import type { StartOptions } from 'pm2';
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
@@ -144,7 +143,7 @@ export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<vo
   await pm2h.pm2Connect();
   try {
     for (const m of spec.models) {
-      const env: Record<string, string | undefined> = {
+      const env: Record<string, unknown> = {
         ...process.env,
         AI_ARENA_MODEL: m.model,
         AI_ARENA_SCENARIO: spec.scenario,
@@ -153,7 +152,7 @@ export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<vo
         AI_ARENA_MODELS_CONFIG: spec.modelsConfigPath,
         AI_ARENA_SCENARIOS_DIR: spec.scenariosDir,
       };
-      const startOpts: StartOptions = {
+      const startOpts: Record<string, unknown> = {
         name: m.procName,
         script: pm2h.workerScriptPath(spec.root!),
         interpreter: 'node',
