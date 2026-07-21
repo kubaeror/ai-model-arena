@@ -6,7 +6,7 @@ const execFileAsync = promisify(execFile);
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
-import { loadBudgetConfig, checkBudget } from '../cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, addSpend } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
@@ -340,6 +340,12 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
   });
   await patchIndexAfterFinalize(spec.runId, mdPath, jsonPath, perModel);
   logger.info('Comparison written', { md: mdPath, json: jsonPath });
+  // Record spend for budget tracking
+  for (const entry of entries) {
+    if (entry.result && typeof entry.result.costUsd === 'number' && entry.result.costUsd > 0) {
+      addSpend(entry.model, entry.result.costUsd, spec.root!, logger);
+    }
+  }
   // Run anomaly detection over the just-completed run (best-effort, non-blocking).
   void analyzeRun(spec.runId, logger).catch((e) => {
     anomalyAnalysisFailures++;
@@ -358,11 +364,15 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
   const perModel: RunIndexModelEntry[] = rec.perModel.map((m) => {
-    let r: { success?: boolean; turnsUsed?: number; totalToolCalls?: number; stopReason?: string; durationMs?: number } | undefined;
+    let r: { success?: boolean; turnsUsed?: number; totalToolCalls?: number; stopReason?: string; durationMs?: number; costUsd?: number } | undefined;
     try {
       r = JSON.parse(fs.readFileSync(m.resultPath, 'utf8'));
     } catch {
       r = undefined;
+    }
+    // Record spend for budget tracking
+    if (r && typeof r.costUsd === 'number' && r.costUsd > 0) {
+      addSpend(m.model, r.costUsd, root, logger);
     }
     return r
       ? { ...m, status: 'completed', success: r.success, turnsUsed: r.turnsUsed, totalToolCalls: r.totalToolCalls, stopReason: r.stopReason, durationMs: r.durationMs }
