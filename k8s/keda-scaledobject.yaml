@@ -17,3 +17,5 @@ spec:
         listType: STREAM
         length: "5"
         stream: arena:tasks:openai
+      authenticationRef:
+        name: keda-redis-auth

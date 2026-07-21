@@ -23,7 +23,7 @@ spec:
         app: runner
         provider: openai
     spec:
-      # runtimeClassName: gvisor — omitted on minikube without gVisor addon
+      runtimeClassName: gvisor
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

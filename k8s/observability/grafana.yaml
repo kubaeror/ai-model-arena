@@ -18,14 +18,35 @@ spec:
       labels:
         app: grafana
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: grafana
-          image: grafana/grafana:latest
+          image: grafana/grafana:11.6.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false
           env:
             - name: GF_AUTH_ANONYMOUS_ENABLED
-              value: "true"
+              value: "false"
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-auth
+                  key: username
+                  optional: true
             - name: GF_SECURITY_ADMIN_PASSWORD
-              value: admin
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-auth
+                  key: password
           ports:
             - containerPort: 3000
           resources:
@@ -54,10 +75,9 @@ metadata:
   name: grafana
   namespace: observability
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app: grafana
   ports:
     - port: 3000
       targetPort: 3000
-      nodePort: 30300

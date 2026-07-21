@@ -13,17 +13,27 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: scheduler
               image: ai-arena/runner:latest
               command: ["node", "scripts/scheduler-tick.js"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: true
               envFrom:
                 - configMapRef:
                     name: runner-config
                 - secretRef:
                     name: arena-db-auth
-                - secretRef:
-                    name: provider-keys
               resources:
                 requests:
                   cpu: 50m
