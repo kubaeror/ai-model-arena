@@ -37,10 +37,10 @@ export function Observability() {
   ];
 
   return (
-    <div className="flex flex-col gap-24">
+    <div className="flex flex-col gap-6">
       <h1 className="font-display text-44 font-700">Observability</h1>
 
-      <div className="grid grid-cols-4 gap-16">
+      <div className="grid grid-cols-4 gap-4">
         <StatTile
           value={stats.isLoading ? <Spinner /> : totalRuns}
           label="Total Runs"
@@ -59,7 +59,7 @@ export function Observability() {
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-16">
+      <div className="grid grid-cols-2 gap-4">
         <Panel>
           <PanelHeader
             title="Model Stats"
@@ -76,23 +76,23 @@ export function Observability() {
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="px-8 py-8 text-left font-mono text-12 uppercase text-fg-1">Model</th>
-                    <th className="px-8 py-8 text-right font-mono text-12 uppercase text-fg-1">Runs</th>
-                    <th className="px-8 py-8 text-right font-mono text-12 uppercase text-fg-1">Error Rate</th>
-                    <th className="px-8 py-8 text-right font-mono text-12 uppercase text-fg-1">Anomalies</th>
+                    <th className="px-2 py-2 text-left font-mono text-12 uppercase text-fg-1">Model</th>
+                    <th className="px-2 py-2 text-right font-mono text-12 uppercase text-fg-1">Runs</th>
+                    <th className="px-2 py-2 text-right font-mono text-12 uppercase text-fg-1">Error Rate</th>
+                    <th className="px-2 py-2 text-right font-mono text-12 uppercase text-fg-1">Anomalies</th>
                   </tr>
                 </thead>
                 <tbody>
                   {stats.data?.models.map(m => (
                     <tr key={m.model} className="border-b border-border/50 hover:bg-bg-2">
-                      <td className="px-8 py-8 font-mono text-14">{m.model}</td>
-                      <td className="px-8 py-8 font-mono text-14 text-right" data-numeric>{m.runs}</td>
-                      <td className="px-8 py-8 font-mono text-14 text-right" data-numeric>
+                      <td className="px-2 py-2 font-mono text-14">{m.model}</td>
+                      <td className="px-2 py-2 font-mono text-14 text-right" data-numeric>{m.runs}</td>
+                      <td className="px-2 py-2 font-mono text-14 text-right" data-numeric>
                         <span className={m.errorRate > 0 ? 'text-danger' : 'text-accent'}>
                           {(m.errorRate * 100).toFixed(1)}%
                         </span>
                       </td>
-                      <td className="px-8 py-8 font-mono text-14 text-right" data-numeric>
+                      <td className="px-2 py-2 font-mono text-14 text-right" data-numeric>
                         {m.unresolvedAnomalies > 0 ? (
                           <span className="text-danger">{m.unresolvedAnomalies}</span>
                         ) : (

@@ -9,7 +9,7 @@ export function Settings() {
   const { theme, setTheme } = useSettings();
 
   return (
-    <div className="flex flex-col gap-16">
+    <div className="flex flex-col gap-4">
       <h1 className="font-display text-28 font-600">Settings</h1>
       <Tabs
         items={[
@@ -27,7 +27,7 @@ export function Settings() {
         <Panel>
           <PanelHeader title="Theme" />
           <PanelBody>
-            <div className="flex gap-8">
+            <div className="flex gap-2">
               {(['auto', 'dark', 'light'] as const).map(t => (
                 <Button key={t} variant={theme === t ? 'primary' : 'ghost'} onClick={() => setTheme(t)}>
                   {t}

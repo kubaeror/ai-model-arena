@@ -16,7 +16,7 @@ export function ModelDetail() {
   const { data, isLoading, error, refetch } = useCatalogModel(decodedId);
   const [tab, setTab] = useState('overview');
 
-  if (isLoading) return <div className="flex justify-center py-48"><Spinner /></div>;
+  if (isLoading) return <div className="flex justify-center py-12"><Spinner /></div>;
   if (error) return <ErrorState message="Failed to load model" onRetry={() => refetch()} />;
   if (!data) return <EmptyState title="Model not found" />;
 
@@ -39,8 +39,8 @@ export function ModelDetail() {
   ];
 
   return (
-    <div className="flex flex-col gap-16">
-      <header className="flex flex-wrap items-center gap-16">
+    <div className="flex flex-col gap-4">
+      <header className="flex flex-wrap items-center gap-4">
         <h1 className="font-display text-44 font-700">{model.name}</h1>
         <Badge variant="provider" value={model.provider_id} />
         {model.status && <Badge variant="status" value={model.status} />}
@@ -48,11 +48,11 @@ export function ModelDetail() {
         {model.family && <span className="font-mono text-14 text-fg-1">{model.family}</span>}
       </header>
 
-      <div className="grid grid-cols-4 gap-12">
-        <Panel className="p-12"><div className="font-body text-12 text-fg-1 uppercase">Context</div><div className="font-display text-20 font-600" data-numeric>{model.context_limit?.toLocaleString() ?? '-'}</div></Panel>
-        <Panel className="p-12"><div className="font-body text-12 text-fg-1 uppercase">Output</div><div className="font-display text-20 font-600" data-numeric>{model.output_limit?.toLocaleString() ?? '-'}</div></Panel>
-        <Panel className="p-12"><div className="font-body text-12 text-fg-1 uppercase">Input $/M</div><div className="font-display text-20 font-600" data-numeric>{model.input != null ? `$${model.input}` : '-'}</div></Panel>
-        <Panel className="p-12"><div className="font-body text-12 text-fg-1 uppercase">Output $/M</div><div className="font-display text-20 font-600" data-numeric>{model.output != null ? `$${model.output}` : '-'}</div></Panel>
+      <div className="grid grid-cols-4 gap-3">
+        <Panel className="p-3"><div className="font-body text-12 text-fg-1 uppercase">Context</div><div className="font-display text-20 font-600" data-numeric>{model.context_limit?.toLocaleString() ?? '-'}</div></Panel>
+        <Panel className="p-3"><div className="font-body text-12 text-fg-1 uppercase">Output</div><div className="font-display text-20 font-600" data-numeric>{model.output_limit?.toLocaleString() ?? '-'}</div></Panel>
+        <Panel className="p-3"><div className="font-body text-12 text-fg-1 uppercase">Input $/M</div><div className="font-display text-20 font-600" data-numeric>{model.input != null ? `$${model.input}` : '-'}</div></Panel>
+        <Panel className="p-3"><div className="font-body text-12 text-fg-1 uppercase">Output $/M</div><div className="font-display text-20 font-600" data-numeric>{model.output != null ? `$${model.output}` : '-'}</div></Panel>
       </div>
 
       <Tabs
@@ -69,16 +69,16 @@ export function ModelDetail() {
         <Panel>
           <PanelHeader title="Capabilities" />
           <PanelBody>
-            <div className="grid grid-cols-2 gap-8 font-mono text-14">
+            <div className="grid grid-cols-2 gap-2 font-mono text-14">
               <div>Attachment: <span className="text-accent">{model.attachment ? 'yes' : 'no'}</span></div>
               <div>Temperature: <span className="text-accent">{model.temperature ? 'yes' : 'no'}</span></div>
               <div>Tool calls: <span className="text-accent">{model.tool_call ? 'yes' : 'no'}</span></div>
               <div>Reasoning: <span className="text-accent">{model.reasoning ? 'yes' : 'no'}</span></div>
             </div>
             {model.reasoning_options && (
-              <div className="mt-16">
-                <div className="font-body text-12 text-fg-1 uppercase mb-8">Reasoning options</div>
-                <pre className="font-mono text-12 text-fg-1 bg-bg-0 p-12 rounded-inner overflow-x-auto">{model.reasoning_options}</pre>
+              <div className="mt-4">
+                <div className="font-body text-12 text-fg-1 uppercase mb-2">Reasoning options</div>
+                <pre className="font-mono text-12 text-fg-1 bg-bg-0 p-3 rounded-inner overflow-x-auto">{model.reasoning_options}</pre>
               </div>
             )}
           </PanelBody>
@@ -86,7 +86,7 @@ export function ModelDetail() {
       )}
 
       {tab === 'benchmarks' && (
-        <div className="flex flex-col gap-16">
+        <div className="flex flex-col gap-4">
           {Object.keys(benchmarkGroups).length === 0 ? (
             <EmptyState title="No benchmarks" description="This model has no benchmark data yet." />
           ) : (
@@ -94,9 +94,9 @@ export function ModelDetail() {
               <Panel key={name}>
                 <PanelHeader title={name} />
                 <PanelBody>
-                  <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1">
                     {rows.map(r => (
-                      <div key={r.source} className="flex items-center justify-between border-b border-border/50 py-8 last:border-0">
+                      <div key={r.source} className="flex items-center justify-between border-b border-border/50 py-2 last:border-0">
                         <span className="font-mono text-14">{r.source}{r.is_preferred ? ' ★' : ''}</span>
                         <span className="font-display text-20 font-600 text-accent" data-numeric>{r.score.toFixed(1)}</span>
                       </div>
@@ -110,7 +110,7 @@ export function ModelDetail() {
       )}
 
       {tab === 'metrics' && (
-        <div className="flex flex-col gap-16">
+        <div className="flex flex-col gap-4">
           {runtime.length === 0 ? (
             <EmptyState title="No arena runs yet" description="Trigger a run from Home to see live metrics." />
           ) : (

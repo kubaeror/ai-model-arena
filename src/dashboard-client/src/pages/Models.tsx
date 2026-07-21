@@ -21,14 +21,14 @@ export function Models() {
   const set = (k: keyof ModelConfig, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-1">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Models</h1>
         <Button onClick={startAdd}><Plus size={16} /> Add model</Button>
       </div>
 
       {editing && (
-        <Card className="p-5 grid grid-cols-2 gap-4 max-w-3xl">
+        <Card className="p-5 grid grid-cols-2 gap-1 max-w-3xl">
           <Field label="Name (unique)"><Input value={form.name} onChange={(e) => set('name', e.target.value)} /></Field>
           <Field label="Provider">
             <Select value={form.provider} onChange={(e) => set('provider', e.target.value as ModelConfig['provider'])}>

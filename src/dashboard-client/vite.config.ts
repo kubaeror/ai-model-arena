@@ -1,10 +1,14 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 // In dev, the API + WebSocket live on the dashboard server (default :4000).
 // Vite proxies them so the client can use same-origin relative URLs.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    tailwindcss(),
+    react(),
+  ],
   server: {
     port: 5173,
     proxy: {

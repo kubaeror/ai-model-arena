@@ -34,7 +34,7 @@ export function Login() {
     <div className="h-full flex items-center justify-center">
       <Card className="w-96 p-6">
         <h1 className="text-lg font-semibold mb-1">ai-model-arena</h1>
-        <p className="text-muted text-xs mb-4">Sign in to the dashboard</p>
+        <p className="text-muted text-xs mb-1">Sign in to the dashboard</p>
         <form onSubmit={onSubmit} className="space-y-3">
           <Field label="Username">
             <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
@@ -47,7 +47,7 @@ export function Login() {
             {busy ? 'Signing in…' : 'Sign in'}
           </Button>
         </form>
-        <p className="text-muted text-xs mt-4">
+        <p className="text-muted text-xs mt-1">
           Credentials come from <code>DASHBOARD_USERNAME</code> / <code>DASHBOARD_PASSWORD</code> in <code>.env</code>. If no password is set, the server prints a generated one at startup.
         </p>
       </Card>

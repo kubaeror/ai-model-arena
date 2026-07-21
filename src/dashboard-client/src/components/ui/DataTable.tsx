@@ -57,7 +57,7 @@ export function DataTable<T>({ columns, data, onRowClick, getRowId, className }:
                 key={col.key}
                 onClick={() => handleSort(col.key)}
                 className={cn(
-                  'px-12 py-8 text-left font-mono text-12 uppercase text-fg-1',
+                  'px-3 py-2 text-left font-mono text-12 uppercase text-fg-1',
                   col.sortable && 'cursor-pointer hover:text-fg-0',
                   col.className,
                 )}
@@ -82,7 +82,7 @@ export function DataTable<T>({ columns, data, onRowClick, getRowId, className }:
                 <td
                   key={col.key}
                   data-testid={col.key === 'age' ? 'row-age' : undefined}
-                  className={cn('px-12 py-8 font-mono text-14 text-fg-0', col.className)}
+                  className={cn('px-3 py-2 font-mono text-14 text-fg-0', col.className)}
                 >
                   {col.render ? col.render(row) : String((row as Record<string, unknown>)[col.key] ?? '')}
                 </td>

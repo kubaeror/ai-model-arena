@@ -31,7 +31,7 @@ export function Tabs({ items, value, onChange, className }: TabsProps) {
   }
 
   return (
-    <div role="tablist" className={cn('flex gap-4 border-b border-border', className)}>
+    <div role="tablist" className={cn('flex gap-1 border-b border-border', className)}>
       {items.map((item, i) => (
         <button
           key={item.id}
@@ -42,7 +42,7 @@ export function Tabs({ items, value, onChange, className }: TabsProps) {
           onClick={() => onChange(item.id)}
           onKeyDown={e => handleKeyDown(e, i)}
           className={cn(
-            'px-16 py-12 font-display text-14 font-500 border-b-2 -mb-px transition-colors duration-80 ease-out-quart',
+            'px-4 py-3 font-display text-14 font-500 border-b-2 -mb-px transition-colors duration-80 ease-out-quart',
             value === item.id ? 'border-accent text-fg-0' : 'border-transparent text-fg-1 hover:text-fg-0',
           )}
         >

@@ -29,10 +29,10 @@ export function Launcher() {
   const scenarioName = scenario || scenarios.data?.[0]?.name || '';
 
   return (
-    <div className="p-6 space-y-4 max-w-3xl">
+    <div className="p-6 space-y-1 max-w-3xl">
       <h1 className="text-xl font-semibold">Launch a run</h1>
 
-      <Card className="p-4 space-y-3">
+      <Card className="p-1 space-y-3">
         <div>
           <label className="block text-xs font-medium text-muted mb-1">Scenario</label>
           <Select value={scenarioName} onChange={(e) => setScenario(e.target.value)}>

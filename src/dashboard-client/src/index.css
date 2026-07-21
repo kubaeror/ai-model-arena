@@ -1,8 +1,30 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600&display=swap');
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, [data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  --color-bg-0: var(--bg-0);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-border: var(--border);
+  --color-fg-0: var(--fg-0);
+  --color-fg-1: var(--fg-1);
+  --color-accent: var(--accent);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --font-family-display: var(--font-display);
+  --font-family-body: var(--font-body);
+  --font-family-mono: var(--font-mono);
+
+  --radius-panel: 8px;
+  --radius-inner: 4px;
+
+  --ease-out-quart: cubic-bezier(0.23, 1, 0.32, 1);
+}
 
 :root {
   --bg-0: #0A0E0C;

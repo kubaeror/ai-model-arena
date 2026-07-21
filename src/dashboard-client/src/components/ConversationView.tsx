@@ -63,7 +63,7 @@ function item(entry: ConversationEntry) {
     case 'tool_call': {
       const args = JSON.stringify(entry.meta?.args ?? {}, null, 2);
       return (
-        <div key={ts + entry.type} className="my-1 ml-4">
+        <div key={ts + entry.type} className="my-1 ml-1">
           <Collapsible title={<><Badge color="blue">tool_call</Badge> <span className="font-mono">{entry.toolName}</span> · {ts}</>}>
             <pre className="whitespace-pre-wrap font-mono text-muted">{snippet(args, 2000)}</pre>
           </Collapsible>
@@ -72,7 +72,7 @@ function item(entry: ConversationEntry) {
     }
     case 'tool_result':
       return (
-        <div key={ts + entry.type} className="my-1 ml-4">
+        <div key={ts + entry.type} className="my-1 ml-1">
           <Collapsible tone={entry.isError ? 'error' : 'default'} title={<><Badge color={entry.isError ? 'red' : 'green'}>tool_result</Badge> <span className="font-mono">{entry.toolName}</span> · {ts}</>}>
             <pre className="whitespace-pre-wrap font-mono text-muted max-h-80 overflow-auto nice-scroll">{snippet(entry.toolResult, 8000)}</pre>
           </Collapsible>
@@ -93,9 +93,9 @@ export function ConversationView({ entries }: { entries: ConversationEntry[] }) 
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [entries.length]);
   return (
-    <div className="px-4 py-3 nice-scroll">
+    <div className="px-1 py-3 nice-scroll">
       {entries.length === 0 ? (
-        <div className="text-muted text-sm text-center py-8">No conversation yet. Updates stream in live.</div>
+        <div className="text-muted text-sm text-center py-2">No conversation yet. Updates stream in live.</div>
       ) : (
         entries.map((e, i) => <div key={i}>{item(e)}</div>)
       )}

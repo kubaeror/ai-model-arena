@@ -50,7 +50,7 @@ export function Launcher({ open, onClose }: LauncherProps) {
 
   return (
     <Modal open={open} onClose={onClose} title="Launch Run">
-      <div className="flex flex-col gap-16">
+      <div className="flex flex-col gap-4">
         <Select
           label="Scenario"
           value={scenario}
@@ -59,9 +59,9 @@ export function Launcher({ open, onClose }: LauncherProps) {
         />
         <div>
           <span className="font-body text-12 text-fg-1 uppercase">Models</span>
-          <div className="mt-8 max-h-200 overflow-y-auto rounded-inner border border-border p-8">
+          <div className="mt-2 max-h-200 overflow-y-auto rounded-inner border border-border p-2">
             {(models ?? []).map(m => (
-              <label key={m.id} className="flex items-center gap-8 py-4 hover:bg-bg-2 px-8 rounded-inner">
+              <label key={m.id} className="flex items-center gap-2 py-1 hover:bg-bg-2 px-2 rounded-inner">
                 <input
                   type="checkbox"
                   checked={selectedModels.includes(m.name)}
@@ -74,7 +74,7 @@ export function Launcher({ open, onClose }: LauncherProps) {
             ))}
           </div>
         </div>
-        <div className="flex justify-end gap-8">
+        <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={handleLaunch} disabled={!scenario || selectedModels.length === 0 || submitting}>
             Launch

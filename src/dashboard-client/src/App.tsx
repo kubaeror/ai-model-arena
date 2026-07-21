@@ -32,7 +32,7 @@ function Shell() {
         <BrowserRouter>
           <a href="#main-content" className="sr-only focus:not-sr-only">Skip to main content</a>
           <Nav />
-          <main id="main-content" className="mx-auto max-w-1600 px-24 py-24">
+          <main id="main-content" className="mx-auto max-w-1600 px-6 py-6">
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/catalog" element={<Catalog />} />

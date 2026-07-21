@@ -31,13 +31,13 @@ export function TraceWaterfall({ trace }: { trace: TraceTree | undefined }) {
   }, [trace]);
 
   if (!trace) {
-    return <div className="p-4 text-muted text-sm">No trace data available for this run.</div>;
+    return <div className="p-1 text-muted text-sm">No trace data available for this run.</div>;
   }
   if (trace.traceId == null) {
-    return <div className="p-4 text-muted text-sm">Tracing was disabled for this run.</div>;
+    return <div className="p-1 text-muted text-sm">Tracing was disabled for this run.</div>;
   }
   if (!spans.length) {
-    return <div className="p-4 text-muted text-sm">No spans recorded.</div>;
+    return <div className="p-1 text-muted text-sm">No spans recorded.</div>;
   }
 
   const total = trace.totalDurationMs || Math.max(...spans.map((s) => s.offset + (s.durationMs ?? 0))) || 1;
@@ -57,9 +57,9 @@ export function TraceWaterfall({ trace }: { trace: TraceTree | undefined }) {
           return (
             <div key={s.spanId} className="flex items-center gap-2 text-xs">
               <div className="w-40 shrink-0 truncate text-muted" title={label(s)}>{label(s)}</div>
-              <div className="relative flex-1 h-4 bg-muted/10 rounded">
+              <div className="relative flex-1 h-1 bg-muted/10 rounded">
                 <div
-                  className={`absolute h-4 rounded ${spanColor(s)}`}
+                  className={`absolute h-1 rounded ${spanColor(s)}`}
                   style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
                   title={`${label(s)} · ${dur}ms · ${s.status}`}
                 />

@@ -27,7 +27,7 @@ function fmtMem(bytes?: number): string {
 
 function ModelCard({ p }: { p: ProcStatus }) {
   return (
-    <Card className="p-4">
+    <Card className="p-1">
       <div className="flex items-center justify-between">
         <div className="font-medium">{p.model ?? p.name}</div>
         <Badge color={statusColor(p.status)}>{p.status}</Badge>
@@ -74,7 +74,7 @@ export function Dashboard() {
         <h2 className="text-sm font-medium text-muted mb-2">Recent runs</h2>
         <Card className="divide-y divide-border">
           {runsQuery.isLoading ? (
-            <div className="p-4 flex items-center gap-2 text-muted text-sm"><Spinner /> Loading runs…</div>
+            <div className="p-1 flex items-center gap-2 text-muted text-sm"><Spinner /> Loading runs…</div>
           ) : runsQuery.data && runsQuery.data.length ? (
             runsQuery.data.map((r) => (
               <Link key={r.runId} to={`/runs/${r.runId}`} className="flex items-center justify-between p-3 hover:bg-muted/10">
@@ -86,7 +86,7 @@ export function Dashboard() {
               </Link>
             ))
           ) : (
-            <div className="p-4 text-muted text-sm">No runs yet.</div>
+            <div className="p-1 text-muted text-sm">No runs yet.</div>
           )}
         </Card>
       </section>

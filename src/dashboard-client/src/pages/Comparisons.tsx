@@ -44,23 +44,23 @@ export function Comparisons() {
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="text-muted text-left">
-                          <th className="py-1 pr-4">Model</th>
-                          <th className="py-1 pr-4">Result</th>
-                          <th className="py-1 pr-4">Turns</th>
-                          <th className="py-1 pr-4">Tools</th>
-                          <th className="py-1 pr-4">Duration</th>
-                          <th className="py-1 pr-4">Stop</th>
+                          <th className="py-1 pr-1">Model</th>
+                          <th className="py-1 pr-1">Result</th>
+                          <th className="py-1 pr-1">Turns</th>
+                          <th className="py-1 pr-1">Tools</th>
+                          <th className="py-1 pr-1">Duration</th>
+                          <th className="py-1 pr-1">Stop</th>
                         </tr>
                       </thead>
                       <tbody>
                         {r.perModel.map((m) => (
                           <tr key={m.model} className="border-t border-border">
-                            <td className="py-1 pr-4">{m.model}</td>
-                            <td className="py-1 pr-4">{m.success === true ? <Badge color="green">PASS</Badge> : m.success === false ? <Badge color="red">FAIL</Badge> : <Badge>—</Badge>}</td>
-                            <td className="py-1 pr-4">{m.turnsUsed ?? '—'}</td>
-                            <td className="py-1 pr-4">{m.totalToolCalls ?? '—'}</td>
-                            <td className="py-1 pr-4">{fmt(m.durationMs)}</td>
-                            <td className="py-1 pr-4">{m.stopReason ?? '—'}</td>
+                            <td className="py-1 pr-1">{m.model}</td>
+                            <td className="py-1 pr-1">{m.success === true ? <Badge color="green">PASS</Badge> : m.success === false ? <Badge color="red">FAIL</Badge> : <Badge>—</Badge>}</td>
+                            <td className="py-1 pr-1">{m.turnsUsed ?? '—'}</td>
+                            <td className="py-1 pr-1">{m.totalToolCalls ?? '—'}</td>
+                            <td className="py-1 pr-1">{fmt(m.durationMs)}</td>
+                            <td className="py-1 pr-1">{m.stopReason ?? '—'}</td>
                           </tr>
                         ))}
                       </tbody>
