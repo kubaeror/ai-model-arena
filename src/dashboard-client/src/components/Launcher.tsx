@@ -24,7 +24,7 @@ export function Launcher({ open, onClose }: LauncherProps) {
   const { data: models } = useCatalogModels({ tool_call: '1' });
   const { data: scenarios } = useQuery({
     queryKey: ['scenarios'],
-    queryFn: async () => (await api.get<{ data: Scenario[] }>('/api/scenarios')).json() as Promise<{ data: Scenario[] }>,
+    queryFn: async () => (await api.get('/api/scenarios')).json() as Promise<{ data: Scenario[] }>,
   });
   const [submitting, setSubmitting] = useState(false);
 

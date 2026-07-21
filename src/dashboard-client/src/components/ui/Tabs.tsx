@@ -20,13 +20,13 @@ export function Tabs({ items, value, onChange, className }: TabsProps) {
     if (e.key === 'ArrowRight') {
       e.preventDefault();
       const next = items[(index + 1) % items.length];
-      onChange(next.id);
-      refs.current[next.id]?.focus();
+      onChange(next!.id);
+      refs.current[next!.id]?.focus();
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
       const prev = items[(index - 1 + items.length) % items.length];
-      onChange(prev.id);
-      refs.current[prev.id]?.focus();
+      onChange(prev!.id);
+      refs.current[prev!.id]?.focus();
     }
   }
 

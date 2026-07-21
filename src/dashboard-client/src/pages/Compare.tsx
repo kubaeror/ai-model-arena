@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
+import { Panel } from '../components/ui/Panel';
 import { Select } from '../components/ui/Select';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useCatalogModels, type CatalogModel } from '../hooks/useCatalog';

@@ -4,7 +4,7 @@ import { Plus, Pencil, Trash2 } from 'lucide-react';
 import { listScenarios, getScenario, deleteScenario } from '../lib/api.js';
 import { Button, Card, Badge, Spinner } from '../components/ui.js';
 import { ScenarioForm } from '../components/ScenarioForm.js';
-import type { ScenarioConfig, StarterFile } from '../lib/types.js';
+import type { ScenarioConfig } from '../lib/types.js';
 
 export function Scenarios() {
   const qc = useQueryClient();

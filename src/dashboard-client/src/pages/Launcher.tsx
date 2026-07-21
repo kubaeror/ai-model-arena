@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Play } from 'lucide-react';
 import { listModels, listScenarios, triggerRun } from '../lib/api.js';
-import { Button, Card, Select, Spinner } from '../components/ui.js';
+import { Button, Card, Select } from '../components/ui.js';
 import type { ModelConfig, ScenarioConfig } from '../lib/types.js';
 
 export function Launcher() {

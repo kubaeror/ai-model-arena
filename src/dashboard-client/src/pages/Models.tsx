@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import { listModels, upsertModel, deleteModel } from '../lib/api.js';
-import { Button, Card, Field, Input, Select, Label, Badge } from '../components/ui.js';
+import { Button, Card, Field, Input, Select, Badge } from '../components/ui.js';
 import type { ModelConfig } from '../lib/types.js';
 
 const PROVIDERS: ModelConfig['provider'][] = ['openai', 'anthropic', 'ollama', 'openai-compatible', 'google'];

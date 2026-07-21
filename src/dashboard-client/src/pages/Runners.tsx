@@ -46,7 +46,7 @@ export function Runners() {
                         if (v >= 0) scale.mutateAsync({ name: r.name, replicas: v });
                       }}
                     />
-                    <Button variant="outline" size="sm" onClick={() => drain.mutateAsync(r.name)}>
+                    <Button variant="ghost" size="sm" onClick={() => drain.mutateAsync(r.name)}>
                       Drain
                     </Button>
                   </div>

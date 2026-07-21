@@ -26,7 +26,7 @@ export function Prompts() {
     <div className="flex flex-col gap-16">
       <div className="flex items-center justify-between">
         <h1 className="font-display text-28 font-600">Prompts</h1>
-        <Button variant="default" size="sm">New Prompt</Button>
+        <Button variant="primary" size="sm">New Prompt</Button>
       </div>
       <Panel>
         <PanelHeader title="Prompt Versions" />

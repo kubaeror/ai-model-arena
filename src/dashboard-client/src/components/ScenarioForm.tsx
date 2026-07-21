@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import type { ScenarioConfig, StarterFile } from '../lib/types.js';
 import { createScenario, updateScenario } from '../lib/api.js';
-import { Button, Card, Field, Input, Textarea, Label, Badge } from './ui.js';
+import { Button, Card, Field, Input, Textarea, Badge } from './ui.js';
 import { CodeEditor } from './CodeEditor.js';
 
 interface Props {

@@ -27,7 +27,7 @@ export function Observability() {
     .reduce((sum, l) => sum + l.count, 0) ?? 0;
   const totalModels = stats.data?.models.length ?? 0;
 
-  const latencyColumns: Column<(typeof stats.data)['latency'][number]>[] = [
+  const latencyColumns: Column<{ model: string; tool: string; count: number; avgMs: number; p95Ms: number; p99Ms: number }>[] = [
     { key: 'model', header: 'Model', sortable: true },
     { key: 'tool', header: 'Operation', sortable: true },
     { key: 'count', header: 'Count', sortable: true },

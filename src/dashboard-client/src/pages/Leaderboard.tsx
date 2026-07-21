@@ -30,7 +30,7 @@ export function Leaderboard() {
   function exportCsv() {
     if (!filtered.length) return;
     const headers = COLUMNS.map(c => c.header).join(',');
-    const rows = filtered.map(m => COLUMNS.map(c => String((m as Record<string, unknown>)[c.key] ?? '')).join(','));
+    const rows = filtered.map(m => COLUMNS.map(c => String((m as unknown as Record<string, unknown>)[c.key] ?? '')).join(','));
     const csv = [headers, ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
