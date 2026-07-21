@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getDb } from '../../db/client.js';
 import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
+import { audit } from '../../auth/rbac.js';
 import { z } from 'zod';
 
 /**
@@ -41,6 +42,7 @@ export function createModelsRouter(): Router {
     }
     const id = parsed.data.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
     upsertCustomProvider(getDb(), { id, name: parsed.data.name, apiBase: parsed.data.apiBase, authScheme: parsed.data.authScheme, envVar: parsed.data.envVar, adapter: parsed.data.adapter });
+    audit((req as any).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
     res.status(201).json({ ok: true, id });
   });
 

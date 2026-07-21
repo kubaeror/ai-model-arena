@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getDb } from '../../db/client.js';
 import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
+import { audit } from '../../auth/rbac.js';
 import { z } from 'zod';
 
 const CustomProviderInputSchema = z.object({
@@ -27,6 +28,7 @@ export function createProvidersRouter(): Router {
       return;
     }
     upsertCustomProvider(getDb(), parsed.data);
+    audit((req as any).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.data.id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
     res.status(201).json({ ok: true, id: parsed.data.id });
   });
   router.delete('/:id', (req, res) => {

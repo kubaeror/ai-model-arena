@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { insertWebhook, listWebhooks, deleteWebhook, type NewWebhook } from '../../anomaly-detection/db.js';
+import { audit } from '../../auth/rbac.js';
 
 /**
  * Webhook subscriptions API:
@@ -52,6 +53,7 @@ export function createWebhooksRouter(): Router {
         res.status(404).json({ error: `Webhook ${id} not found` });
         return;
       }
+      audit((req as any).user?.sub ?? 'system', 'webhook.delete', { type: 'webhook', id: String(id) }).catch(() => {});
       res.status(204).send();
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

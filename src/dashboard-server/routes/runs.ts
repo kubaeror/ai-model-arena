@@ -13,6 +13,7 @@ import {
 import type { RunSpec } from '../../orchestrator/run-lifecycle.js';
 import type { RunIndexModelEntry } from '../../orchestrator/run-index.js';
 import { safeResolve } from '../../sandbox/sandbox.js';
+import { audit } from '../../auth/rbac.js';
 
 function findEntry(runId: string, model: string): RunIndexModelEntry | undefined {
   return getRunRecord(runId)?.perModel.find((m) => m.model === model);
@@ -74,6 +75,7 @@ export function createRunsRouter(): Router {
     }
     try {
       const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard' });
+      audit((req as any).user?.sub ?? 'system', 'run.create', { type: 'run', id: spec.runId }, undefined, { scenario, models }).catch(() => {});
       res.status(202).json({
         runId: spec.runId,
         scenario: spec.scenario,
@@ -184,6 +186,7 @@ export function createRunsRouter(): Router {
   router.post('/:runId/stop', async (req, res) => {
     try {
       await stopRun(req.params.runId);
+      audit((req as any).user?.sub ?? 'system', 'run.stop', { type: 'run', id: req.params.runId }).catch(() => {});
       res.json({ runId: req.params.runId, action: 'stop' });
     } catch (e) {
       res.status(404).json({ error: e instanceof Error ? e.message : String(e) });
@@ -194,6 +197,7 @@ export function createRunsRouter(): Router {
   router.post('/:runId/restart', async (req, res) => {
     try {
       await restartRun(req.params.runId);
+      audit((req as any).user?.sub ?? 'system', 'run.restart', { type: 'run', id: req.params.runId }).catch(() => {});
       res.json({ runId: req.params.runId, action: 'restart' });
     } catch (e) {
       res.status(404).json({ error: e instanceof Error ? e.message : String(e) });
