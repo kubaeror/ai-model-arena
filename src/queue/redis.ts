@@ -126,7 +126,7 @@ export class RedisStreamQueue implements TaskQueue {
     try { return await this.redis.xlen(stream); } catch { return 0; }
   }
 
-  async dlqSize(): Promise<number> {
+  async deadLetterSize(): Promise<number> {
     const provider = this.config.providerFilter;
     if (!provider) return 0;
     const dlqStream = dlqStreamKey(this.config.streamPrefix, provider);
