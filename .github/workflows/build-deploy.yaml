@@ -22,7 +22,7 @@ jobs:
       - name: Build Docker image
         run: docker build -t ai-arena/runner:${{ github.sha }} .
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ai-arena/runner:${{ github.sha }}
           format: table
