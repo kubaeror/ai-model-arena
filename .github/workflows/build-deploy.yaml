@@ -21,3 +21,10 @@ jobs:
       - run: npm run build
       - name: Build Docker image
         run: docker build -t ai-arena/runner:${{ github.sha }} .
+      - name: Push Docker image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          docker tag ai-arena/runner:${{ github.sha }} ai-arena/runner:latest
+          docker push ai-arena/runner:${{ github.sha }}
+          docker push ai-arena/runner:latest
