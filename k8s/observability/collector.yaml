@@ -41,9 +41,22 @@ spec:
       labels:
         app: otel-collector
     spec:
+      serviceAccountName: otel-collector
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: collector
-          image: otel/opentelemetry-collector-contrib:latest
+          image: otel/opentelemetry-collector-contrib:0.117.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           args: ["--config=/etc/otel/config.yaml"]
           ports:
             - name: otlp-http

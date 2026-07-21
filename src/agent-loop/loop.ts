@@ -22,6 +22,8 @@ export interface AgentLoopOptions {
   conv: ConversationLogger;
   logger: Logger;
   onTurnComplete?: (turn: number, messages: ChatMessage[]) => Promise<void>;
+  /** If provided, called after each turn to check budget. Return false to abort the run. */
+  onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean>;
 }
 
 export interface AgentLoopResult {
@@ -47,7 +49,7 @@ function truncate(s: string, max = MAX_TOOL_RESULT_CHARS): string {
  * tool calls. Every step is mirrored into the ConversationLogger for durability.
  */
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopResult> {
-  const { adapter, tools, executors, systemPrompt, task, maxTurns, toolCtx, conv, logger, onTurnComplete } = opts;
+  const { adapter, tools, executors, systemPrompt, task, maxTurns, toolCtx, conv, logger, onTurnComplete, onBudgetCheck } = opts;
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
@@ -158,6 +160,17 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
 
     if (onTurnComplete) {
       try { await onTurnComplete(turn, messages); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
+    }
+
+    if (onBudgetCheck) {
+      try {
+        const ok = await onBudgetCheck(turn, usage);
+        if (!ok) {
+          stopReason = 'budget_exceeded';
+          logger.warn('Agent stopped: budget exceeded', { turn, tokens: usage.total });
+          break;
+        }
+      } catch (e) { logger.warn('onBudgetCheck failed', { turn, err: String(e) }); }
     }
   }
 

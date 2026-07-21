@@ -393,6 +393,17 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
   });
 }
 
+let killSwitchActive = false;
+
+/** Activate global kill switch — stops new runs, drains ongoing. */
+export function activateKillSwitch(): void { killSwitchActive = true; }
+
+/** Deactivate global kill switch. */
+export function deactivateKillSwitch(): void { killSwitchActive = false; }
+
+/** Check if kill switch is active. */
+export function isKillSwitchActive(): boolean { return killSwitchActive; }
+
 /** Stop a running run (marks as stopped in the index). */
 export async function stopRun(runId: string): Promise<void> {
   const rec = getRunRecord(runId);

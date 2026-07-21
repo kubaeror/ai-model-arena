@@ -153,6 +153,20 @@ export const runs = sqliteTable('runs', {
   created_by: text('created_by'),
 });
 
+export const cost_ledger = sqliteTable('cost_ledger', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  run_id: text('run_id').notNull().references(() => runs.run_id),
+  model: text('model').notNull(),
+  cost_usd: real('cost_usd').notNull(),
+  currency: text('currency').notNull().default('USD'),
+  input_tokens: integer('input_tokens'),
+  output_tokens: integer('output_tokens'),
+  cache_read_tokens: integer('cache_read_tokens'),
+  total_tokens: integer('total_tokens'),
+  pricing_version: text('pricing_version'),
+  recorded_at: text('recorded_at').notNull(),
+});
+
 export const run_models = sqliteTable('run_models', {
   run_id: text('run_id').notNull().references(() => runs.run_id),
   model: text('model').notNull(),
