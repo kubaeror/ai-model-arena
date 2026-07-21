@@ -3,6 +3,7 @@ export interface Task {
   sessionId: string;
   promptId?: string;
   promptVersion?: number;
+  provider: string;
   model: string;
   scenario: string;
   config: Record<string, unknown>;

@@ -4,7 +4,7 @@ import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import type { Task } from '../../src/queue/types.js';
 
 function mkTask(id: string): Task {
-  return { taskId: id, sessionId: 's', model: 'gpt-4o', scenario: 'x', config: {}, enqueuedAt: new Date().toISOString(), attempts: 0 };
+  return { taskId: id, sessionId: 's', provider: 'openai', model: 'gpt-4o', scenario: 'x', config: {}, enqueuedAt: new Date().toISOString(), attempts: 0 };
 }
 
 test('enqueue then dequeue returns the task', async () => {
