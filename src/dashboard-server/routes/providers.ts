@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getDb } from '../../db/client.js';
 import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
+import { validateProviderUrl } from '../../providers/url-validator.js';
 import { audit } from '../../auth/rbac.js';
 import { z } from 'zod';
 import type { AuthedRequest } from '../auth.js';
@@ -9,7 +10,10 @@ import type { AuthedRequest } from '../auth.js';
 const CustomProviderInputSchema = z.object({
   id: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/, 'id must be lowercase kebab-case'),
   name: z.string().min(1).max(128),
-  apiBase: z.string().url().optional(),
+  apiBase: z.string().refine((url) => {
+    const v = validateProviderUrl(url);
+    return v.ok;
+  }, { message: 'URL targets a blocked address or uses an unsupported scheme/port' }).optional(),
   authScheme: z.enum(['bearer', 'x-api-key', 'none']),
   envVar: z.string().optional(),
   headerName: z.string().optional(),

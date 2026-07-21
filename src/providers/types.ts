@@ -1,6 +1,15 @@
 export type AdapterKind = 'openai-compat' | 'anthropic' | 'google' | 'bedrock';
 export type AuthScheme = 'bearer' | 'x-api-key' | 'google' | 'bedrock' | 'none';
 
+export interface ProviderCapabilities {
+  streaming: boolean;
+  tools: boolean;
+  structuredOutput: boolean;
+  reasoning: boolean;
+  promptCaching: boolean;
+  vision: boolean;
+}
+
 export interface ProviderDescriptor {
   id: string;
   name: string;
@@ -10,4 +19,5 @@ export interface ProviderDescriptor {
   headerName?: string;
   adapter: AdapterKind;
   isBuiltin: boolean;
+  capabilities?: ProviderCapabilities;
 }

@@ -4,35 +4,49 @@ import { BaseAdapter, HttpError } from '../../src/providers/adapters/base.js';
 import { BedrockAdapter } from '../../src/providers/adapters/bedrock.js';
 import type { ProviderDescriptor } from '../../src/providers/types.js';
 
+const bedrockDescriptor: ProviderDescriptor = {
+  id: 'amazon-bedrock', name: 'Amazon Bedrock', authScheme: 'bedrock',
+  adapter: 'bedrock', isBuiltin: true,
+};
+
 function stubLogger() {
   return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => stubLogger() } as any;
 }
 
-test('BedrockAdapter throws without gateway URL', () => {
+test('BedrockAdapter constructs in native SigV4 mode without gateway', () => {
   delete process.env.AWS_BEDROCK_GATEWAY_URL;
-  const descriptor: ProviderDescriptor = { id: 'bedrock', name: 'AWS Bedrock', env: ['AWS_BEDROCK_GATEWAY_URL'] };
-  assert.throws(
-    () => new BedrockAdapter(descriptor, 'claude-3', { logger: stubLogger() }),
-    /AWS_BEDROCK_GATEWAY_URL/,
-  );
-});
-
-test('BedrockAdapter constructs with env-provided gateway URL', () => {
-  process.env.AWS_BEDROCK_GATEWAY_URL = 'https://gateway.example.com';
-  const descriptor: ProviderDescriptor = { id: 'bedrock', name: 'AWS Bedrock', env: ['AWS_BEDROCK_GATEWAY_URL'] };
-  const adapter = new BedrockAdapter(descriptor, 'claude-3', { logger: stubLogger() });
+  delete process.env.AWS_BEDROCK_GATEWAY_KEY;
+  const adapter = new BedrockAdapter(bedrockDescriptor, 'anthropic.claude-3-sonnet-20240229-v1:0', { logger: stubLogger() });
   assert.ok(adapter);
   assert.equal(adapter.supportsStreaming(), true);
   assert.equal(adapter.supportsReasoning(), false);
   assert.equal(adapter.supportsPromptCaching(), false);
+});
+
+test('BedrockAdapter throws in gateway mode without key', () => {
+  process.env.AWS_BEDROCK_GATEWAY_URL = 'https://gateway.example.com';
+  delete process.env.AWS_BEDROCK_GATEWAY_KEY;
+  assert.throws(
+    () => new BedrockAdapter(bedrockDescriptor, 'claude-3', { logger: stubLogger() }),
+    /AWS_BEDROCK_GATEWAY_KEY/,
+  );
   delete process.env.AWS_BEDROCK_GATEWAY_URL;
 });
 
-test('BedrockAdapter constructs with opts.baseUrl', () => {
-  const descriptor: ProviderDescriptor = { id: 'bedrock', name: 'AWS Bedrock', env: ['AWS_BEDROCK_GATEWAY_URL'] };
-  const adapter = new BedrockAdapter(descriptor, 'claude-3', {
+test('BedrockAdapter constructs in gateway mode with URL and key', () => {
+  process.env.AWS_BEDROCK_GATEWAY_URL = 'https://gateway.example.com';
+  process.env.AWS_BEDROCK_GATEWAY_KEY = 'test-key';
+  const adapter = new BedrockAdapter(bedrockDescriptor, 'claude-3', { logger: stubLogger() });
+  assert.ok(adapter);
+  delete process.env.AWS_BEDROCK_GATEWAY_URL;
+  delete process.env.AWS_BEDROCK_GATEWAY_KEY;
+});
+
+test('BedrockAdapter constructs with opts.baseUrl and apiKey', () => {
+  const adapter = new BedrockAdapter(bedrockDescriptor, 'claude-3', {
     logger: stubLogger(),
     baseUrl: 'https://custom.example.com',
+    apiKey: 'custom-key',
   });
   assert.ok(adapter);
 });
