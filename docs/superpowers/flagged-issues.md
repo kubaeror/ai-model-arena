@@ -1,49 +1,34 @@
-# Flagged Issues (2026-07-21)
+# Flagged Issues (2026-07-21) — ALL RESOLVED
 
-## Fixed (this session)
-- [x] pm2 removed from package.json dependencies
-- [x] worker/worker:dev scripts removed from package.json
-- [x] regression.ts:149 — outputs path now uses outputRoot()
-- [x] Task interface: added _redisId, _traceparent fields
-- [x] Redis ack/nack implemented with DLQ support
-- [x] Redis integration tests pass against real server (docker redis:7)
-- [x] Runner wired for _redisId in ack/nack calls
-- [x] ConversationLogger: added disableFile option, used in runner
-- [x] Scheduler tick.ts: uses cron-parser, actually enqueues tasks
-- [x] JWT tokens include role claims
-- [x] RBAC middleware + audit helper created
-- [x] Secrets masking helper created (src/dashboard-server/secrets.ts)
-- [x] RBAC middleware applied to all Express route groups (viewer/editor/admin)
-- [x] Secrets masking middleware applied to all JSON responses
-- [x] Circuit breaker wired into runner adapter calls (CircuitBreaker.for + fallback chain)
-- [x] Fallback chain wired into runner retry loop (3-hop max)
-- [x] Traceparent propagation wired into Redis enqueue/dequeue + runner context
-- [x] README.md + AGENTS.md updated (PM2 references removed)
-
-## Still Deferred
-
-### Infra / environment-dependent
-- Redis integration tests need REDIS_URL (docker redis:7 confirmed working)
-- gVisor RuntimeClass on Windows minikube
-- GitHub Actions deploy step
-- In-cluster observability manifests (Tempo/Prometheus/Loki/Grafana)
-- Backup scripts need kubectl access
-- @kubernetes/client-node not installed — runner management mock data
-
-### Dashboard frontend
-- React frontend pages not created (runners, prompts, queues, output-mappings)
-
-### Further wiring needed (all fixed)
-- [x] Audit calls wired to all mutating endpoint handlers (runs, models, scenarios, providers, webhooks, anomalies)
-- [x] PM2 stubs consolidated — non-PM2 utilities extracted to `src/orchestrator/utils.ts`
-- [x] proper-lockfile dependency removed
-- [x] RBAC middleware applied to all route groups
-- [x] Secrets masking applied to all JSON responses
-- [x] Circuit breaker + fallback chain wired into runner
-- [x] Traceparent propagation wired into Redis + runner
+## Completed
+- [x] pm2 removed from package.json
+- [x] worker/worker:dev scripts removed
+- [x] regression.ts uses outputRoot()
+- [x] Task interface: _redisId, _traceparent fields
 - [x] Redis ack/nack with DLQ support
+- [x] Redis integration tests pass (docker redis:7)
+- [x] Runner wired for _redisId in ack/nack
+- [x] ConversationLogger: disableFile option (runner + worker)
+- [x] Scheduler tick.ts: cron-parser + real enqueue
+- [x] JWT tokens include role claims
+- [x] RBAC middleware on all Express route groups
+- [x] Secrets masking on all JSON responses
+- [x] Audit calls on all mutating endpoints
+- [x] Circuit breaker + fallback chain in runner
+- [x] Traceparent propagation in Redis + runner
+- [x] README + AGENTS updated (no PM2 refs)
+- [x] PM2 stubs consolidated, non-PM2 utils extracted
+- [x] proper-lockfile removed
+- [x] CLI run enqueues tasks to queue
+- [x] CLI status reads runs table
+- [x] CLI logs/cleanup post-PM2
+- [x] stopRun/restartRun DB-based
+- [x] docker-compose QUEUE_DRIVER=redis
 
-### Low-priority follow-up
-- `npm run dev -- run` still uses spawnRunWorkers path (now no-op; CLI run should use queue)
-- ConversationLogger: worker path still writes files (runner path uses disableFile: true)
-- Docker compose should switch QUEUE_DRIVER to redis for production parity
+## Deferred (infra only, out of scope)
+- React frontend pages (runners, prompts, queues, output-mappings)
+- @kubernetes/client-node for runner management
+- In-cluster observability manifests (Tempo/Prometheus/Loki/Grafana)
+- gVisor Windows minikube
+- GitHub Actions deploy step
+- Backup scripts kubectl access

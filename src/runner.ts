@@ -156,3 +156,12 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
   logger.info('Runner stopped');
 }
+
+// Self-start when invoked directly (container entrypoint)
+const isMain = process.argv[1]?.endsWith('runner.js') || process.argv[1]?.endsWith('runner.ts');
+if (isMain) {
+  startRunner().catch((err) => {
+    console.error('Runner crashed', err);
+    process.exit(1);
+  });
+}

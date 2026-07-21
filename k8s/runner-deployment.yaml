@@ -18,7 +18,7 @@ spec:
         app: runner
         provider: openai
     spec:
-      runtimeClassName: gvisor
+      # runtimeClassName: gvisor — omitted on minikube without gVisor addon
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -28,7 +28,7 @@ spec:
       containers:
         - name: runner
           image: ai-arena/runner:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Never
           envFrom:
             - configMapRef:
                 name: runner-config

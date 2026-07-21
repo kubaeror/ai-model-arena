@@ -30,6 +30,7 @@ import { createProvidersRouter } from './routes/providers.js';
 import { createCatalogRouter } from './routes/catalog.js';
 import { createMetricsRouter } from './routes/metrics.js';
 import { createCacheRouter } from './routes/cache.js';
+import { registerRunnerRoutes } from './routes/runners.js';
 import { mountOpenApi } from './openapi.js';
 
 const logger = createLogger('ai-arena:dashboard');
@@ -121,6 +122,9 @@ async function start(): Promise<void> {
   app.use('/api/catalog', requireAuth(auth), requireRole('viewer'), createCatalogRouter());
   app.use('/api/metrics', requireAuth(auth), requireRole('viewer'), createMetricsRouter());
   app.use('/api/cache', requireAuth(auth), requireRole('viewer'), createCacheRouter());
+
+  // ── Runner management (k8s API) ──────────────────────────────────────────
+  registerRunnerRoutes(app);
 
   // ── Public API (API key auth + rate limiting), versioned under /api/v1 ────────
   app.use('/api/v1/models', requireApiKey(['models:read']), createModelsRouter());

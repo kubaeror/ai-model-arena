@@ -14,6 +14,10 @@ import { Observability } from './pages/Observability';
 import { RunDetail } from './pages/RunDetail';
 import { Settings } from './pages/Settings';
 import { Login } from './pages/Login';
+import { Runners } from './pages/Runners';
+import { Prompts } from './pages/Prompts';
+import { Queues } from './pages/Queues';
+import { OutputMappings } from './pages/OutputMappings';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -38,6 +42,10 @@ function Shell() {
               <Route path="/ops" element={<Ops />} />
               <Route path="/observability" element={<Observability />} />
               <Route path="/runs/:runId" element={<RunDetail />} />
+              <Route path="/runners" element={<Runners />} />
+              <Route path="/prompts" element={<Prompts />} />
+              <Route path="/queues" element={<Queues />} />
+              <Route path="/output-mappings" element={<OutputMappings />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
