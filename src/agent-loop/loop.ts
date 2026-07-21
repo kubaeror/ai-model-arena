@@ -9,6 +9,7 @@ import type {
 import type { ModelAdapter } from '../providers/adapters/base.js';
 import type { ConversationLogger } from '../logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../tools/schema.js';
+import { detectInjection } from '../security/prompt-injection.js';
 
 export interface AgentLoopOptions {
   adapter: ModelAdapter;
@@ -52,6 +53,22 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     { role: 'system', content: systemPrompt },
     { role: 'user', content: task },
   ];
+
+  // Scan initial messages for prompt injection patterns
+  for (const msg of messages) {
+    const scan = detectInjection({ content: msg.content ?? undefined });
+    if (scan.flagged) {
+      logger.warn('Prompt injection detected in initial message', {
+        role: msg.role,
+        reasons: scan.reasons,
+      });
+      conv.append({
+        type: 'info',
+        content: `⚠ Prompt injection flagged in ${msg.role} message: ${scan.reasons?.join(', ')}`,
+      });
+    }
+  }
+
   conv.append({ type: 'system', role: 'system', content: systemPrompt });
   conv.append({ type: 'user', role: 'user', content: task });
 

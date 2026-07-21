@@ -25,7 +25,8 @@ describe('readFile', () => {
     fs.writeFileSync(path.join(sandbox, 'hello.txt'), 'hello world');
     const r = await readFile({ path: 'hello.txt' }, ctx);
     assert.strictEqual(r.isError, false);
-    assert.ok(r.content.includes('hello world'));
+    assert.ok(r.content.includes('hello world'), 'should contain file content');
+    assert.ok(r.content.includes('<arena_file'), 'should wrap in arena_file tags');
   });
 
   it('rejects missing files', async () => {

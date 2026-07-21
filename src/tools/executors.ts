@@ -4,6 +4,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
+import { wrapFileContent } from '../security/prompt-injection.js';
 import type { ToolExecutor, ToolExecutorMap } from '../types.js';
 
 const execAsync = promisify(exec);
@@ -56,7 +57,7 @@ export const readFile: ToolExecutor = async (args, ctx) => {
   }
   const buf = fs.readFileSync(abs);
   const text = buf.toString('utf8');
-  return { content: text, isError: false };
+  return { content: wrapFileContent(rel, text), isError: false };
 };
 
 // ── write_file ──────────────────────────────────────────────────────────────
