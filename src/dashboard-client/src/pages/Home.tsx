@@ -44,13 +44,13 @@ export function Home() {
   const recentRuns = (runtime ?? []).slice(0, 5);
 
   return (
-    <div className="flex flex-col gap-24">
+    <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <h1 className="font-display text-44 font-700">Mission Control</h1>
         <Button onClick={() => setLauncherOpen(true)}>+ Run</Button>
       </div>
 
-      <div className="grid grid-cols-3 gap-16">
+      <div className="grid grid-cols-3 gap-4">
         <StatTile value={activeRuns} label="Active runs" />
         <StatTile value={modelCount} label="Models in DB" />
         <StatTile value={cacheSources} label="Cache sources" />
@@ -67,14 +67,14 @@ export function Home() {
         </PanelBody>
       </Panel>
 
-      <div className="grid grid-cols-2 gap-16">
+      <div className="grid grid-cols-2 gap-4">
         <Panel>
           <PanelHeader title="Top TPS" />
           <PanelBody>
             {topTps.length === 0 ? (
               <EmptyState title="No TPS data" />
             ) : (
-              <div className="flex flex-col gap-12">
+              <div className="flex flex-col gap-3">
                 {topTps.map(m => (
                   <MetricBar
                     key={m.model_id}
@@ -100,7 +100,7 @@ export function Home() {
                   <Link
                     key={r.run_id}
                     to={`/runs/${r.run_id}`}
-                    className="flex items-center justify-between border-b border-border/50 py-8 hover:bg-bg-2 px-8 rounded-inner"
+                    className="flex items-center justify-between border-b border-border/50 py-2 hover:bg-bg-2 px-2 rounded-inner"
                   >
                     <span className="font-mono text-14">{r.run_id}</span>
                     <span className={r.success ? 'text-accent font-mono text-14' : 'text-danger font-mono text-14'}>

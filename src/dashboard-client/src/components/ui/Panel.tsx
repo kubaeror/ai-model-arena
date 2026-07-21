@@ -8,7 +8,7 @@ interface PanelProps {
 
 export function Panel({ children, className }: PanelProps) {
   return (
-    <section className={cn('rounded-panel border border-border bg-bg-1 p-16', className)}>
+    <section className={cn('rounded-panel border border-border bg-bg-1 p-4', className)}>
       {children}
     </section>
   );
@@ -22,9 +22,9 @@ interface PanelHeaderProps {
 
 export function PanelHeader({ title, actions, className }: PanelHeaderProps) {
   return (
-    <header className={cn('flex items-center justify-between border-b border-border pb-12 mb-16', className)}>
+    <header className={cn('flex items-center justify-between border-b border-border pb-3 mb-4', className)}>
       {title && <h2 className="font-display text-20 font-600">{title}</h2>}
-      {actions && <div className="flex gap-8">{actions}</div>}
+      {actions && <div className="flex gap-2">{actions}</div>}
     </header>
   );
 }

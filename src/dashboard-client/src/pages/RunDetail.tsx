@@ -36,7 +36,7 @@ export function RunDetail() {
   const activeEntry = models.find((m) => m.model === activeModel);
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-1">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold">{run?.scenario ?? 'Run'}</h1>
@@ -51,7 +51,7 @@ export function RunDetail() {
 
       <div className="flex items-center gap-3">
         <span className="text-xs text-muted">Model:</span>
-        <Select value={activeModel} onChange={(e) => setModel(e.target.value)} className="w-64">
+        <Select value={activeModel} onChange={(e) => setModel(e.target.value)} className="w-16">
           {models.map((m) => (
             <option key={m.model} value={m.model}>{m.model}</option>
           ))}
@@ -76,7 +76,7 @@ export function RunDetail() {
 
       {tab === 'conversation' && (
         <Card className="h-[60vh] overflow-auto nice-scroll">
-          {runQuery.isLoading ? <div className="p-4 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading…</div> : <ConversationView entries={entries} />}
+          {runQuery.isLoading ? <div className="p-1 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading…</div> : <ConversationView entries={entries} />}
         </Card>
       )}
       {tab === 'files' && <FilesPanel runId={runId} model={activeModel} />}
@@ -145,7 +145,7 @@ function LogsPanel({ runId, model, liveLines }: { runId: string; model: string; 
   const lines = liveLines.length ? liveLines : (logsQuery.data ?? '').split(/\r?\n/).filter(Boolean);
   return (
     <Card className="h-[60vh] overflow-auto nice-scroll">
-      <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap text-muted">{lines.join('\n') || '(no logs yet)'}</pre>
+      <pre className="px-1 py-3 text-xs font-mono whitespace-pre-wrap text-muted">{lines.join('\n') || '(no logs yet)'}</pre>
     </Card>
   );
 }
@@ -158,11 +158,11 @@ function TracePanel({ runId, model }: { runId: string; model: string }) {
     refetchInterval: 5000,
   });
   if (traceQuery.isLoading) {
-    return <div className="p-4 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading trace…</div>;
+    return <div className="p-1 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading trace…</div>;
   }
   const trace = traceQuery.data?.traces.find((t) => t.model === model) ?? traceQuery.data?.traces[0];
   return (
-    <Card className="h-[60vh] overflow-auto nice-scroll p-4">
+    <Card className="h-[60vh] overflow-auto nice-scroll p-1">
       <TraceWaterfall trace={trace} />
     </Card>
   );

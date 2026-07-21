@@ -12,9 +12,9 @@ const buttonVariants = cva(
         danger: 'bg-danger text-bg-0 hover:bg-danger/90',
       },
       size: {
-        sm: 'h-32 px-12 text-14',
-        md: 'h-40 px-16 text-16',
-        lg: 'h-48 px-24 text-20',
+        sm: 'h-8 px-3 text-14',
+        md: 'h-40 px-4 text-16',
+        lg: 'h-12 px-6 text-20',
       },
     },
     defaultVariants: { variant: 'primary', size: 'md' },

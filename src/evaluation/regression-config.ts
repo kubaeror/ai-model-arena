@@ -8,6 +8,6 @@ export const RegressionSuiteConfigSchema = z.object({
     scoreDrop: z.number().default(1.0),
     tokenIncrease: z.number().default(0.5),
     timeIncrease: z.number().default(0.5),
-  }).default({}),
+  }).default({ scoreDrop: 1.0, tokenIncrease: 0.5, timeIncrease: 0.5 }),
 });
 export type RegressionSuiteConfig = z.infer<typeof RegressionSuiteConfigSchema>;

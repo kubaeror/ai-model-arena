@@ -29,7 +29,6 @@ export function getEchartsTheme(): EchartsTheme {
 }
 
 export function commonGrid() {
-  const t = getEchartsTheme();
   return {
     left: 48,
     right: 24,
@@ -40,19 +39,19 @@ export function commonGrid() {
 }
 
 export function commonAxis() {
-  const t = getEchartsTheme();
+  const theme = getEchartsTheme();
   return {
-    axisLine: { lineStyle: { color: t.border } },
-    axisLabel: { color: t.fg1, fontFamily: t.fontMono, fontSize: 11 },
-    splitLine: { lineStyle: { color: t.border, opacity: 0.3 } },
+    axisLine: { lineStyle: { color: theme.border } },
+    axisLabel: { color: theme.fg1, fontFamily: theme.fontMono, fontSize: 11 },
+    splitLine: { lineStyle: { color: theme.border, opacity: 0.3 } },
   };
 }
 
 export function commonTooltip() {
-  const t = getEchartsTheme();
+  const theme = getEchartsTheme();
   return {
-    backgroundColor: t.bg,
-    borderColor: t.border,
-    textStyle: { color: t.fg, fontFamily: t.fontMono, fontSize: 12 },
+    backgroundColor: theme.bg,
+    borderColor: theme.border,
+    textStyle: { color: theme.fg, fontFamily: theme.fontMono, fontSize: 12 },
   };
 }

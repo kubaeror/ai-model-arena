@@ -30,7 +30,7 @@ export function Leaderboard() {
   function exportCsv() {
     if (!filtered.length) return;
     const headers = COLUMNS.map(c => c.header).join(',');
-    const rows = filtered.map(m => COLUMNS.map(c => String((m as Record<string, unknown>)[c.key] ?? '')).join(','));
+    const rows = filtered.map(m => COLUMNS.map(c => String((m as unknown as Record<string, unknown>)[c.key] ?? '')).join(','));
     const csv = [headers, ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -42,10 +42,10 @@ export function Leaderboard() {
   }
 
   return (
-    <div className="flex flex-col gap-16">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="font-display text-28 font-600">Leaderboard</h1>
-        <div className="flex gap-8">
+        <div className="flex gap-2">
           <Button variant="ghost" size="sm" onClick={() => setOnlyWithArena(v => !v)}>
             {onlyWithArena ? '✓ ' : ''}Arena data only
           </Button>
@@ -53,11 +53,11 @@ export function Leaderboard() {
         </div>
       </div>
       <Panel>
-        {isLoading ? <div className="flex justify-center py-48"><Spinner /></div>
+        {isLoading ? <div className="flex justify-center py-12"><Spinner /></div>
         : error ? <ErrorState message="Failed to load leaderboard" onRetry={() => refetch()} />
         : filtered.length === 0 ? <EmptyState title="No models" />
         : <DataTable columns={COLUMNS} data={filtered} getRowId={m => m.id} />}
-        <div className="pt-8 text-right font-mono text-12 text-fg-1">{filtered.length} models</div>
+        <div className="pt-2 text-right font-mono text-12 text-fg-1">{filtered.length} models</div>
       </Panel>
     </div>
   );

@@ -35,9 +35,9 @@ export function CostLeaderboard() {
 
   return (
     <div className="p-6 max-w-5xl">
-      <h1 className="text-xl font-semibold mb-4">Cost Leaderboard</h1>
+      <h1 className="text-xl font-semibold mb-1">Cost Leaderboard</h1>
       
-      <p className="text-sm text-muted mb-4">
+      <p className="text-sm text-muted mb-1">
         Models ranked by cost per successful task. Lower is better.
       </p>
 
@@ -45,31 +45,31 @@ export function CostLeaderboard() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted/20">
-              <th className="text-left py-3 px-4">Rank</th>
-              <th className="text-left py-3 px-4">Model</th>
-              <th className="text-right py-3 px-4">Runs</th>
-              <th className="text-right py-3 px-4">Successes</th>
-              <th className="text-right py-3 px-4">Success Rate</th>
-              <th className="text-right py-3 px-4">Total Cost</th>
-              <th className="text-right py-3 px-4">Cost/Success</th>
-              <th className="text-right py-3 px-4">Avg Cost/Run</th>
-              <th className="text-right py-3 px-4">Total Tokens</th>
+              <th className="text-left py-3 px-1">Rank</th>
+              <th className="text-left py-3 px-1">Model</th>
+              <th className="text-right py-3 px-1">Runs</th>
+              <th className="text-right py-3 px-1">Successes</th>
+              <th className="text-right py-3 px-1">Success Rate</th>
+              <th className="text-right py-3 px-1">Total Cost</th>
+              <th className="text-right py-3 px-1">Cost/Success</th>
+              <th className="text-right py-3 px-1">Avg Cost/Run</th>
+              <th className="text-right py-3 px-1">Total Tokens</th>
             </tr>
           </thead>
           <tbody>
             {(data?.leaderboard ?? []).map((entry, index) => (
               <tr key={entry.model} className="border-b border-border/50 hover:bg-muted/10">
-                <td className="py-3 px-4 font-semibold">#{index + 1}</td>
-                <td className="py-3 px-4 font-mono">{entry.model}</td>
-                <td className="text-right py-3 px-4">{entry.runs}</td>
-                <td className="text-right py-3 px-4">{entry.successes}</td>
-                <td className="text-right py-3 px-4">{(entry.successRate * 100).toFixed(1)}%</td>
-                <td className="text-right py-3 px-4">${entry.totalCost.toFixed(4)}</td>
-                <td className="text-right py-3 px-4 font-semibold">
+                <td className="py-3 px-1 font-semibold">#{index + 1}</td>
+                <td className="py-3 px-1 font-mono">{entry.model}</td>
+                <td className="text-right py-3 px-1">{entry.runs}</td>
+                <td className="text-right py-3 px-1">{entry.successes}</td>
+                <td className="text-right py-3 px-1">{(entry.successRate * 100).toFixed(1)}%</td>
+                <td className="text-right py-3 px-1">${entry.totalCost.toFixed(4)}</td>
+                <td className="text-right py-3 px-1 font-semibold">
                   {entry.successes > 0 ? `$${entry.costPerSuccess.toFixed(4)}` : '-'}
                 </td>
-                <td className="text-right py-3 px-4">${entry.avgCostPerRun.toFixed(4)}</td>
-                <td className="text-right py-3 px-4">{entry.totalTokens.toLocaleString()}</td>
+                <td className="text-right py-3 px-1">${entry.avgCostPerRun.toFixed(4)}</td>
+                <td className="text-right py-3 px-1">{entry.totalTokens.toLocaleString()}</td>
               </tr>
             ))}
           </tbody>

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { BudgetConfigSchema, type BudgetConfig, type BudgetState, type BudgetCheckResult } from './types.js';
 
@@ -30,7 +30,7 @@ export function loadBudgetConfig(configPath: string, logger?: Logger): BudgetCon
   }
   
   const content = fs.readFileSync(resolvedPath, 'utf8');
-  const parsed = yaml.load(content);
+  const parsed = load(content);
   const validated = BudgetConfigSchema.parse(parsed);
   budgetConfig = validated;
   return validated;

@@ -4,7 +4,7 @@ import { Plus, Pencil, Trash2 } from 'lucide-react';
 import { listScenarios, getScenario, deleteScenario } from '../lib/api.js';
 import { Button, Card, Badge, Spinner } from '../components/ui.js';
 import { ScenarioForm } from '../components/ScenarioForm.js';
-import type { ScenarioConfig, StarterFile } from '../lib/types.js';
+import type { ScenarioConfig } from '../lib/types.js';
 
 export function Scenarios() {
   const qc = useQueryClient();
@@ -48,14 +48,14 @@ export function Scenarios() {
   }
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-1">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Scenarios</h1>
         <Button onClick={() => setMode({ kind: 'create' })}><Plus size={16} /> New scenario</Button>
       </div>
       <Card className="divide-y divide-border">
         {list.isLoading ? (
-          <div className="p-4 flex items-center gap-2 text-muted text-sm"><Spinner /> Loading…</div>
+          <div className="p-1 flex items-center gap-2 text-muted text-sm"><Spinner /> Loading…</div>
         ) : list.data && list.data.length ? (
           list.data.map((s: ScenarioConfig) => (
             <div key={s.name} className="flex items-center justify-between p-3">

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
+import { Panel } from '../components/ui/Panel';
 import { Select } from '../components/ui/Select';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useCatalogModels, type CatalogModel } from '../hooks/useCatalog';
@@ -9,7 +9,7 @@ import { Badge } from '../components/ui/Badge';
 function ModelColumn({ model, benchmarks }: { model: CatalogModel; benchmarks: ReturnType<typeof useBenchmarks>['data'] }) {
   const modelBenchmarks = (benchmarks ?? []).filter(b => b.model_id === model.id);
   return (
-    <div className="flex flex-col gap-12">
+    <div className="flex flex-col gap-3">
       <h3 className="font-display text-20 font-600">{model.name}</h3>
       <Badge variant="provider" value={model.provider_id} />
       <div className="font-mono text-14">
@@ -20,8 +20,8 @@ function ModelColumn({ model, benchmarks }: { model: CatalogModel; benchmarks: R
         <div>Reasoning: <span className="text-accent">{model.reasoning ? 'yes' : 'no'}</span></div>
       </div>
       {modelBenchmarks.length > 0 && (
-        <div className="mt-8">
-          <div className="font-body text-12 text-fg-1 uppercase mb-4">Benchmarks</div>
+        <div className="mt-2">
+          <div className="font-body text-12 text-fg-1 uppercase mb-1">Benchmarks</div>
           {modelBenchmarks.filter(b => b.is_preferred).map(b => (
             <div key={b.benchmark} className="flex justify-between font-mono text-12 py-2">
               <span className="text-fg-1">{b.benchmark}</span>
@@ -45,9 +45,9 @@ export function Compare() {
     .filter((m): m is CatalogModel => !!m);
 
   return (
-    <div className="flex flex-col gap-16">
+    <div className="flex flex-col gap-4">
       <h1 className="font-display text-28 font-600">Compare</h1>
-      <div className="grid grid-cols-4 gap-12">
+      <div className="grid grid-cols-4 gap-3">
         {selected.map((id, i) => (
           <Select
             key={i}
@@ -61,7 +61,7 @@ export function Compare() {
         {selectedModels.length < 2 ? (
           <EmptyState title="Pick 2-4 models to compare" description="Select models from the dropdowns above." />
         ) : (
-          <div className={`grid gap-16 grid-cols-${selectedModels.length}`}>
+          <div className={`grid gap-4 grid-cols-${selectedModels.length}`}>
             {selectedModels.map(m => <ModelColumn key={m.id} model={m} benchmarks={benchmarks} />)}
           </div>
         )}

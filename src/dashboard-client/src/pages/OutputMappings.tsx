@@ -24,7 +24,7 @@ export function OutputMappings() {
   });
 
   return (
-    <div className="flex flex-col gap-16">
+    <div className="flex flex-col gap-4">
       <h1 className="font-display text-28 font-600">Output Mappings</h1>
       <Panel>
         <PanelHeader title="Global Output Location Mapping" />
@@ -33,18 +33,18 @@ export function OutputMappings() {
            !data || data.length === 0 ? <EmptyState title="No mappings configured" description="Defaults to OUTPUT_ROOT/<model>/<runId>" /> : (
             <table className="w-full font-mono text-14">
               <thead><tr className="text-fg-1 text-12 uppercase border-b border-border">
-                <th className="px-8 py-8 text-left">Scope</th>
-                <th className="px-8 py-8 text-left">Scope ID</th>
-                <th className="px-8 py-8 text-left">Parent Folder</th>
-                <th className="px-8 py-8 text-left">Pattern</th>
+                <th className="px-2 py-2 text-left">Scope</th>
+                <th className="px-2 py-2 text-left">Scope ID</th>
+                <th className="px-2 py-2 text-left">Parent Folder</th>
+                <th className="px-2 py-2 text-left">Pattern</th>
               </tr></thead>
               <tbody>
                 {data.map((m) => (
                   <tr key={m.id} className="border-b border-border/50 hover:bg-bg-2">
-                    <td className="px-8 py-8">{m.scope}</td>
-                    <td className="px-8 py-8">{m.scopeId}</td>
-                    <td className="px-8 py-8">{m.parentFolder}</td>
-                    <td className="px-8 py-8 font-mono text-12">{m.perModelPattern}</td>
+                    <td className="px-2 py-2">{m.scope}</td>
+                    <td className="px-2 py-2">{m.scopeId}</td>
+                    <td className="px-2 py-2">{m.parentFolder}</td>
+                    <td className="px-2 py-2 font-mono text-12">{m.perModelPattern}</td>
                   </tr>
                 ))}
               </tbody>

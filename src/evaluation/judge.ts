@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { ProviderRegistry, loadBuiltins } from '../providers/index.js';
 import { getDb } from '../db/index.js';
@@ -22,7 +22,7 @@ export function loadEvaluationConfig(configPath: string, logger?: Logger): Evalu
   }
   
   const content = fs.readFileSync(resolvedPath, 'utf8');
-  const parsed = yaml.load(content);
+  const parsed = load(content);
   const validated = EvaluationConfigSchema.parse(parsed);
   evalConfig = validated;
   return validated;

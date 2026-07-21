@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Play } from 'lucide-react';
 import { listModels, listScenarios, triggerRun } from '../lib/api.js';
-import { Button, Card, Select, Spinner } from '../components/ui.js';
+import { Button, Card, Select } from '../components/ui.js';
 import type { ModelConfig, ScenarioConfig } from '../lib/types.js';
 
 export function Launcher() {
@@ -29,10 +29,10 @@ export function Launcher() {
   const scenarioName = scenario || scenarios.data?.[0]?.name || '';
 
   return (
-    <div className="p-6 space-y-4 max-w-3xl">
+    <div className="p-6 space-y-1 max-w-3xl">
       <h1 className="text-xl font-semibold">Launch a run</h1>
 
-      <Card className="p-4 space-y-3">
+      <Card className="p-1 space-y-3">
         <div>
           <label className="block text-xs font-medium text-muted mb-1">Scenario</label>
           <Select value={scenarioName} onChange={(e) => setScenario(e.target.value)}>

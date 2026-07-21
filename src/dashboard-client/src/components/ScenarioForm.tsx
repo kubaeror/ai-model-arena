@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import type { ScenarioConfig, StarterFile } from '../lib/types.js';
 import { createScenario, updateScenario } from '../lib/api.js';
-import { Button, Card, Field, Input, Textarea, Label, Badge } from './ui.js';
+import { Button, Card, Field, Input, Textarea, Badge } from './ui.js';
 import { CodeEditor } from './CodeEditor.js';
 
 interface Props {
@@ -56,13 +56,13 @@ export function ScenarioForm({ initial, onSaved, onCancel }: Props) {
   };
 
   return (
-    <Card className="p-5 max-w-4xl space-y-4">
+    <Card className="p-5 max-w-4xl space-y-1">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">{initial ? 'Edit scenario' : 'New scenario'}</h2>
         {initial && <Badge>{sc?.name}</Badge>}
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-1">
         <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-task" /></Field>
         <Field label="Max turns"><Input value={maxTurns} onChange={(e) => setMaxTurns(e.target.value)} type="number" /></Field>
       </div>
@@ -70,22 +70,22 @@ export function ScenarioForm({ initial, onSaved, onCancel }: Props) {
       <Field label="System prompt"><Textarea rows={4} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} /></Field>
       <Field label="Task (initial user prompt)"><Textarea rows={5} value={task} onChange={(e) => setTask(e.target.value)} /></Field>
 
-      <div className="border-t border-border pt-4">
+      <div className="border-t border-border pt-1">
         <div className="text-sm font-medium mb-2">Success criteria</div>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-3 gap-1">
           <Field label="Command"><Input value={cmd} onChange={(e) => setCmd(e.target.value)} placeholder="npm test" /></Field>
           <Field label="Expected exit code"><Input value={exitCode} onChange={(e) => setExitCode(e.target.value)} type="number" /></Field>
           <Field label="Output contains (optional)"><Input value={contains} onChange={(e) => setContains(e.target.value)} placeholder="pass" /></Field>
         </div>
       </div>
 
-      <div className="border-t border-border pt-4">
+      <div className="border-t border-border pt-1">
         <div className="flex items-center justify-between mb-2">
           <div className="text-sm font-medium">Starter files (seeded into each sandbox)</div>
           <Button size="sm" variant="outline" onClick={() => setFiles((f) => [...f, { ...EMPTY_FILE }])}><Plus size={14} /> Add file</Button>
         </div>
         {files.length === 0 && <div className="text-muted text-xs">No starter files — the agent starts in an empty workspace.</div>}
-        <div className="space-y-4">
+        <div className="space-y-1">
           {files.map((f, i) => (
             <div key={i} className="space-y-1">
               <div className="flex items-center gap-2">

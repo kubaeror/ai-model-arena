@@ -65,6 +65,7 @@ export interface ModelDetail extends CatalogModel {
 }
 
 export interface BenchmarkRow {
+  model_id: string;
   benchmark: string;
   source: string;
   score: number;

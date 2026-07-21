@@ -36,11 +36,11 @@ export function Modal({ open, onClose, title, children, className }: ModalProps)
         aria-modal="true"
         aria-labelledby="modal-title"
         className={cn(
-          'relative z-10 w-full max-w-600 mx-24 rounded-panel border border-border bg-bg-1 p-24 shadow-lg',
+          'relative z-10 w-full max-w-600 mx-6 rounded-panel border border-border bg-bg-1 p-6 shadow-lg',
           className,
         )}
       >
-        <header className="flex items-center justify-between mb-16">
+        <header className="flex items-center justify-between mb-4">
           <h2 id="modal-title" className="font-display text-20 font-600">{title}</h2>
           <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">✕</Button>
         </header>

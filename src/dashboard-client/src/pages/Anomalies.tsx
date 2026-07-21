@@ -38,7 +38,7 @@ export function Anomalies() {
   const anomalies = query.data ?? [];
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-1">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Anomalies</h1>
         <span className="text-xs text-muted">{anomalies.length} shown</span>
@@ -68,7 +68,7 @@ export function Anomalies() {
 
       <Card className="overflow-auto nice-scroll">
         {query.isLoading ? (
-          <div className="p-4 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading…</div>
+          <div className="p-1 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading…</div>
         ) : anomalies.length === 0 ? (
           <div className="p-6 text-center text-muted text-sm">No anomalies match these filters.</div>
         ) : (

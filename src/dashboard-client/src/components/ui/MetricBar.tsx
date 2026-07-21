@@ -20,9 +20,9 @@ export function MetricBar({ value, min, max, label, thresholds, className }: Met
         : 'bg-accent'
     : 'bg-accent';
   return (
-    <div className={cn('flex items-center gap-12', className)}>
+    <div className={cn('flex items-center gap-3', className)}>
       {label && <span className="font-mono text-12 text-fg-1 w-80 truncate">{label}</span>}
-      <div className="flex-1 h-8 rounded-inner bg-bg-2 overflow-hidden">
+      <div className="flex-1 h-2 rounded-inner bg-bg-2 overflow-hidden">
         <div className={cn('h-full rounded-inner transition-all duration-150 ease-out-quart', colorClass)} style={{ width: `${pct}%` }} />
       </div>
       <span className="font-mono text-14 text-fg-0 w-60 text-right" data-numeric>{value.toFixed(1)}</span>

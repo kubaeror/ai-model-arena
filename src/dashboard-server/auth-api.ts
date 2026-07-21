@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import type { Response, NextFunction, Request } from 'express';
 import type { Logger } from '../types.js';
 import type { ApiKeysConfig, ApiKeyPermission, RequestContext, RateLimitState } from './auth-api-types.js';
@@ -37,7 +37,7 @@ export function loadApiKeysConfig(configPath: string, logger?: Logger): ApiKeysC
   
   const content = fs.readFileSync(resolvedPath, 'utf8');
   const expanded = expandEnvVars(content);
-  const rawParsed = yaml.load(expanded) as { apiKeys?: unknown[] } | null;
+  const rawParsed = load(expanded) as { apiKeys?: unknown[] } | null;
   // Drop API-key entries whose `key` resolved to null/empty (env var unset)
   // instead of crashing the server — an unset key is simply not registered.
   const apiKeys = Array.isArray(rawParsed?.apiKeys)
