@@ -1,7 +1,7 @@
 import type { Express } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import { findProjectRoot } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
 
@@ -23,7 +23,7 @@ function loadSpec(): { yaml: string; json: unknown } | null {
     return null;
   }
   cachedYaml = fs.readFileSync(p, 'utf8');
-  cachedJson = yaml.load(cachedYaml);
+  cachedJson = load(cachedYaml);
   return { yaml: cachedYaml, json: cachedJson };
 }
 

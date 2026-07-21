@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import type { NotificationConfig, NotificationResult, DispatchEvent } from './types.js';
 import { NotificationConfigSchema, DispatchEventType } from './types.js';
@@ -26,7 +26,7 @@ export function loadNotificationConfig(configPath: string, logger?: Logger): Not
   
   const content = fs.readFileSync(resolvedPath, 'utf8');
   const expanded = expandEnvVars(content);
-  const parsed = yaml.load(expanded);
+  const parsed = load(expanded);
   const validated = NotificationConfigSchema.parse(parsed);
   notificationConfig = validated;
   return validated;

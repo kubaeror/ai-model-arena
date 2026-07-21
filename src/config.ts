@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import { z } from 'zod';
 
 // ── Schemas ────────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ function readYaml(filePath: string): unknown {
     throw new Error(`Config file not found: ${filePath}`);
   }
   const raw = fs.readFileSync(filePath, 'utf8');
-  return yaml.load(raw);
+  return load(raw);
 }
 
 export function loadScenario(filePath: string): ScenarioConfig {

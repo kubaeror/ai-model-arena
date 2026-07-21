@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { load, dump } from 'js-yaml';
 import type { Logger } from '../types.js';
 import type { Schedule, SchedulesConfig, ScheduleState } from './types.js';
 import { SchedulesConfigSchema } from './types.js';
@@ -22,7 +22,7 @@ export function loadSchedulesConfig(configPath: string, logger?: Logger): Schedu
   }
   
   const content = fs.readFileSync(resolvedPath, 'utf8');
-  const parsed = yaml.load(content);
+  const parsed = load(content);
   const validated = SchedulesConfigSchema.parse(parsed);
   schedulesConfig = validated;
   
@@ -67,7 +67,7 @@ export function addSchedule(configPath: string, schedule: Schedule, logger?: Log
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(resolvedPath, yaml.dump(config));
+  fs.writeFileSync(resolvedPath, dump(config));
   scheduleStates.set(schedule.id, { id: schedule.id, status: 'idle' });
 }
 
@@ -79,7 +79,7 @@ export function removeSchedule(configPath: string, id: string, logger?: Logger):
   config.schedules.splice(index, 1);
   
   const resolvedPath = path.resolve(configPath);
-  fs.writeFileSync(resolvedPath, yaml.dump(config));
+  fs.writeFileSync(resolvedPath, dump(config));
   scheduleStates.delete(id);
   
   return true;

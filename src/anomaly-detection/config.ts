@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import { z } from 'zod';
 import { findProjectRoot } from '../paths.js';
 
@@ -73,7 +73,7 @@ export function loadAnomalyConfig(): AnomalyDetectionConfig {
     return cached;
   }
   const raw = fs.readFileSync(p, 'utf8');
-  const parsed = yaml.load(raw);
+  const parsed = load(raw);
   cached = AnomalyDetectionConfigSchema.parse(parsed);
   return cached;
 }

@@ -16,7 +16,7 @@
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import { Command } from 'commander';
 import { findProjectRoot, dbPath } from './paths.js';
 import { createLogger } from './logger/pino-logger.js';
@@ -142,7 +142,7 @@ program
       process.exit(1);
     }
     const { RegressionSuiteConfigSchema } = await import('./evaluation/regression-config.js');
-    const raw = yaml.load(fs.readFileSync(configPath, 'utf8'));
+    const raw = load(fs.readFileSync(configPath, 'utf8'));
     const config = RegressionSuiteConfigSchema.parse(raw);
     const models = filterModel ? config.models.filter((m) => m === filterModel) : config.models;
     if (models.length === 0) {

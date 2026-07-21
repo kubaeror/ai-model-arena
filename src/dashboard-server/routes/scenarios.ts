@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import { dump } from 'js-yaml';
 import { audit } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import {
@@ -72,7 +72,7 @@ function listStarterFiles(scenario: ScenarioConfig): StarterFile[] {
 
 function writeScenarioYaml(filePath: string, config: ScenarioConfig): ScenarioConfig {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, yaml.dump(config, { lineWidth: 120 }));
+  fs.writeFileSync(filePath, dump(config, { lineWidth: 120 }));
   return config;
 }
 
