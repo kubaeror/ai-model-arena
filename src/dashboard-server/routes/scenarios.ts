@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dump } from 'js-yaml';
-import { audit } from '../../auth/rbac.js';
+import { audit, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import {
   loadScenario,
@@ -107,7 +107,7 @@ export function createScenariosRouter(): Router {
 
   // GET /api/scenarios/:name — one scenario + its starter files
   router.get('/:name', (req, res) => {
-    const p = resolveAndValidate(req.params.name);
+    const p = resolveAndValidate(req.params.name as string);
     if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
       res.status(404).json({ error: 'Scenario not found' });
@@ -118,7 +118,7 @@ export function createScenariosRouter(): Router {
   });
 
   // POST /api/scenarios — create
-  router.post('/', (req, res) => {
+  router.post('/', requireRole('editor'), (req, res) => {
     const body = req.body ?? {};
     let starterFiles = body.starterFiles;
     if (Array.isArray(body.starterFilesContent) && body.starterFilesContent.length) {
@@ -136,8 +136,8 @@ export function createScenariosRouter(): Router {
   });
 
   // PUT /api/scenarios/:name — edit (optionally rename)
-  router.put('/:name', (req, res) => {
-    const p = resolveAndValidate(req.params.name);
+  router.put('/:name', requireRole('editor'), (req, res) => {
+    const p = resolveAndValidate(req.params.name as string);
     if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
       res.status(404).json({ error: 'Scenario not found' });
@@ -160,8 +160,8 @@ export function createScenariosRouter(): Router {
   });
 
   // DELETE /api/scenarios/:name
-  router.delete('/:name', (req, res) => {
-    const p = resolveAndValidate(req.params.name);
+  router.delete('/:name', requireRole('editor'), (req, res) => {
+    const p = resolveAndValidate(req.params.name as string);
     if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
       res.status(404).json({ error: 'Scenario not found' });
@@ -172,8 +172,8 @@ export function createScenariosRouter(): Router {
     if (scenario.starterFiles) {
       fs.rmSync(path.join(scenariosDir(), scenario.starterFiles), { recursive: true, force: true });
     }
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: req.params.name }).catch(() => {});
-    res.json({ deleted: req.params.name });
+    audit((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: req.params.name as string }).catch(() => {});
+    res.json({ deleted: req.params.name as string });
   });
 
   return router;

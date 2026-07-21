@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
 
 interface UserRequest extends Request {
   user?: { sub: string; role: string };
@@ -7,7 +7,7 @@ interface UserRequest extends Request {
 const ROLE_ORDER = { viewer: 0, editor: 1, admin: 2 } as const;
 type Role = keyof typeof ROLE_ORDER;
 
-export function requireRole(min: Role) {
+export function requireRole(min: Role): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
     const role = (req as UserRequest).user?.role as string | undefined;
     const order = ROLE_ORDER as Record<string, number>;

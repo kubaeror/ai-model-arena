@@ -16,7 +16,7 @@ import { safeResolve } from '../../sandbox/sandbox.js';
 import { createLogger } from '../../logger/pino-logger.js';
 
 const logger = createLogger('ai-arena:routes:runs');
-import { audit } from '../../auth/rbac.js';
+import { audit, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 
 function findEntry(runId: string, model: string): RunIndexModelEntry | undefined {
@@ -59,7 +59,7 @@ export function createRunsRouter(): Router {
   });
 
   // POST /api/runs — trigger a new run (non-blocking; uses the orchestrator)
-  router.post('/', async (req, res) => {
+  router.post('/', requireRole('editor'), async (req, res) => {
     const scenario = String(req.body?.scenario ?? '');
     const rawModels = req.body?.models;
     if (!scenario || !Array.isArray(rawModels) || rawModels.length === 0) {
@@ -93,7 +93,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId — run metadata + live per-model status
   router.get('/:runId', async (req, res) => {
-    const rec = getRunRecord(req.params.runId);
+    const rec = getRunRecord(req.params.runId as string);
     if (!rec) {
       res.status(404).json({ error: 'Run not found' });
       return;
@@ -115,7 +115,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/conversation
   router.get('/:runId/models/:model/conversation', async (req, res) => {
-    const entry = findEntry(req.params.runId, req.params.model);
+    const entry = findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -130,7 +130,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/report
   router.get('/:runId/models/:model/report', async (req, res) => {
-    const entry = findEntry(req.params.runId, req.params.model);
+    const entry = findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -140,7 +140,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/files — list sandbox files
   router.get('/:runId/models/:model/files', (req, res) => {
-    const entry = findEntry(req.params.runId, req.params.model);
+    const entry = findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -154,12 +154,12 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/files/* — read one sandbox file
   router.get('/:runId/models/:model/files/*', async (req, res) => {
-    const entry = findEntry(req.params.runId, req.params.model);
+    const entry = findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
     }
-    const prefix = `/api/runs/${req.params.runId}/models/${req.params.model}/files/`;
+    const prefix = `/api/runs/${req.params.runId as string}/models/${req.params.model}/files/`;
     const relRaw = req.path.startsWith(prefix) ? req.path.slice(prefix.length) : '';
     let abs: string;
     try {
@@ -178,7 +178,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/logs — tail PM2 log
   router.get('/:runId/models/:model/logs', async (req, res) => {
-    const entry = findEntry(req.params.runId, req.params.model);
+    const entry = findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -187,22 +187,22 @@ export function createRunsRouter(): Router {
   });
 
   // POST /api/runs/:runId/stop
-  router.post('/:runId/stop', async (req, res) => {
+  router.post('/:runId/stop', requireRole('editor'), async (req, res) => {
     try {
-      await stopRun(req.params.runId);
-      audit((req as AuthedRequest).user?.sub ?? 'system', 'run.stop', { type: 'run', id: req.params.runId }).catch((e) => logger.debug('Audit event failed', { error: e.message }));
-      res.json({ runId: req.params.runId, action: 'stop' });
+      await stopRun(req.params.runId as string);
+      audit((req as AuthedRequest).user?.sub ?? 'system', 'run.stop', { type: 'run', id: req.params.runId as string }).catch((e) => logger.debug('Audit event failed', { error: e.message }));
+      res.json({ runId: req.params.runId as string, action: 'stop' });
     } catch (e) {
       res.status(404).json({ error: e instanceof Error ? e.message : String(e) });
     }
   });
 
   // POST /api/runs/:runId/restart
-  router.post('/:runId/restart', async (req, res) => {
+  router.post('/:runId/restart', requireRole('editor'), async (req, res) => {
     try {
-      await restartRun(req.params.runId);
-      audit((req as AuthedRequest).user?.sub ?? 'system', 'run.restart', { type: 'run', id: req.params.runId }).catch(() => {});
-      res.json({ runId: req.params.runId, action: 'restart' });
+      await restartRun(req.params.runId as string);
+      audit((req as AuthedRequest).user?.sub ?? 'system', 'run.restart', { type: 'run', id: req.params.runId as string }).catch(() => {});
+      res.json({ runId: req.params.runId as string, action: 'restart' });
     } catch (e) {
       res.status(404).json({ error: e instanceof Error ? e.message : String(e) });
     }
