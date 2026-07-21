@@ -5,6 +5,23 @@ import path from 'node:path';
 import os from 'node:os';
 import { safeResolve, isWithin } from '../../src/sandbox/sandbox.js';
 
+import { SHELL_METACHAR_RE, isShellCommandAllowed } from '../../src/sandbox/shell-policy.js';
+
+describe('shell policy newline injection', () => {
+  it('should reject commands containing literal newline characters', () => {
+    const cmdWithNewline = 'ls\ncat /etc/passwd';
+    assert.strictEqual(isShellCommandAllowed(cmdWithNewline, 'strict'), false);
+  });
+
+  it('should allow plain commands without metacharacters', () => {
+    assert.strictEqual(isShellCommandAllowed('npm test', 'strict'), true);
+  });
+
+  it('should allow all commands in permissive mode', () => {
+    assert.strictEqual(isShellCommandAllowed('rm -rf /', 'permissive'), true);
+  });
+});
+
 describe('safeResolve symlink containment', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-sandbox-test-'));
   const sandbox = path.join(tmp, 'sandbox');
