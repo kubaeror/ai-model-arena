@@ -31,6 +31,7 @@ export interface RunIndexRecord {
   perModel: RunIndexModelEntry[];
   comparisonMdPath: string | null;
   comparisonJsonPath: string | null;
+  createdBy?: string;
 }
 
 export interface RunIndexFile {
@@ -113,6 +114,7 @@ export function listRuns(): RunIndexRecord[] {
       perModel: (pmByRun.get(String(r.run_id)) ?? []).map(dbToPm),
       comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
       comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
+      createdBy: r.created_by ? String(r.created_by) : undefined,
     };
   });
 }
@@ -134,16 +136,18 @@ export function getRunRecord(runId: string): RunIndexRecord | undefined {
     perModel: perModel.map(dbToPm),
     comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
     comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
+    createdBy: r.created_by ? String(r.created_by) : undefined,
   };
 }
 
 export function upsertRun(record: RunIndexRecord): Promise<void> {
   const db = getDb();
   const tx = db.transaction(() => {
-    db.prepare(`INSERT OR REPLACE INTO runs (run_id, scenario, models, started_at, finished_at, status, source, comparison_md_path, comparison_json_path)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT OR REPLACE INTO runs (run_id, scenario, models, started_at, finished_at, status, source, comparison_md_path, comparison_json_path, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       record.runId, record.scenario, JSON.stringify(record.models), record.startedAt,
       record.finishedAt, record.status, record.source, record.comparisonMdPath, record.comparisonJsonPath,
+      record.createdBy ?? null,
     );
     if (record.perModel && record.perModel.length > 0) {
       const insertPm = db.prepare(`INSERT OR REPLACE INTO run_models

@@ -150,6 +150,7 @@ export const runs = sqliteTable('runs', {
   source: text('source').notNull(),
   comparison_md_path: text('comparison_md_path'),
   comparison_json_path: text('comparison_json_path'),
+  created_by: text('created_by'),
 });
 
 export const run_models = sqliteTable('run_models', {

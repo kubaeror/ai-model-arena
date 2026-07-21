@@ -63,6 +63,7 @@ export interface RunStartOptions {
   source?: 'cli' | 'dashboard' | 'scheduler';
   forceBudget?: boolean;
   timeoutMs?: number;
+  createdBy?: string;
 }
 
 export interface PerModelStatus {
@@ -180,7 +181,7 @@ export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<vo
 }
 
 /** Register a run (status=running) in the index. */
-export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli'): Promise<void> {
+export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli', createdBy?: string): Promise<void> {
   const perModel: RunIndexModelEntry[] = spec.models.map((m) => ({
     model: m.model, runId: spec.runId, procName: m.procName, outputDir: m.outputDir,
     sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
@@ -189,7 +190,7 @@ export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | '
   await upsertRun({
     runId: spec.runId, scenario: spec.scenario, models: spec.models.map((m) => m.model),
     startedAt: spec.startedAt, finishedAt: null, status: 'running', source, perModel,
-    comparisonMdPath: null, comparisonJsonPath: null,
+    comparisonMdPath: null, comparisonJsonPath: null, createdBy,
   });
 }
 
@@ -241,7 +242,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     await queue.enqueue(task);
   }
 
-  await registerRun(spec, opts.source ?? 'cli');
+  await registerRun(spec, opts.source ?? 'cli', opts.createdBy);
   logger.info('Run enqueued', { runId, models: spec.models.map(m => m.model), tasks: spec.models.length });
   return spec;
 }

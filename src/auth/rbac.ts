@@ -19,6 +19,21 @@ export function requireRole(min: Role): RequestHandler {
   };
 }
 
+export function requireOwnership(
+  getOwnerId: (req: Request) => string | undefined,
+): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const actor = (req as UserRequest).user?.sub;
+    const owner = getOwnerId(req);
+    if (!owner) return next(); // No owner = legacy resource, allow
+    if (actor !== owner && (req as UserRequest).user?.role !== 'admin') {
+      res.status(403).json({ error: 'forbidden: not the resource owner' });
+      return;
+    }
+    next();
+  };
+}
+
 export async function audit(
   actor: string,
   action: string,

@@ -78,7 +78,7 @@ export function createRunsRouter(): Router {
       return;
     }
     try {
-      const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard' });
+      const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard', createdBy: (req as AuthedRequest).user?.sub });
       audit((req as AuthedRequest).user?.sub ?? 'system', 'run.create', { type: 'run', id: spec.runId }, undefined, { scenario, models }).catch((e) => logger.debug('Audit event failed', { error: e.message }));
       res.status(202).json({
         runId: spec.runId,
@@ -189,6 +189,12 @@ export function createRunsRouter(): Router {
   // POST /api/runs/:runId/stop
   router.post('/:runId/stop', requireRole('editor'), async (req, res) => {
     try {
+      const rec = getRunRecord(req.params.runId as string);
+      if (!rec) { res.status(404).json({ error: 'run not found' }); return; }
+      if (rec.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
+        res.status(403).json({ error: 'forbidden: not the run owner' });
+        return;
+      }
       await stopRun(req.params.runId as string);
       audit((req as AuthedRequest).user?.sub ?? 'system', 'run.stop', { type: 'run', id: req.params.runId as string }).catch((e) => logger.debug('Audit event failed', { error: e.message }));
       res.json({ runId: req.params.runId as string, action: 'stop' });
@@ -200,6 +206,12 @@ export function createRunsRouter(): Router {
   // POST /api/runs/:runId/restart
   router.post('/:runId/restart', requireRole('editor'), async (req, res) => {
     try {
+      const rec = getRunRecord(req.params.runId as string);
+      if (!rec) { res.status(404).json({ error: 'run not found' }); return; }
+      if (rec.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
+        res.status(403).json({ error: 'forbidden: not the run owner' });
+        return;
+      }
       await restartRun(req.params.runId as string);
       audit((req as AuthedRequest).user?.sub ?? 'system', 'run.restart', { type: 'run', id: req.params.runId as string }).catch(() => {});
       res.json({ runId: req.params.runId as string, action: 'restart' });
