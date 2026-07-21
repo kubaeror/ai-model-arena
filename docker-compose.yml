@@ -9,6 +9,11 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arena"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7
@@ -17,6 +22,11 @@ services:
       - "6379:6379"
     volumes:
       - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
 
   runner:
     build: .
@@ -27,7 +37,8 @@ services:
       REDIS_URL: redis://redis:6379
       OUTPUT_ROOT: /var/arena/outputs
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     volumes:
       - outputs:/var/arena/outputs
     command: ["node", "dist/runner.js"]
@@ -41,10 +52,19 @@ services:
       DASHBOARD_USERNAME: admin
       DASHBOARD_PASSWORD: change-me
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "4000:4000"
     command: ["node", "dist/dashboard-server/server.js"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4000/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   pgdata:

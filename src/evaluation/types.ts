@@ -36,11 +36,11 @@ export const EvaluationConfigSchema = z.object({
   rollback: RollbackConfigSchema.optional(),
 });
 
-export type RubricItem = z.infer<typeof RubricItemSchema>;
-export type Rubric = z.infer<typeof RubricSchema>;
-export type JudgeConfig = z.infer<typeof JudgeConfigSchema>;
-export type EvaluationConfig = z.infer<typeof EvaluationConfigSchema>;
-export type RegressionConfig = z.infer<typeof RegressionConfigSchema>;
+export type RubricItem = z.output<typeof RubricItemSchema>;
+export type Rubric = z.output<typeof RubricSchema>;
+export type JudgeConfig = z.output<typeof JudgeConfigSchema>;
+export type EvaluationConfig = z.output<typeof EvaluationConfigSchema>;
+export type RegressionConfig = z.output<typeof RegressionConfigSchema>;
 
 export interface JudgeScore {
   category: string;

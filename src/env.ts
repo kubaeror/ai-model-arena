@@ -15,7 +15,7 @@ const EnvSchema = z.object({
   OTEL_CAPTURE_CONTENT: z.string().default('false'),
 });
 
-export type Env = z.infer<typeof EnvSchema>;
+export type Env = z.output<typeof EnvSchema>;
 
 // Throws at import time with a clear message if required vars are missing.
 export const env = EnvSchema.parse(process.env);

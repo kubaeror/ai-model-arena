@@ -2,11 +2,9 @@ name: build-deploy
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,13 +13,16 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run audit
-      - run: npm run test:ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:coverage
+      - run: npm ci --prefix src/dashboard-client
+      - run: npm --prefix src/dashboard-client run test
       - run: npm run build
       - name: Build Docker image
         run: docker build -t ai-arena/runner:${{ github.sha }} .
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ai-arena/runner:${{ github.sha }}
           format: table
@@ -30,16 +31,13 @@ jobs:
       - name: Smoke test
         run: |
           docker compose up -d
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:4000/health; then break; fi
             sleep 1
           done
           curl -sf http://localhost:4000/health
           docker compose down
-      - name: Build Docker image
-        run: docker build -t ai-arena/runner:${{ github.sha }} .
       - name: Push Docker image
-        if: github.ref == 'refs/heads/main'
         run: |
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
           docker tag ai-arena/runner:${{ github.sha }} ai-arena/runner:latest

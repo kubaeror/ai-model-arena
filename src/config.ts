@@ -25,7 +25,7 @@ export const ScenarioConfigSchema = z.object({
   shellPolicy: z.enum(['strict', 'permissive']).default('strict'),
   maxShellOutputBytes: z.number().int().positive().default(524288), // 512 KB
 });
-export type ScenarioConfig = z.infer<typeof ScenarioConfigSchema>;
+export type ScenarioConfig = z.output<typeof ScenarioConfigSchema>;
 
 // ── Loaders ─────────────────────────────────────────────────────────────────
 

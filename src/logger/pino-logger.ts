@@ -11,7 +11,7 @@ export function createLogger(name: string, level?: string): Logger {
     name,
     level: level ?? process.env.LOG_LEVEL ?? 'info',
     base: undefined, // drop default pid/hostname for cleaner diffs
-    timestamp: pino.stdTimeFunctions.isoTime,
+    timestamp: () => `,"time":"${new Date().toISOString()}"`,
   });
 
   return {

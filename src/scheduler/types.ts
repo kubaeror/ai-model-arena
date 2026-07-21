@@ -17,8 +17,8 @@ export const SchedulesConfigSchema = z.object({
   schedules: z.array(ScheduleSchema),
 });
 
-export type Schedule = z.infer<typeof ScheduleSchema>;
-export type SchedulesConfig = z.infer<typeof SchedulesConfigSchema>;
+export type Schedule = z.output<typeof ScheduleSchema>;
+export type SchedulesConfig = z.output<typeof SchedulesConfigSchema>;
 
 export type ScheduleId = string;
 

@@ -12,8 +12,8 @@ export const NotificationConfigSchema = z.object({
   routing: z.record(z.string(), z.array(z.string())).optional(),
 });
 
-export type NotificationChannel = z.infer<typeof NotificationChannelSchema>;
-export type NotificationConfig = z.infer<typeof NotificationConfigSchema>;
+export type NotificationChannel = z.output<typeof NotificationChannelSchema>;
+export type NotificationConfig = z.output<typeof NotificationConfigSchema>;
 
 export enum DispatchEventType {
   onRunCompleted = 'onRunCompleted',

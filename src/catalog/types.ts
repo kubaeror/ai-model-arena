@@ -55,9 +55,9 @@ export const ModelsDevProviderSchema = z.object({
 
 export const ModelsDevResponseSchema = z.record(z.string(), ModelsDevProviderSchema);
 
-export type ModelsDevModel = z.infer<typeof ModelsDevModelSchema>;
-export type ModelsDevProvider = z.infer<typeof ModelsDevProviderSchema>;
-export type ModelsDevResponse = z.infer<typeof ModelsDevResponseSchema>;
+export type ModelsDevModel = z.output<typeof ModelsDevModelSchema>;
+export type ModelsDevProvider = z.output<typeof ModelsDevProviderSchema>;
+export type ModelsDevResponse = z.output<typeof ModelsDevResponseSchema>;
 
 export const ModelbenchModelSchema = z.object({
   slug: z.string(),
@@ -73,7 +73,7 @@ export const ModelbenchModelSchema = z.object({
   speed_tps: z.number().optional(),
   benchmark_data: z.record(z.string(), z.unknown()).optional(),
   source: z.string().optional(),
-}).passthrough();
+}).catchall(z.unknown());
 
 export const ModelbenchResponseSchema = z.object({
   data: z.array(ModelbenchModelSchema),

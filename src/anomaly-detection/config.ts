@@ -57,7 +57,7 @@ export const AnomalyDetectionConfigSchema = z.object({
   }),
 });
 
-export type AnomalyDetectionConfig = z.infer<typeof AnomalyDetectionConfigSchema>;
+export type AnomalyDetectionConfig = z.output<typeof AnomalyDetectionConfigSchema>;
 
 let cached: AnomalyDetectionConfig | null = null;
 

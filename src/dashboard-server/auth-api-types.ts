@@ -35,9 +35,9 @@ export const ApiKeysConfigSchema = z.object({
   apiKeys: z.array(ApiKeySchema),
 });
 
-export type ApiKeyPermission = z.infer<typeof ApiKeyPermissionSchema>;
-export type ApiKey = z.infer<typeof ApiKeySchema>;
-export type ApiKeysConfig = z.infer<typeof ApiKeysConfigSchema>;
+export type ApiKeyPermission = z.output<typeof ApiKeyPermissionSchema>;
+export type ApiKey = z.output<typeof ApiKeySchema>;
+export type ApiKeysConfig = z.output<typeof ApiKeysConfigSchema>;
 
 export interface RequestContext {
   keyName: string;
