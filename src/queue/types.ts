@@ -19,4 +19,5 @@ export interface TaskQueue {
   ack(taskId: string): Promise<void>;
   nack(taskId: string, reason?: string): Promise<void>;
   size(): Promise<number>;
+  close?(): Promise<void>;
 }

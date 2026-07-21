@@ -45,6 +45,23 @@ interface ClientInfo {
  * Workers are stateless; all state is read from outputs/ + the runs index. The
  * PM2 bus is not required for conversation state — we watch the filesystem.
  */
+interface Pm2Proc {
+  name?: string;
+  pid?: number | null;
+  monit?: { cpu?: number; memory?: number };
+  pm2_env?: {
+    status?: string;
+    cpu?: number;
+    memory?: number;
+    uptime?: number;
+    restarts?: number;
+    exitCode?: number | null;
+    pm_uptime?: number;
+    unstable_restarts?: number;
+    exit_code?: number | null;
+  };
+}
+
 export class LiveHub {
   private wss: WebSocketServer;
   private subs = new Map<WebSocket, Set<string>>();
@@ -109,7 +126,7 @@ export class LiveHub {
     return map;
   }
 
-  private enrich(procs: any[]): ProcStatus[] {
+  private enrich(procs: Pm2Proc[]): ProcStatus[] {
     const meta = this.procMetaMap();
     return procs
       .filter((p) => p.name && p.name !== DASHBOARD_PROC_NAME)
@@ -134,7 +151,7 @@ export class LiveHub {
 
   private async getProcessStatus(): Promise<ProcStatus[]> {
     try {
-      return this.enrich(await listArenaProcesses());
+      return this.enrich((await listArenaProcesses()) as Pm2Proc[]);
     } catch {
       return [];
     }
@@ -286,6 +303,14 @@ export class LiveHub {
         if (await isRunCompleteByRunId(rec.runId)) {
           await finalizeRunByRunId(rec.runId, this.logger);
           this.broadcastToSubscribers(rec.runId, { type: 'run_completed', runId: rec.runId });
+          // Clean up per-run tracking maps to prevent memory leaks
+          for (const [key] of this.convSeen) {
+            if (key.startsWith(rec.runId)) {
+              this.convSeen.delete(key);
+              this.convMtime.delete(key);
+              this.logSize.delete(key);
+            }
+          }
         }
       } catch {
         /* ignore */

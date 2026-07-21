@@ -1,0 +1,44 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard-pdb
+  namespace: ai-arena
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dashboard
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: runner-pdb
+  namespace: ai-arena
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: runner
+      provider: openai
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-pdb
+  namespace: ai-arena
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgres
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-pdb
+  namespace: ai-arena
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: redis

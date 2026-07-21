@@ -5,7 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
 
-test('initDb creates all catalog tables on fresh DB', () => {
+const ALL_TABLES = [
+  '_migrations', 'providers', 'models', 'model_providers', 'pricing',
+  'benchmarks', 'model_runtime_stats', 'catalog_cache_state',
+  'anomalies', 'webhooks', 'runs', 'run_models', 'sessions', 'messages',
+  'model_calls', 'users', 'roles', 'user_roles', 'audit_log', 'files',
+  'prompts', 'prompt_versions', 'output_mappings', 'schedules',
+];
+
+test('initDb creates all 24 tables on fresh DB', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-db-'));
   const dbPath = path.join(tmp, 'test.db');
   try {
@@ -14,7 +22,7 @@ test('initDb creates all catalog tables on fresh DB', () => {
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
     ).all() as { name: string }[];
     const names = tables.map(t => t.name);
-    for (const expected of ['providers', 'models', 'model_providers', 'pricing', 'benchmarks', 'model_runtime_stats', 'catalog_cache_state']) {
+    for (const expected of ALL_TABLES) {
       assert.ok(names.includes(expected), `missing table: ${expected}`);
     }
     closeDb();

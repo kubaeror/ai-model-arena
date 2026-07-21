@@ -1,4 +1,4 @@
-import type { Request, Response } from 'express';
+import type { Express, Request, Response } from 'express';
 import { KubeConfig, AppsV1Api, CoreV1Api } from '@kubernetes/client-node';
 
 const kc = new KubeConfig();
@@ -7,7 +7,7 @@ const appsApi = kc.makeApiClient(AppsV1Api);
 const coreApi = kc.makeApiClient(CoreV1Api);
 const NAMESPACE = process.env.KUBE_NAMESPACE ?? 'ai-arena';
 
-export function registerRunnerRoutes(app: any): void {
+export function registerRunnerRoutes(app: Express): void {
   // GET /api/runners — list runner deployments + their pods
   app.get('/api/runners', async (_req: Request, res: Response) => {
     try {

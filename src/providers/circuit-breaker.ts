@@ -64,4 +64,15 @@ export class CircuitBreaker {
     }
     return cb;
   }
+
+  static cleanup(): void {
+    const now = Date.now();
+    for (const [key, breaker] of breakers) {
+      if (breaker.state === 'closed' || breaker.state === 'halfOpen') {
+        breakers.delete(key);
+      } else if (breaker.state === 'open' && (now - breaker.openedAt > 3_600_000)) {
+        breakers.delete(key);
+      }
+    }
+  }
 }

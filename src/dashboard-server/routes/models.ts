@@ -4,6 +4,7 @@ import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from 
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { audit } from '../../auth/rbac.js';
 import { z } from 'zod';
+import type { AuthedRequest } from '../auth.js';
 
 /**
  * Legacy model-management router. Previously read/wrote configs/models.yaml.
@@ -42,7 +43,7 @@ export function createModelsRouter(): Router {
     }
     const id = parsed.data.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
     upsertCustomProvider(getDb(), { id, name: parsed.data.name, apiBase: parsed.data.apiBase, authScheme: parsed.data.authScheme, envVar: parsed.data.envVar, adapter: parsed.data.adapter });
-    audit((req as any).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
+    audit((req as AuthedRequest).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
     res.status(201).json({ ok: true, id });
   });
 

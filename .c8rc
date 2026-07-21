@@ -1,0 +1,4 @@
+{
+  "reporter": ["text", "lcov"],
+  "exclude": ["tests/", "dist/", "node_modules/", "src/dashboard-client/"]
+}

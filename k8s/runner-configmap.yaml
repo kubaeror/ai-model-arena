@@ -5,11 +5,10 @@ metadata:
   namespace: ai-arena
 data:
   DB_DRIVER: postgres
-  DATABASE_URL: postgres://arena:arena@postgres:5432/arena
-  REDIS_URL: redis://redis:6379
   QUEUE_DRIVER: redis
   OUTPUT_ROOT: /var/arena/outputs
   REDIS_STREAM_PREFIX: arena:tasks
   REDIS_CONSUMER_GROUP: arena-runners
   MAX_TASK_ATTEMPTS: "5"
   LOG_LEVEL: info
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318

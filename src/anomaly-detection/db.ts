@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { dbPath as projectDbPath } from '../paths.js';
-import { getDb as getCentralDb } from '../db/client.js';
+import { getDb as getCentralDb } from '../db/index.js';
 
 /**
  * SQLite store for detected anomalies + webhook subscriptions.

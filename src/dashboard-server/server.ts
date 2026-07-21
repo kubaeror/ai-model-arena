@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import '../env.js';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -9,9 +10,11 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { findProjectRoot, dbPath } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
-import { initDb } from '../db/client.js';
+import { startOtel } from '../observability/otel.js';
+import { metricsHandler } from '../observability/metrics.js';
+import { initDb, closeDb, getDb } from '../db/index.js';
 import { ensureFresh } from '../catalog/cache.js';
-import { startCatalogCron } from '../catalog/cron.js';
+import { startCatalogCron, stopCatalogCron } from '../catalog/cron.js';
 import { loadAuthConfig, requireAuth, verifyCredentials, signToken, type AuthedRequest } from './auth.js';
 import { requireRole } from '../auth/rbac.js';
 import { maskSecrets } from './secrets.js';
@@ -40,6 +43,7 @@ function clientDist(): string {
 }
 
 async function start(): Promise<void> {
+  startOtel();
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
   const auth = loadAuthConfig();
   if (auth.generatedPassword) {
@@ -68,6 +72,13 @@ async function start(): Promise<void> {
   const corsOrigins = allowedOrigins.length
     ? allowedOrigins
     : ['http://localhost:4000', 'http://127.0.0.1:4000'];
+
+  // ── Correlation ID ──────────────────────────────────────────────────────
+  app.use((req, _res, next) => {
+    (req as AuthedRequest).correlationId = (req.headers['x-request-id'] as string) ?? crypto.randomUUID();
+    next();
+  });
+
   app.use(cors({ origin: corsOrigins, credentials: true }));
   app.use(helmet({
     contentSecurityPolicy: {
@@ -82,6 +93,40 @@ async function start(): Promise<void> {
     crossOriginEmbedderPolicy: false,
   }));
   app.use(express.json({ limit: '20mb' }));
+
+  // ── Health check (public, unauthenticated) ──────────────────────────────
+  app.get('/health', (_req, res) => {
+    let dbOk = false;
+    try {
+      getDb().prepare('SELECT 1').get();
+      dbOk = true;
+    } catch { /* db not ready */ }
+    res.status(dbOk ? 200 : 503).json({
+      status: dbOk ? 'healthy' : 'degraded',
+      uptime: process.uptime(),
+      db: dbOk ? 'connected' : 'disconnected',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // ── Prometheus metrics (public, unauthenticated) ─────────────────────────
+  app.get('/metrics', async (_req, res) => {
+    try {
+      await metricsHandler(_req, res);
+    } catch (err) {
+      res.status(500).send('metrics error');
+    }
+  });
+
+  // ── Global rate limiter ──────────────────────────────────────────────────
+  const apiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,
+    message: { error: 'Too many requests' },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use('/api/', apiLimiter);
 
   loadApiKeysConfig(path.join(root, 'configs', 'api-keys.yaml'), logger);
 
@@ -148,6 +193,12 @@ async function start(): Promise<void> {
   // ── OpenAPI interactive docs (public) ──────────────────────────────────────
   mountOpenApi(app);
 
+  // ── Global error handler (must be last in the middleware chain) ─────────
+  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    logger.error('Unhandled route error', { error: err.message, stack: err.stack });
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
   // ── Serve the built frontend in production (SPA) ─────────────────────────
   const dist = clientDist();
   if (fs.existsSync(path.join(dist, 'index.html'))) {
@@ -175,18 +226,28 @@ async function start(): Promise<void> {
   const shutdown = (): void => {
     logger.info('Shutting down dashboard server...');
     hub.close();
+    stopCatalogCron();
     server.close(() => {
       logger.info('Server closed cleanly');
+      try { void closeDb(); } catch { /* ignore */ }
       process.exit(0);
     });
     server.closeIdleConnections();
     setTimeout(() => {
       logger.warn('Graceful shutdown timed out after 10 s — forcing exit');
+      try { void closeDb(); } catch { /* ignore */ }
       process.exit(1);
     }, 10_000).unref();
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled rejection', { error: String(reason) });
+  });
+  process.on('uncaughtException', (err) => {
+    logger.error('Uncaught exception', { error: err.message, stack: err.stack });
+    process.exit(1);
+  });
 }
 
 start().catch((err) => {

@@ -24,6 +24,7 @@ export function initDb(dbPath: string): DatabaseType {
   const sqlite = new Database(dbPath);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
+  sqlite.pragma('wal_autocheckpoint = 1000');
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: migrationsFolder() });
   dbInstance = sqlite;

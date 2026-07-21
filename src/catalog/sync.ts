@@ -1,5 +1,5 @@
 import type { Database } from 'better-sqlite3';
-import { getDb } from '../db/client.js';
+import { getDb } from '../db/index.js';
 import { ModelsDevResponseSchema, type ModelsDevResponse } from './types.js';
 import { normalizeModelId } from './match.js';
 

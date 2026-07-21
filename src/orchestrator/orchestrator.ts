@@ -99,7 +99,7 @@ function printComparisonTable(entries: ComparisonEntry[]): void {
 }
 
 /** All runs from the index. */
-export async function listArenaProcesses(): Promise<unknown[]> {
+export async function listArenaProcesses(): Promise<Record<string, unknown>[]> {
   return listRuns().map(r => ({
     name: r.runId,
     status: r.status,

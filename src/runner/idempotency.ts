@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getDb } from '../db/client.js';
+import { getDb } from '../db/index.js';
 
 export function configHash(config: Record<string, unknown>): string {
   return crypto.createHash('sha256')

@@ -31,3 +31,11 @@ coverage/
 
 # PM2 / scratch process artifacts
 *.pid
+
+# CommandCode
+.commandcode/
+
+# Backups
+backups/
+backups/
+.commandcode/

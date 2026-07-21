@@ -31,7 +31,7 @@ import { writeResultJson, type RunResult } from './logger/result-logger.js';
 import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
-import { initDb, getDb } from './db/client.js';
+import { initDb, getDb } from './db/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';

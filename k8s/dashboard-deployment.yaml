@@ -5,6 +5,11 @@ metadata:
   namespace: ai-arena
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: dashboard
@@ -12,6 +17,9 @@ spec:
     metadata:
       labels:
         app: dashboard
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
     spec:
       securityContext:
         runAsNonRoot: true
@@ -27,6 +35,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: runner-config
+            - secretRef:
+                name: arena-db-auth
             - secretRef:
                 name: provider-keys
           env:
@@ -54,6 +64,31 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
       volumes:
         - name: outputs
           persistentVolumeClaim:

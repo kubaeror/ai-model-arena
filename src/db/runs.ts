@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { findProjectRoot } from '../paths.js';
-import { getDb } from './client.js';
+import { getDb } from './index.js';
 
 export interface RunIndexModelEntry {
   model: string;
@@ -92,8 +92,15 @@ export function saveRunIndex(_idx: RunIndexFile): void {
 export function listRuns(): RunIndexRecord[] {
   const db = getDb();
   const rows = db.prepare('SELECT * FROM runs ORDER BY started_at DESC').all() as Record<string, unknown>[];
+  const allPm = db.prepare('SELECT * FROM run_models ORDER BY run_id').all() as Record<string, unknown>[];
+  const pmByRun = new Map<string, Record<string, unknown>[]>();
+  for (const pm of allPm) {
+    const rid = String(pm.run_id);
+    let list = pmByRun.get(rid);
+    if (!list) { list = []; pmByRun.set(rid, list); }
+    list.push(pm);
+  }
   return rows.map((r) => {
-    const perModel = db.prepare('SELECT * FROM run_models WHERE run_id = ?').all(String(r.run_id)) as Record<string, unknown>[];
     const models = JSON.parse(String(r.models)) as string[];
     return {
       runId: String(r.run_id),
@@ -103,7 +110,7 @@ export function listRuns(): RunIndexRecord[] {
       finishedAt: r.finished_at ? String(r.finished_at) : null,
       status: String(r.status) as RunIndexRecord['status'],
       source: String(r.source) as RunIndexRecord['source'],
-      perModel: perModel.map(dbToPm),
+      perModel: (pmByRun.get(String(r.run_id)) ?? []).map(dbToPm),
       comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
       comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
     };

@@ -144,7 +144,7 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' };
     if (this.apiKey) headers['x-api-key'] = this.apiKey;
-    return fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    return fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
   }
 
   private parseResponse(json: AnthropicResponse): ModelResponse {

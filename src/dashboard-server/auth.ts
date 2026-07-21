@@ -62,6 +62,7 @@ export function verifyToken(cfg: AuthConfig, token: string): { sub: string; role
 
 export interface AuthedRequest extends Request {
   user?: { sub: string; role: string };
+  correlationId?: string;
 }
 
 function extractToken(req: Request): string | null {

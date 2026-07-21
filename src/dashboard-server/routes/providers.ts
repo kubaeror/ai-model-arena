@@ -4,6 +4,7 @@ import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from 
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { audit } from '../../auth/rbac.js';
 import { z } from 'zod';
+import type { AuthedRequest } from '../auth.js';
 
 const CustomProviderInputSchema = z.object({
   id: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/, 'id must be lowercase kebab-case'),
@@ -28,7 +29,7 @@ export function createProvidersRouter(): Router {
       return;
     }
     upsertCustomProvider(getDb(), parsed.data);
-    audit((req as any).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.data.id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
+    audit((req as AuthedRequest).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.data.id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
     res.status(201).json({ ok: true, id: parsed.data.id });
   });
   router.delete('/:id', (req, res) => {

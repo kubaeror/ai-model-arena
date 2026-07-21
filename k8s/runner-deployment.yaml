@@ -8,6 +8,11 @@ metadata:
     provider: openai
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: runner
@@ -32,6 +37,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: runner-config
+            - secretRef:
+                name: arena-db-auth
             - secretRef:
                 name: provider-keys
           env:
@@ -58,6 +65,16 @@ spec:
             limits:
               cpu: 1000m
               memory: 1Gi
+          startupProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
       volumes:
         - name: outputs
           persistentVolumeClaim:

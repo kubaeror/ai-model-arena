@@ -1,6 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import { initDb, closeDb } from '../src/db/client.js';
+import { initDb, closeDb } from '../src/db/index.js';
 
 function findProjectRoot(): string {
   let dir = import.meta.dirname;

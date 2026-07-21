@@ -5,6 +5,9 @@ metadata:
   namespace: ai-arena
 spec:
   schedule: "*/1 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       template:
@@ -18,4 +21,13 @@ spec:
                 - configMapRef:
                     name: runner-config
                 - secretRef:
+                    name: arena-db-auth
+                - secretRef:
                     name: provider-keys
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi

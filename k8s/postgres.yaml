@@ -18,6 +18,8 @@ metadata:
 spec:
   serviceName: postgres
   replicas: 1
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       app: postgres
@@ -31,9 +33,15 @@ spec:
           image: postgres:16
           env:
             - name: POSTGRES_USER
-              value: arena
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-auth
+                  key: username
             - name: POSTGRES_PASSWORD
-              value: arena
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-auth
+                  key: password
             - name: POSTGRES_DB
               value: arena
           ports:
@@ -41,6 +49,28 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "arena"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "arena"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "arena"]
+            failureThreshold: 30
+            periodSeconds: 2
   volumeClaimTemplates:
     - metadata:
         name: data

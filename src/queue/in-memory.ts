@@ -9,6 +9,7 @@ export class InMemoryQueue implements TaskQueue {
   private pending: Task[] = [];
   private inFlight = new Map<string, Task>();
   private waiters: Waiter[] = [];
+  private dead: Task[] = [];
 
   private _notifyNext(): void {
     const w = this.waiters.shift();
@@ -59,6 +60,10 @@ export class InMemoryQueue implements TaskQueue {
     if (t) {
       this.inFlight.delete(taskId);
       t.attempts += 1;
+      if (t.attempts >= 5) {
+        this.dead.push(t);
+        return;
+      }
       this.pending.unshift(t);
       this._notifyNext();
     }
@@ -66,5 +71,9 @@ export class InMemoryQueue implements TaskQueue {
 
   async size(): Promise<number> {
     return this.pending.length + this.inFlight.size;
+  }
+
+  async close(): Promise<void> {
+    // No-op — in-memory state is lost on process exit.
   }
 }

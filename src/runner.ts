@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { outputRoot } from './paths.js';
-import { initDb } from './db/client.js';
+import { initDb } from './db/index.js';
 import { createQueue, type TaskQueue, type Task } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
@@ -16,6 +16,7 @@ import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
 import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
 import type { ToolExecutionContext } from './types.js';
+import { closeDb } from './db/index.js';
 
 export interface RunnerOptions {
   queue?: TaskQueue;
@@ -25,7 +26,8 @@ export interface RunnerOptions {
 
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const queue = opts.queue ?? createQueue();
-  const signal = opts.signal ?? new AbortController().signal;
+  const ac = new AbortController();
+  const signal = opts.signal ?? ac.signal;
   const logger = createLogger('ai-arena:runner');
 
   initDb(path.join(outputRoot(), 'arena.db'));
@@ -34,13 +36,51 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const registry = new ProviderRegistry();
   loadBuiltins(registry);
 
+  let runningTask: Task | null = null;
+
+  const shutdown = async () => {
+    logger.info('Runner shutting down...');
+    ac.abort();
+    const task = runningTask;
+    if (task) {
+      logger.info('Waiting for in-flight task to complete', { taskId: task.taskId });
+      const deadline = Date.now() + 30_000;
+      while (runningTask && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 250));
+      }
+      if (runningTask) {
+        logger.warn('Task did not finish within 30s, abandoning', { taskId: task.taskId });
+      }
+    }
+    if (queue.close) await queue.close();
+    await closeDb();
+    logger.info('Runner stopped');
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => { void shutdown(); });
+  process.on('SIGTERM', () => { void shutdown(); });
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled rejection', { error: String(reason) });
+  });
+  process.on('uncaughtException', (err) => {
+    logger.error('Uncaught exception', { error: err.message, stack: err.stack });
+    process.exit(1);
+  });
+
   logger.info('Runner starting');
+
+  const cleanupInterval = setInterval(() => {
+    CircuitBreaker.cleanup();
+  }, 300_000);
+  void cleanupInterval; // keep interval alive, never unref
 
   while (!signal.aborted) {
     let task: Task | null = null;
     try {
       task = await queue.dequeue(30000);
       if (!task) continue;
+      runningTask = task;
 
       logger.info('Task dequeued', { taskId: task.taskId, model: task.model, scenario: task.scenario });
 
@@ -151,10 +191,12 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Task failed', { taskId: task?.taskId, error: msg });
       if (task) await queue.nack(task._redisId ?? task.taskId, msg);
+    } finally {
+      runningTask = null;
     }
   }
 
-  logger.info('Runner stopped');
+  logger.info('Runner loop exited');
 }
 
 // Self-start when invoked directly (container entrypoint)

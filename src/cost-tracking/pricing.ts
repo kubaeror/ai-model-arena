@@ -1,5 +1,5 @@
 import { type ModelPricing, type TokenUsage, type CostBreakdown } from './types.js';
-import { getDb } from '../db/client.js';
+import { getDb } from '../db/index.js';
 
 /** Look up per-model pricing from the SQLite catalog. Returns null if not found. */
 export function getModelPricing(modelId: string): { input: number | null; output: number | null; cache_read: number | null; cache_write: number | null } | null {

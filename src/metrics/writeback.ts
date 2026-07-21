@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDb } from '../db/client.js';
+import { getDb } from '../db/index.js';
 import { aggregateLatency, computeTps } from './runtime.js';
 import { extractCacheMetrics } from './cache-metrics.js';
 import { matchModelToCanonical, type CatalogEntry } from '../catalog/match.js';

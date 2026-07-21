@@ -20,7 +20,7 @@ import yaml from 'js-yaml';
 import { Command } from 'commander';
 import { findProjectRoot, dbPath } from './paths.js';
 import { createLogger } from './logger/pino-logger.js';
-import { initDb } from './db/client.js';
+import { initDb } from './db/index.js';
 import { listRuns, getRunRecord } from './orchestrator/run-index.js';
 import {
   runScenarioForModels,

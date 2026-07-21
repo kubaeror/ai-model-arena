@@ -1,0 +1,39 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: arena-alerts
+  namespace: observability
+  labels:
+    app: prometheus
+spec:
+  groups:
+    - name: arena
+      rules:
+        - alert: HighErrorRate
+          expr: rate(arena_tasks_total{status="errored"}[5m]) / rate(arena_tasks_total[5m]) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High task error rate (>5% in 5m)"
+        - alert: RunnerDown
+          expr: up{job="arena-runner"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Runner pod is down"
+        - alert: QueueBacklog
+          expr: arena_queue_depth > 100
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Queue depth exceeds 100 for >10m"
+        - alert: Dashboard5xx
+          expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dashboard 5xx rate >1% in 5m"

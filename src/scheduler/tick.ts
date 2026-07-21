@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { getDb } from '../db/client.js';
+import { getDb } from '../db/index.js';
 import { CronExpressionParser } from 'cron-parser';
 
 export async function tickScheduler(): Promise<void> {

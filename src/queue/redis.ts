@@ -17,7 +17,14 @@ export class RedisStreamQueue implements TaskQueue {
 
   constructor(config: RedisQueueConfig) {
     this.config = config;
-    this.redis = new Redis(config.url);
+    this.redis = new Redis(config.url, {
+      maxRetriesPerRequest: 3,
+      retryStrategy(times: number) {
+        return Math.min(times * 200, 3_000);
+      },
+      connectTimeout: 10_000,
+      lazyConnect: false,
+    });
   }
 
   private async ensureGroup(stream: string): Promise<void> {
@@ -124,5 +131,16 @@ export class RedisStreamQueue implements TaskQueue {
     if (!provider) return 0;
     const dlqStream = dlqStreamKey(this.config.streamPrefix, provider);
     try { return await this.redis.xlen(dlqStream); } catch { return 0; }
+  }
+
+  async close(): Promise<void> {
+    try {
+      await Promise.race([
+        this.redis.quit(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Redis quit timed out after 5s')), 5_000)),
+      ]);
+    } catch {
+      this.redis.disconnect();
+    }
   }
 }

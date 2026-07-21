@@ -10,7 +10,7 @@ import { loadBudgetConfig, checkBudget } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
-import { initDb } from '../db/client.js';
+import { initDb } from '../db/index.js';
 import { outputRoot, dbPath } from '../paths.js';
 import { createQueue } from '../queue/index.js';
 import type { Task } from '../queue/types.js';

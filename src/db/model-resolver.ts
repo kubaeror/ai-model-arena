@@ -1,5 +1,5 @@
 import type { ProviderRow, ModelRow } from './schema.js';
-import { getDb } from './client.js';
+import { getDb } from './index.js';
 
 /**
  * A model resolved from the SQLite catalog, ready to be used by a worker run.

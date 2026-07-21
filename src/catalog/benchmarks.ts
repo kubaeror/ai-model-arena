@@ -1,5 +1,5 @@
 import type { Database } from 'better-sqlite3';
-import { getDb } from '../db/client.js';
+import { getDb } from '../db/index.js';
 import { ModelbenchResponseSchema, type ModelbenchResponse, ZeroEvalModelSchema } from './types.js';
 import { matchModelToCanonical, type CatalogEntry } from './match.js';
 import type { SyncResult } from './sync.js';

@@ -1,5 +1,6 @@
 // DEPRECATED: Non-PM2 utilities have moved to ./utils.ts
 // This file exists for backward compatibility while PM2 references are cleaned up.
+// eslint is configured to ignore no-explicit-any in this file (pm2 stubs).
 
 export {
   ARENA_PREFIX,
@@ -11,27 +12,19 @@ export {
   sleep,
 } from './utils.js';
 
-// PM2 stubs — no-ops. Use `any` return types to keep existing callers compilable.
+const noop = async (..._args: any[]): Promise<void> => {};
+const noopArr = async (..._args: any[]): Promise<any[]> => [];
+
 export const DASHBOARD_PROC_NAME = 'arena-dashboard';
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const pm2Connect = async (..._args: any[]): Promise<void> => {};
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const pm2Disconnect = async (..._args: any[]): Promise<void> => {};
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const pm2List = async (..._args: any[]): Promise<any[]> => [];
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const pm2Start = async (..._args: any[]): Promise<any> => ({});
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const pm2Delete = async (..._args: any[]): Promise<void> => {};
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const pm2Stop = async (..._args: any[]): Promise<void> => {};
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const pm2Restart = async (..._args: any[]): Promise<void> => {};
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const pm2Describe = async (..._args: any[]): Promise<any[]> => [];
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function isOnline(_p: any): boolean { return false; }
-export async function pm2ConnectPersistent(): Promise<void> {}
-export async function pm2DisconnectPersistent(): Promise<void> {}
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function pm2ListOnce(): Promise<any[]> { return []; }
+export const pm2Connect = noop;
+export const pm2Disconnect = noop;
+export const pm2List = noopArr;
+export const pm2Start = noop;
+export const pm2Delete = noop;
+export const pm2Stop = noop;
+export const pm2Restart = noop;
+export const pm2Describe = noopArr;
+export function isOnline(_p: unknown): boolean { return false; }
+export const pm2ConnectPersistent = noop;
+export const pm2DisconnectPersistent = noop;
+export const pm2ListOnce = noopArr;

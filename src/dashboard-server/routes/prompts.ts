@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
-import type { Request, Response } from 'express';
+import type { Express, Request, Response } from 'express';
 
-export function registerPromptRoutes(app: any): void {
+export function registerPromptRoutes(app: Express): void {
   app.post('/api/prompts/enqueue', (req: Request, res: Response) => {
     const { promptId, promptVersion, models, scenario } = req.body;
     if (!promptId || !models || !scenario) {

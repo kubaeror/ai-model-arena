@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { audit } from '../../auth/rbac.js';
+import type { AuthedRequest } from '../auth.js';
 import {
   listAnomalies,
   getAnomaly,
@@ -104,7 +105,7 @@ export function createAnomaliesRouter(): Router {
       res.status(404).json({ error: `Anomaly ${id} not found` });
       return;
     }
-    audit((req as any).user?.sub ?? 'system', 'anomaly.resolve', { type: 'anomaly', id: String(id) }, undefined, { resolvedAs }).catch(() => {});
+    audit((req as AuthedRequest).user?.sub ?? 'system', 'anomaly.resolve', { type: 'anomaly', id: String(id) }, undefined, { resolvedAs }).catch(() => {});
     res.json({ anomaly: updated });
   });
 

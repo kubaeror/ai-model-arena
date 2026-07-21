@@ -125,7 +125,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.descriptor.authScheme === 'bearer' && this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
     if (this.descriptor.headerName && this.apiKey) headers[this.descriptor.headerName] = this.apiKey;
-    return fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    return fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
   }
 
   private parseResponse(json: OpenAIResponse): ModelResponse {

@@ -1,6 +1,6 @@
-import type { Request, Response } from 'express';
+import type { Express, Request, Response } from 'express';
 
-export function registerOutputRoutes(app: any): void {
+export function registerOutputRoutes(app: Express): void {
   app.get('/api/output-mappings', (_req: Request, res: Response) => {
     res.json({ mappings: [] });
   });
