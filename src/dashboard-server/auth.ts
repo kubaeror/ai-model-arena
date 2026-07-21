@@ -69,7 +69,6 @@ function extractToken(req: Request): string | null {
   const h = req.headers.authorization ?? '';
   const m = /^Bearer\s+(.+)$/i.exec(h);
   if (m?.[1]) return m[1];
-  if (typeof req.query.token === 'string') return req.query.token;
   return null;
 }
 

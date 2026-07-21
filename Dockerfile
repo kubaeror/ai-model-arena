@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --include=dev
+RUN npm prune --production
 COPY tsconfig.json drizzle.config.ts drizzle.pg.config.ts ./
 COPY src ./src
 COPY configs ./configs

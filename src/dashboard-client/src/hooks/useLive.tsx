@@ -50,7 +50,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     let disposed = false;
 
     const connect = () => {
-      const ws = new WebSocket(`${wsUrl()}?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(`${wsUrl()}`, [token, 'access_token']);
       wsRef.current = ws;
       ws.onopen = () => setConnected(true);
       ws.onclose = () => {

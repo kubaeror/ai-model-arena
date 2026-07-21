@@ -93,10 +93,7 @@ export class LiveHub {
         .map((p) => p.trim())
         .find((p) => p !== 'access_token' && p.length > 0);
 
-      const url = new URL(info.req.url ?? '/', 'http://localhost');
-      const queryToken = url.searchParams.get('token');
-
-      const token = protocolToken ?? queryToken;
+      const token = protocolToken;
       if (!token) return false;
       return verifyToken(auth, token) != null;
     } catch {

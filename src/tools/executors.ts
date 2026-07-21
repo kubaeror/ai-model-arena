@@ -184,6 +184,10 @@ export const searchCode: ToolExecutor = async (args, ctx) => {
 
   let re: RegExp | null = null;
   if (useRegex) {
+    // ReDoS guard: limit regex length to prevent catastrophic backtracking
+    if (query.length > 500) {
+      return { content: 'Error: regular expression is too long (max 500 characters).', isError: true };
+    }
     try {
       re = new RegExp(query, caseSensitive ? 'g' : 'gi');
     } catch (e) {

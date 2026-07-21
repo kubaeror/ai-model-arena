@@ -69,7 +69,10 @@ export function saveBudgetState(rootDir: string, logger?: Logger): void {
     fs.mkdirSync(dir, { recursive: true });
   }
   
-  fs.writeFileSync(statePath, JSON.stringify(budgetState, null, 2));
+  // Atomic write: write to temp file, then rename (rename is atomic on POSIX)
+  const tmpPath = statePath + '.tmp.' + process.pid;
+  fs.writeFileSync(tmpPath, JSON.stringify(budgetState, null, 2));
+  fs.renameSync(tmpPath, statePath);
   logger?.debug('Budget state saved', { path: statePath });
 }
 
