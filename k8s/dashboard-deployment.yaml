@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: ai-arena
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dashboard
+          image: ai-arena/runner:latest
+          command: ["node", "dist/dashboard-server/server.js"]
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: provider-keys
+          env:
+            - name: DASHBOARD_PORT
+              value: "4000"
+            - name: DASHBOARD_USERNAME
+              value: admin
+            - name: DASHBOARD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-auth
+                  key: password
+            - name: DASHBOARD_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-auth
+                  key: jwt-secret
+          ports:
+            - containerPort: 4000
+          volumeMounts:
+            - name: outputs
+              mountPath: /var/arena/outputs
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: outputs
+          persistentVolumeClaim:
+            claimName: outputs

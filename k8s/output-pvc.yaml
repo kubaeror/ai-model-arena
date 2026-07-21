@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: outputs-pv
+  namespace: ai-arena
+spec:
+  accessModes: [ReadWriteMany]
+  capacity:
+    storage: 10Gi
+  hostPath:
+    path: /tmp/arena-outputs
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: outputs
+  namespace: ai-arena
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 10Gi

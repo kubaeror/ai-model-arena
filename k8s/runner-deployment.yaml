@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner-openai
+  namespace: ai-arena
+  labels:
+    app: runner
+    provider: openai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: runner
+      provider: openai
+  template:
+    metadata:
+      labels:
+        app: runner
+        provider: openai
+    spec:
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: ai-arena/runner:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: provider-keys
+          env:
+            - name: REDIS_CONSUMER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ARENA_PROVIDER_FILTER
+              value: openai
+          volumeMounts:
+            - name: outputs
+              mountPath: /var/arena/outputs
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      volumes:
+        - name: outputs
+          persistentVolumeClaim:
+            claimName: outputs
+        - name: tmp
+          emptyDir: {}

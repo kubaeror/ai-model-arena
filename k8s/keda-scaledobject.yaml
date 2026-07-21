@@ -1,0 +1,19 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-openai-scaler
+  namespace: ai-arena
+spec:
+  scaleTargetRef:
+    name: runner-openai
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.ai-arena.svc:6379
+        listType: STREAM
+        length: "5"
+        stream: arena:tasks:openai
