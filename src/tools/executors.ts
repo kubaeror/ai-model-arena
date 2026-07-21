@@ -11,6 +11,7 @@ const execAsync = promisify(exec);
 const MAX_READ_BYTES = 200 * 1024; // 200 KB per read
 const MAX_LIST_FILES = 5000;
 const MAX_SEARCH_MATCHES = 200;
+const MAX_WRITE_BYTES = 5 * 1024 * 1024; // 5 MB per write
 
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache', '.npm']);
 
@@ -50,9 +51,11 @@ export const readFile: ToolExecutor = async (args, ctx) => {
   if (!fs.existsSync(abs)) return { content: `Error: file not found: ${rel}`, isError: true };
   const stat = fs.statSync(abs);
   if (!stat.isFile()) return { content: `Error: not a file: ${rel}`, isError: true };
+  if (stat.size > MAX_READ_BYTES) {
+    return { content: `Error: file is ${stat.size} bytes, exceeds max read size of ${MAX_READ_BYTES} bytes.`, isError: true };
+  }
   const buf = fs.readFileSync(abs);
-  let text = buf.subarray(0, MAX_READ_BYTES).toString('utf8');
-  if (buf.length > MAX_READ_BYTES) text += `\n…[truncated, file is ${buf.length} bytes]`;
+  const text = buf.toString('utf8');
   return { content: text, isError: false };
 };
 
@@ -61,10 +64,14 @@ export const writeFile: ToolExecutor = async (args, ctx) => {
   const rel = String(args.path ?? '');
   if (!rel) return { content: 'Error: "path" is required.', isError: true };
   const content = String(args.content ?? '');
+  const byteLen = Buffer.byteLength(content, 'utf8');
+  if (byteLen > MAX_WRITE_BYTES) {
+    return { content: `Error: content is ${byteLen} bytes, exceeds max write size of ${MAX_WRITE_BYTES} bytes.`, isError: true };
+  }
   const abs = safeResolve(ctx.sandboxDir, rel);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content, 'utf8');
-  return { content: `Wrote ${Buffer.byteLength(content)} bytes to ${rel}`, isError: false };
+  return { content: `Wrote ${byteLen} bytes to ${rel}`, isError: false };
 };
 
 // ── list_files ──────────────────────────────────────────────────────────────
