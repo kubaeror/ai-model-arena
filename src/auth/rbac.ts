@@ -1,9 +1,11 @@
+import type { Request, Response, NextFunction } from 'express';
+
 const ROLE_ORDER = { viewer: 0, editor: 1, admin: 2 } as const;
 type Role = keyof typeof ROLE_ORDER;
 
 export function requireRole(min: Role) {
-  return (req: { user?: { role?: string } }, res: { status: (s: number) => { json: (o: unknown) => void } }, next: () => void) => {
-    const role = req.user?.role as string | undefined;
+  return (req: Request, res: Response, next: NextFunction) => {
+    const role = (req as any).user?.role as string | undefined;
     const order = ROLE_ORDER as Record<string, number>;
     if (!role || (order[role] ?? -1) < (order[min] ?? 0)) {
       res.status(403).json({ error: 'forbidden' });

@@ -13,6 +13,8 @@ import { initDb } from '../db/client.js';
 import { ensureFresh } from '../catalog/cache.js';
 import { startCatalogCron } from '../catalog/cron.js';
 import { loadAuthConfig, requireAuth, verifyCredentials, signToken, type AuthedRequest } from './auth.js';
+import { requireRole } from '../auth/rbac.js';
+import { maskSecrets } from './secrets.js';
 import { loadApiKeysConfig, requireApiKey } from './auth-api.js';
 import { LiveHub } from './live.js';
 import { createModelsRouter } from './routes/models.js';
@@ -100,18 +102,25 @@ async function start(): Promise<void> {
     res.json({ token: signToken(auth, username), username });
   });
 
-  // ── Authenticated API routers (JWT) ─────────────────────────────────────────
-  app.use('/api/models', requireAuth(auth), createModelsRouter());
-  app.use('/api/scenarios', requireAuth(auth), createScenariosRouter());
-  app.use('/api/runs', requireAuth(auth), createRunsRouter());
-  app.use('/api/traces', requireAuth(auth), createTracesRouter());
-  app.use('/api/anomalies', requireAuth(auth), createAnomaliesRouter());
-  app.use('/api/observability', requireAuth(auth), createObservabilityRouter());
-  app.use('/api/webhooks', requireAuth(auth), createWebhooksRouter());
-  app.use('/api/providers', requireAuth(auth), createProvidersRouter());
-  app.use('/api/catalog', requireAuth(auth), createCatalogRouter());
-  app.use('/api/metrics', requireAuth(auth), createMetricsRouter());
-  app.use('/api/cache', requireAuth(auth), createCacheRouter());
+  // ── Secrets masking on all JSON responses ──────────────────────────────
+  app.use((_req, res, next) => {
+    const orig = res.json.bind(res) as (body: unknown) => ReturnType<typeof res.json>;
+    res.json = (body: unknown) => orig(maskSecrets(body));
+    next();
+  });
+
+  // ── Authenticated API routers (JWT + RBAC) ─────────────────────────────
+  app.use('/api/models', requireAuth(auth), requireRole('viewer'), createModelsRouter());
+  app.use('/api/scenarios', requireAuth(auth), requireRole('viewer'), createScenariosRouter());
+  app.use('/api/runs', requireAuth(auth), requireRole('viewer'), createRunsRouter());
+  app.use('/api/traces', requireAuth(auth), requireRole('viewer'), createTracesRouter());
+  app.use('/api/anomalies', requireAuth(auth), requireRole('viewer'), createAnomaliesRouter());
+  app.use('/api/observability', requireAuth(auth), requireRole('viewer'), createObservabilityRouter());
+  app.use('/api/webhooks', requireAuth(auth), requireRole('admin'), createWebhooksRouter());
+  app.use('/api/providers', requireAuth(auth), requireRole('admin'), createProvidersRouter());
+  app.use('/api/catalog', requireAuth(auth), requireRole('viewer'), createCatalogRouter());
+  app.use('/api/metrics', requireAuth(auth), requireRole('viewer'), createMetricsRouter());
+  app.use('/api/cache', requireAuth(auth), requireRole('viewer'), createCacheRouter());
 
   // ── Public API (API key auth + rate limiting), versioned under /api/v1 ────────
   app.use('/api/v1/models', requireApiKey(['models:read']), createModelsRouter());

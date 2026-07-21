@@ -13,11 +13,14 @@ import { ConversationLogger } from './logger/conversation-logger.js';
 import { Sandbox } from './sandbox/sandbox.js';
 import { runAgentLoop } from './agent-loop/loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
+import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
+import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
 import type { ToolExecutionContext } from './types.js';
 
 export interface RunnerOptions {
   queue?: TaskQueue;
   signal?: AbortSignal;
+  fallbackChain?: FallbackConfig;
 }
 
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
@@ -87,47 +90,67 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         continue;
       }
 
-      const adapter = registry.createAdapter(
-        resolved.providerId,
-        resolved.apiModelId,
-        { logger: logger.child('adapter') },
-      );
-
+      let currentProvider = resolved.providerId;
+      let currentModel = resolved.apiModelId;
       const executors = buildToolExecutors();
+      let adapter = registry.createAdapter(currentProvider, currentModel, { logger: logger.child('adapter') });
+      let loopResult;
+      let maxFallbackHops = 3;
 
-      const result = await runAgentLoop({
-        adapter,
-        tools: TOOL_DEFINITIONS,
-        executors,
-        systemPrompt: scenario.systemPrompt,
-        task: scenario.task,
-        maxTurns: (task.config.maxTurns as number) ?? scenario.maxTurns ?? 20,
-        toolCtx,
-        conv,
-        logger: logger.child('loop'),
-        onTurnComplete: async (turn) => {
-          await store.appendMessage(session.id, {
-            id: crypto.randomUUID(),
-            sessionId: session.id,
-            turn,
-            role: 'assistant',
-            content: null,
-            toolCalls: null,
-            toolCallId: null,
-            tokenInput: null,
-            tokenOutput: null,
-            createdAt: new Date().toISOString(),
-          });
-        },
-      });
+      while (maxFallbackHops >= 0) {
+        const breaker = CircuitBreaker.for(currentProvider, currentModel);
+        try {
+          loopResult = await breaker.exec(() => runAgentLoop({
+            adapter,
+            tools: TOOL_DEFINITIONS,
+            executors,
+            systemPrompt: scenario.systemPrompt,
+            task: scenario.task,
+            maxTurns: (task!.config.maxTurns as number) ?? scenario.maxTurns ?? 20,
+            toolCtx,
+            conv,
+            logger: logger.child('loop'),
+            onTurnComplete: async (turn) => {
+              await store.appendMessage(session.id, {
+                id: crypto.randomUUID(),
+                sessionId: session.id,
+                turn,
+                role: 'assistant',
+                content: null,
+                toolCalls: null,
+                toolCallId: null,
+                tokenInput: null,
+                tokenOutput: null,
+                createdAt: new Date().toISOString(),
+              });
+            },
+          }));
+          break;
+        } catch (err) {
+          if (err instanceof CircuitOpenError && opts.fallbackChain) {
+            const next = resolveFallback({ provider: currentProvider, model: currentModel }, opts.fallbackChain);
+            if (next && maxFallbackHops > 0) {
+              logger.warn('Falling back', { from: `${currentProvider}/${currentModel}`, to: `${next.provider}/${next.model}` });
+              currentProvider = next.provider;
+              currentModel = next.model;
+              adapter = registry.createAdapter(currentProvider, currentModel, { logger: logger.child('adapter') });
+              maxFallbackHops--;
+              continue;
+            }
+          }
+          throw err;
+        }
+      }
 
-      logger.info('Agent loop finished', { taskId: task.taskId, stopReason: result.stopReason, turns: result.turnsUsed });
+      const result = loopResult!;
+
+      logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed });
       await store.updateSessionStatus(session.id, result.errors.length > 0 ? 'errored' : 'completed');
-      await queue.ack(task.taskId);
+      await queue.ack(task!._redisId ?? task!.taskId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Task failed', { taskId: task?.taskId, error: msg });
-      if (task) await queue.nack(task.taskId, msg);
+      if (task) await queue.nack(task._redisId ?? task.taskId, msg);
     }
   }
 

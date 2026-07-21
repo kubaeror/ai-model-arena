@@ -1,4 +1,5 @@
 import { Redis } from 'ioredis';
+import { propagation, context } from '@opentelemetry/api';
 import type { Task, TaskQueue } from './types.js';
 import type { RedisQueueConfig } from './redis-config.js';
 
@@ -28,6 +29,10 @@ export class RedisStreamQueue implements TaskQueue {
   }
 
   async enqueue(task: Task): Promise<void> {
+    const carrier: Record<string, string> = {};
+    propagation.inject(context.active(), carrier);
+    if (carrier.traceparent) task._traceparent = carrier.traceparent;
+
     const stream = streamKey(this.config.streamPrefix, task.provider);
     await this.ensureGroup(stream);
     const fields: (string | number)[] = ['task', JSON.stringify(task)];
@@ -60,6 +65,9 @@ export class RedisStreamQueue implements TaskQueue {
         const task = JSON.parse(taskData.task ?? '{}') as Task;
         task._redisId = id;
         if (taskData.traceparent) task._traceparent = taskData.traceparent;
+        if (task._traceparent) {
+          propagation.extract(context.active(), { traceparent: task._traceparent });
+        }
         return task;
       }
     }

@@ -6,6 +6,7 @@
 - [x] regression.ts:149 — outputs path now uses outputRoot()
 - [x] Task interface: added _redisId, _traceparent fields
 - [x] Redis ack/nack implemented with DLQ support
+- [x] Redis integration tests pass against real server (docker redis:7)
 - [x] Runner wired for _redisId in ack/nack calls
 - [x] ConversationLogger: added disableFile option, used in runner
 - [x] Scheduler tick.ts: uses cron-parser, actually enqueues tasks
