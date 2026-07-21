@@ -28,6 +28,12 @@
     "node": ">=20.11"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.220.0",
+    "@opentelemetry/instrumentation-http": "^0.220.0",
+    "@opentelemetry/resources": "^2.9.0",
+    "@opentelemetry/sdk-node": "^0.220.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0",
     "argon2": "^0.45.0",
     "better-sqlite3": "^12.11.1",
     "commander": "^12.1.0",

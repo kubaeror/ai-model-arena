@@ -234,6 +234,20 @@ export const audit_log = pgTable('audit_log', {
   at: text('at').notNull(),
 });
 
+export const files = pgTable('files', {
+  id: text('id').primaryKey(),
+  run_id: text('run_id').notNull(),
+  path: text('path').notNull(),
+  prompt_id: text('prompt_id'),
+  prompt_version: integer('prompt_version'),
+  model: text('model').notNull(),
+  config_hash: text('config_hash'),
+  task_id: text('task_id'),
+  trace_id: text('trace_id'),
+  produced_at: text('produced_at').notNull(),
+  produced_by_tool: text('produced_by_tool'),
+});
+
 // ── Legacy type exports (kept for existing consumers) ──
 
 export interface ProviderRow {
