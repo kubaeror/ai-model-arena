@@ -208,6 +208,34 @@ export const model_calls = sqliteTable('model_calls', {
   uniqueIndex('uq_model_calls_session_turn').on(table.session_id, table.turn),
 ]);
 
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  username: text('username').notNull().unique(),
+  password_hash: text('password_hash').notNull(),
+  created_at: text('created_at').notNull(),
+});
+
+export const roles = sqliteTable('roles', {
+  id: text('id').primaryKey(),
+  description: text('description'),
+});
+
+export const user_roles = sqliteTable('user_roles', {
+  user_id: text('user_id').notNull().references(() => users.id),
+  role_id: text('role_id').notNull().references(() => roles.id),
+});
+
+export const audit_log = sqliteTable('audit_log', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  actor: text('actor').notNull(),
+  action: text('action').notNull(),
+  entity_type: text('entity_type').notNull(),
+  entity_id: text('entity_id'),
+  before: text('before'),
+  after: text('after'),
+  at: text('at').notNull(),
+});
+
 // ── Legacy type exports (kept for existing consumers of these interfaces) ──
 
 export interface ProviderRow {
