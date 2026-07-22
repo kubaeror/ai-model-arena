@@ -1,5 +1,5 @@
 # ── build stage ──
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS build
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ libargon2-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
@@ -12,7 +12,7 @@ COPY drizzle ./drizzle
 RUN npm run build
 
 # ── dashboard client build ──
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS client-build
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS client-build
 WORKDIR /app/src/dashboard-client
 COPY src/dashboard-client/package*.json ./
 RUN npm ci
@@ -20,7 +20,7 @@ COPY src/dashboard-client/ ./
 RUN npm run build
 
 # ── runtime stage ──
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS runtime
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends libargon2-1 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
