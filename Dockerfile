@@ -1,18 +1,18 @@
 # ── build stage ──
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS build
+FROM node:22-bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ libargon2-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --include=dev
-RUN npm prune --production
 COPY tsconfig.json drizzle.config.ts drizzle.pg.config.ts ./
 COPY src ./src
 COPY configs ./configs
 COPY drizzle ./drizzle
 RUN npm run build
+RUN npm prune --production
 
 # ── dashboard client build ──
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS client-build
+FROM node:22-bookworm-slim AS client-build
 WORKDIR /app/src/dashboard-client
 COPY src/dashboard-client/package*.json ./
 RUN npm ci
@@ -20,7 +20,7 @@ COPY src/dashboard-client/ ./
 RUN npm run build
 
 # ── runtime stage ──
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS runtime
+FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends libargon2-1 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
