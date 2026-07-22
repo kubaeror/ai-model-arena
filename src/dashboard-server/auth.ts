@@ -110,13 +110,49 @@ export function verifyToken(cfg: AuthConfig, token: string): { sub: string; role
 export interface AuthedRequest extends Request {
   user?: { sub: string; role: string };
   correlationId?: string;
+  clientIp?: string;
 }
 
 function extractToken(req: Request): string | null {
+  // 1. Authorization: Bearer <token> header (standard)
   const h = req.headers.authorization ?? '';
   const m = /^Bearer\s+(.+)$/i.exec(h);
   if (m?.[1]) return m[1];
+  // 2. httpOnly cookie 'arena_token' (production — XSS-resistant)
+  const cookies = req.headers.cookie ?? '';
+  const cm = /(?:^|;\s*)arena_token=([^;]+)/.exec(cookies);
+  if (cm?.[1]) return cm[1];
   return null;
+}
+
+/** Set the JWT as an httpOnly, SameSite cookie (production best practice). */
+export function setTokenCookie(res: Response, token: string, cfg: AuthConfig): void {
+  const maxAge = parseExpiresInToSeconds(cfg.expiresIn);
+  res.cookie('arena_token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: maxAge * 1000,
+    path: '/',
+  });
+}
+
+/** Clear the auth cookie. */
+export function clearTokenCookie(res: Response): void {
+  res.clearCookie('arena_token', { path: '/' });
+}
+
+function parseExpiresInToSeconds(expiresIn: string): number {
+  const m = /^(\d+)([hmsd])$/.exec(expiresIn);
+  if (!m) return 43200; // default 12h
+  const num = parseInt(m[1]!, 10);
+  switch (m[2]) {
+    case 's': return num;
+    case 'm': return num * 60;
+    case 'h': return num * 3600;
+    case 'd': return num * 86400;
+    default: return 43200;
+  }
 }
 
 /** Express middleware: require a valid Bearer JWT. Checks revocation blacklist after verify. */

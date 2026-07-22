@@ -15,7 +15,7 @@ import { metricsHandler } from '../observability/metrics.js';
 import { initDb, closeDb, getDb } from '../db/index.js';
 import { ensureFresh } from '../catalog/cache.js';
 import { startCatalogCron, stopCatalogCron } from '../catalog/cron.js';
-import { loadAuthConfig, requireAuth, verifyCredentials, signToken, revokeToken, type AuthedRequest } from './auth.js';
+import { loadAuthConfig, requireAuth, verifyCredentials, signToken, revokeToken, setTokenCookie, clearTokenCookie, type AuthedRequest } from './auth.js';
 import { requireRole } from '../auth/rbac.js';
 import { maskSecrets } from './secrets.js';
 import { loadApiKeysConfig, requireApiKey } from './auth-api.js';
@@ -85,6 +85,7 @@ async function start(): Promise<void> {
   // ── Correlation ID ──────────────────────────────────────────────────────
   app.use((req, _res, next) => {
     (req as AuthedRequest).correlationId = (req.headers['x-request-id'] as string) ?? crypto.randomUUID();
+    (req as AuthedRequest).clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.ip ?? '';
     next();
   });
 
@@ -168,7 +169,10 @@ async function start(): Promise<void> {
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
-    res.json({ token: signToken(auth, username), username });
+    const token = signToken(auth, username);
+    // Set httpOnly cookie in addition to returning the token in the response body
+    setTokenCookie(res, token, auth);
+    res.json({ token, username });
   });
 
   // ── Auth logout (revoke token) ──────────────────────────────────────────
@@ -178,6 +182,7 @@ async function start(): Promise<void> {
     if (m?.[1]) {
       await revokeToken(m[1]);
     }
+    clearTokenCookie(res);
     res.json({ ok: true });
   });
 

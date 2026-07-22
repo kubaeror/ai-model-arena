@@ -54,6 +54,10 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
   const tps = computeTps(spans, completionTokens);
   const cache = extractCacheMetrics(result.tokenUsage ?? {});
 
+  // Note: objective quality metrics (loop detection, turn efficiency, tool stats)
+  // are computed during anomaly detection via analyzeRun() and judge scoring.
+  // No schema changes needed for the existing model_runtime_stats table.
+
   const now = new Date().toISOString();
   db.prepare(`
     INSERT INTO model_runtime_stats (model_id, run_id, latency_p50_ms, latency_p95_ms, tps, ttft_ms, cache_hit_rate, cache_read_tokens, cache_write_tokens, cost_usd, success, measured_at)
