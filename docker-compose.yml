@@ -51,6 +51,7 @@ services:
       DASHBOARD_PORT: "4000"
       DASHBOARD_USERNAME: admin
       DASHBOARD_PASSWORD: change-me
+      DASHBOARD_JWT_SECRET: dev-jwt-secret-change-in-production-at-least-32-chars
     depends_on:
       postgres:
         condition: service_healthy
