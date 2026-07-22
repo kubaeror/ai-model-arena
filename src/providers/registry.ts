@@ -4,6 +4,7 @@ import { OpenAICompatAdapter } from './adapters/openai-compat.js';
 import { AnthropicAdapter } from './adapters/anthropic.js';
 import { GoogleAdapter } from './adapters/google.js';
 import { BedrockAdapter } from './adapters/bedrock.js';
+import { validateProviderUrl } from './url-validator.js';
 import type { Database } from 'better-sqlite3';
 import type { ProviderRow } from '../db/schema.js';
 
@@ -30,6 +31,16 @@ export class ProviderRegistry {
   createAdapter(providerId: string, modelId: string, opts: CreateAdapterOpts): ModelAdapter {
     const d = this.descriptors.get(providerId);
     if (!d) throw new Error(`Unknown provider: ${providerId}`);
+    
+    // Re-validate custom provider URLs on every adapter construction
+    // (SSRF defense: a previously safe URL could have been modified in DB)
+    if (!d.isBuiltin && d.apiBase) {
+      const validation = validateProviderUrl(d.apiBase);
+      if (!validation.ok) {
+        throw new Error(`Provider "${providerId}" URL failed re-validation: ${validation.error}`);
+      }
+    }
+    
     const AdapterClass = ADAPTER_CLASSES[d.adapter];
     if (!AdapterClass) throw new Error(`Unknown adapter kind: ${d.adapter}`);
     return new AdapterClass(d, modelId, opts);

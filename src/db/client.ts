@@ -12,6 +12,24 @@ function migrationsFolder(): string {
 }
 
 /**
+ * Apply indices that can't be expressed as single-statement Drizzle migrations.
+ * Called after Drizzle migrations run on each DB init.
+ */
+function applyRuntimeIndices(sqlite: DatabaseType): void {
+  const stmts = [
+    `CREATE INDEX IF NOT EXISTS idx_audit_actor_at ON audit_log (actor, "at")`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log (entity_type, entity_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log ("at")`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log (action)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_run_models_run_model ON run_models (run_id, model)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_user_roles_user_role ON user_roles (user_id, role_id)`,
+  ];
+  for (const stmt of stmts) {
+    try { sqlite.prepare(stmt).run(); } catch { /* index may already exist */ }
+  }
+}
+
+/**
  * Initialise (or return) the shared SQLite database singleton.
  *
  * WARNING — SINGLETON: Only the first call with a given path is honoured.
@@ -27,6 +45,7 @@ export function initDb(dbPath: string): DatabaseType {
   sqlite.pragma('wal_autocheckpoint = 1000');
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder: migrationsFolder() });
+  applyRuntimeIndices(sqlite);
   dbInstance = sqlite;
   return sqlite;
 }

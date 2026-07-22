@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: observability
+  labels:
+    grafana_dashboard: "1"
+data:
+  arena-overview.json: |
+    {
+      "title": "Arena Overview",
+      "uid": "arena-overview",
+      "panels": [
+        {
+          "title": "Task Rate",
+          "type": "graph",
+          "targets": [
+            { "expr": "rate(arena_tasks_total[5m])", "legendFormat": "{{model}}" }
+          ]
+        },
+        {
+          "title": "Task Duration (p95)",
+          "type": "graph",
+          "targets": [
+            { "expr": "histogram_quantile(0.95, rate(arena_task_duration_seconds_bucket[5m]))", "legendFormat": "{{model}}" }
+          ]
+        },
+        {
+          "title": "Queue Depth",
+          "type": "graph",
+          "targets": [
+            { "expr": "arena_queue_depth", "legendFormat": "{{provider}}" }
+          ]
+        },
+        {
+          "title": "Error Rate",
+          "type": "stat",
+          "targets": [
+            { "expr": "rate(arena_tasks_total{status=\"errored\"}[5m]) / rate(arena_tasks_total[5m])" }
+          ]
+        },
+        {
+          "title": "Active Tasks",
+          "type": "stat",
+          "targets": [
+            { "expr": "arena_tasks_active" }
+          ]
+        }
+      ]
+    }
+  arena-cost.json: |
+    {
+      "title": "Arena Cost Tracking",
+      "uid": "arena-cost",
+      "panels": [
+        {
+          "title": "Cost per Model (Daily)",
+          "type": "graph",
+          "targets": []
+        },
+        {
+          "title": "Cost Trend (Total)",
+          "type": "graph",
+          "targets": []
+        }
+      ]
+    }
+  arena-latency.json: |
+    {
+      "title": "Arena Latency Analysis",
+      "uid": "arena-latency",
+      "panels": [
+        {
+          "title": "Time To First Token",
+          "type": "heatmap",
+          "targets": []
+        },
+        {
+          "title": "Tool Execution Latency",
+          "type": "graph",
+          "targets": []
+        }
+      ]
+    }
+  arena-anomalies.json: |
+    {
+      "title": "Arena Anomalies",
+      "uid": "arena-anomalies",
+      "panels": [
+        {
+          "title": "Anomaly Count by Type",
+          "type": "stat",
+          "targets": []
+        },
+        {
+          "title": "Recent Anomalies",
+          "type": "table",
+          "targets": []
+        }
+      ]
+    }

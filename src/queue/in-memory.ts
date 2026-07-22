@@ -10,6 +10,8 @@ export class InMemoryQueue implements TaskQueue {
   private inFlight = new Map<string, Task>();
   private waiters: Waiter[] = [];
   private dead: Task[] = [];
+  private dedupKeys = new Map<string, number>(); // key → timestamp
+  private dedupTtlMs = 86_400_000; // 24 hours
 
   private _notifyNext(): void {
     const w = this.waiters.shift();
@@ -26,6 +28,12 @@ export class InMemoryQueue implements TaskQueue {
   }
 
   async enqueue(task: Task): Promise<void> {
+    // Idempotency guard: skip if a task with the same key was enqueued recently
+    if (task.idempotencyKey) {
+      const prev = this.dedupKeys.get(task.idempotencyKey);
+      if (prev && Date.now() - prev < this.dedupTtlMs) return;
+      this.dedupKeys.set(task.idempotencyKey, Date.now());
+    }
     this.pending.push(task);
     this._notifyNext();
   }

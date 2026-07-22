@@ -8,6 +8,8 @@ spec:
   selector:
     matchLabels:
       app: dashboard
+  # NOTE: With replicas=1 and maxUnavailable=1, this PDB allows voluntary
+  # evictions (draining). For production with replicas >= 2, use minAvailable: 1.
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -20,6 +22,8 @@ spec:
     matchLabels:
       app: runner
       provider: openai
+  # NOTE: maxUnavailable: 1 allows draining even with 1 replica.
+  # KEDA creates new pods during scale-up before old ones terminate.
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -27,10 +31,13 @@ metadata:
   name: postgres-pdb
   namespace: ai-arena
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: postgres
+  # WARNING: maxUnavailable: 1 means a single-replica postgres can be
+  # evicted during a drain. In production, deploy a multi-node postgres
+  # cluster (Patroni/CloudNativePG) and set minAvailable: 1.
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -38,7 +45,10 @@ metadata:
   name: redis-pdb
   namespace: ai-arena
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: redis
+  # WARNING: maxUnavailable: 1 means a single-replica redis can be
+  # evicted during a drain. In production, deploy Redis Sentinel/Cluster
+  # and set minAvailable: 1.

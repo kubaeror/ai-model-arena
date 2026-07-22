@@ -73,3 +73,19 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix src/dashboard-client
       - run: npm --prefix src/dashboard-client run test
+
+  k8s-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker://ghcr.io/yannh/kubeconform:latest
+        with:
+          args: -verbose -summary k8s/
+
+  dockerfile-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        with:
+          dockerfile: Dockerfile

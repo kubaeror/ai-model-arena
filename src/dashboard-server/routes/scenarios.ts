@@ -120,6 +120,11 @@ export function createScenariosRouter(): Router {
   // POST /api/scenarios — create
   router.post('/', requireRole('editor'), (req, res) => {
     const body = req.body ?? {};
+    // Permissive shell policy requires admin role
+    if (body.shellPolicy === 'permissive' && (req as AuthedRequest).user?.role !== 'admin') {
+      res.status(403).json({ error: 'Permissive shell policy requires admin approval' });
+      return;
+    }
     let starterFiles = body.starterFiles;
     if (Array.isArray(body.starterFilesContent) && body.starterFilesContent.length) {
       const name = String(body.name ?? '');
@@ -137,6 +142,11 @@ export function createScenariosRouter(): Router {
 
   // PUT /api/scenarios/:name — edit (optionally rename)
   router.put('/:name', requireRole('editor'), (req, res) => {
+    // Permissive shell policy requires admin role
+    if (req.body?.shellPolicy === 'permissive' && (req as AuthedRequest).user?.role !== 'admin') {
+      res.status(403).json({ error: 'Permissive shell policy requires admin approval' });
+      return;
+    }
     const p = resolveAndValidate(req.params.name as string);
     if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {

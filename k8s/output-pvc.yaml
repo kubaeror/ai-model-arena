@@ -1,14 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────
+# Outputs Storage — Runner sandbox + result artifacts.
+# ─────────────────────────────────────────────────────────────────────
+#
+# MINIKUBE / SINGLE-NODE DEV ONLY:
+#   Use the hostPath PV below. It will NOT work on multi-node clusters.
+#
+# PRODUCTION:
+#   Remove the hostPath PV and PersistentVolume below. Replace with a
+#   ReadWriteMany StorageClass-backed PVC. Recommended options:
+#     - AWS EFS (efs.csi.aws.com)
+#     - GCP Filestore
+#     - Azure Files
+#     - NFS (nfs.csi.k8s.io)
+#     - CephFS (rook-ceph)
+#
+#   Example production PVC:
+#   ---
+#   apiVersion: v1
+#   kind: PersistentVolumeClaim
+#   metadata:
+#     name: outputs
+#     namespace: ai-arena
+#   spec:
+#     accessModes: [ReadWriteMany]
+#     storageClassName: efs-sc  # or nfs-client, etc.
+#     resources:
+#       requests:
+#         storage: 100Gi
+# ─────────────────────────────────────────────────────────────────────
+
+---
+# ⚠️  Dev-only hostPath PV — NOT for production.
 apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: outputs-pv
   namespace: ai-arena
+  labels:
+    storage-tier: outputs
 spec:
   accessModes: [ReadWriteMany]
   capacity:
     storage: 10Gi
+  persistentVolumeReclaimPolicy: Retain
   hostPath:
     path: /tmp/arena-outputs
+    type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -20,3 +57,8 @@ spec:
   resources:
     requests:
       storage: 10Gi
+  # For production: replace with a StorageClass-backed PVC and remove the
+  # hostPath PV above. The selector below binds to the dev PV by default.
+  # selector:
+  #   matchLabels:
+  #     storage-tier: outputs

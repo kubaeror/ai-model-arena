@@ -1,0 +1,145 @@
+# Promtail DaemonSet — ships container logs from stdout to Loki.
+# Deploy after Loki is running in the observability namespace.
+# This bridges the gap where Pino writes structured JSON to stdout
+# but nothing ships it to Loki.
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: observability
+spec:
+  selector:
+    matchLabels:
+      app: promtail
+  template:
+    metadata:
+      labels:
+        app: promtail
+    spec:
+      serviceAccountName: promtail
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: promtail
+          image: grafana/promtail:3.2.0
+          args:
+            - -config.file=/etc/promtail/promtail.yaml
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          ports:
+            - containerPort: 3101
+              name: http-metrics
+          volumeMounts:
+            - name: config
+              mountPath: /etc/promtail
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: pods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: promtail-config
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+        - name: pods
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: observability
+data:
+  promtail.yaml: |
+    server:
+      http_listen_port: 3101
+      grpc_listen_port: 0
+
+    positions:
+      filename: /tmp/positions.yaml
+
+    clients:
+      - url: http://loki.observability:3100/loki/api/v1/push
+
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_promtail_scrape]
+            action: keep
+            regex: true
+        pipeline_stages:
+          - drop:
+              source: namespace
+              expression: "observability"
+      - job_name: arena-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [ai-arena]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: promtail
+rules:
+  - apiGroups: [""]
+    resources: [pods, nodes, nodes/proxy]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: promtail
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: observability
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: observability

@@ -1,0 +1,10 @@
+models:
+  - gpt-4o
+  - claude-sonnet-4
+scenarios:
+  - backend-api
+baselineDir: outputs/baselines
+thresholds:
+  scoreDrop: 1.0
+  tokenIncrease: 0.5
+  timeIncrease: 0.5

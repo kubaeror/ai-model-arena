@@ -10,6 +10,55 @@ export interface AuthConfig {
   generatedPassword?: string;
 }
 
+// Token revocation blacklist — in-memory by default, Redis-backed if DASHBOARD_REDIS_URL is set.
+// Entries include the token's exp claim so we can auto-purge expired entries.
+const blacklist = new Map<string, number>();
+let blacklistRedis: Awaited<ReturnType<typeof getRedisClient>> | null = null;
+
+async function getRedisClient() {
+  const url = process.env.DASHBOARD_REDIS_URL;
+  if (!url) return null;
+  try {
+    const { Redis } = await import('ioredis');
+    return new Redis(url, { maxRetriesPerRequest: 2, lazyConnect: true, connectTimeout: 5000 });
+  } catch { return null; }
+}
+
+/** Add a token to the revocation blacklist. Stores the expiry claim for cleanup. */
+export async function revokeToken(token: string): Promise<void> {
+  try {
+    const payload = jwt.decode(token) as { exp?: number } | null;
+    if (!payload?.exp) return;
+    const redis = blacklistRedis ?? (blacklistRedis = await getRedisClient());
+    if (redis) {
+      try { await redis.set(`arena:revoked:${token}`, '1', 'EXAT', payload.exp); } catch { /* fall through to memory */ }
+      return;
+    }
+  } catch { /* non-fatal */ }
+  try {
+    const decoded = jwt.decode(token) as { exp?: number } | null;
+    if (decoded?.exp) blacklist.set(token, decoded.exp);
+  } catch { /* ignore */ }
+}
+
+/** Check if a token has been revoked. */
+async function isRevoked(token: string): Promise<boolean> {
+  const redis = blacklistRedis;
+  if (redis) {
+    try { return (await redis.exists(`arena:revoked:${token}`)) === 1; } catch { /* fall through */ }
+  }
+  const exp = blacklist.get(token);
+  if (!exp) return false;
+  if (Date.now() / 1000 > exp) { blacklist.delete(token); return false; }
+  return true;
+}
+
+// Periodic purge of expired entries from the in-memory blacklist
+setInterval(() => {
+  const now = Date.now() / 1000;
+  for (const [key, exp] of blacklist) { if (exp <= now) blacklist.delete(key); }
+}, 300_000).unref();
+
 /**
  * Credentials live in env vars (DASHBOARD_USERNAME / DASHBOARD_PASSWORD). If no
  * password is configured we generate a one-time password and log it, so the
@@ -35,8 +84,6 @@ export function loadAuthConfig(): AuthConfig {
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
-  // Hash both inputs to a fixed-length digest so comparison time is
-  // independent of input length and content.
   const key = Buffer.alloc(32, 0);
   const ha = crypto.createHmac('sha256', key).update(a).digest();
   const hb = crypto.createHmac('sha256', key).update(b).digest();
@@ -72,7 +119,7 @@ function extractToken(req: Request): string | null {
   return null;
 }
 
-/** Express middleware: require a valid Bearer JWT (or ?token= for WebSocket-friendly use). */
+/** Express middleware: require a valid Bearer JWT. Checks revocation blacklist after verify. */
 export function requireAuth(cfg: AuthConfig) {
   return (req: AuthedRequest, res: Response, next: NextFunction): void => {
     const token = extractToken(req);
@@ -85,7 +132,18 @@ export function requireAuth(cfg: AuthConfig) {
       res.status(401).json({ error: 'Invalid or expired token' });
       return;
     }
-    req.user = verified;
-    next();
+    // Check revocation blacklist (async, but non-blocking — if Redis is down we proceed)
+    void isRevoked(token).then(revoked => {
+      if (revoked) {
+        res.status(401).json({ error: 'Token has been revoked' });
+      } else {
+        req.user = verified;
+        next();
+      }
+    }).catch(() => {
+      // Redis error — proceed without revocation check
+      req.user = verified;
+      next();
+    });
   };
 }

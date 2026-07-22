@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Request } from 'express';
 
 export const ApiKeyPermissionSchema = z.enum([
   'runs:read',
@@ -52,4 +53,8 @@ export interface RateLimitState {
 
 export interface ApiKeyRequest extends Request {
   apiKey?: RequestContext;
+}
+
+export function hasApiKeyPermission(req: Request, permission: ApiKeyPermission): boolean {
+  return ((req as ApiKeyRequest).apiKey?.permissions ?? []).includes(permission);
 }

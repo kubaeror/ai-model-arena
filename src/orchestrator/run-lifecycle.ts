@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
@@ -23,6 +24,10 @@ import {
 } from './run-index.js';
 import { analyzeRun } from '../anomaly-detection/index.js';
 import { runJudgeScoring, loadEvaluationConfig } from '../evaluation/judge.js';
+
+function makeIdempotencyKey(scenario: string, models: string[]): string {
+  return crypto.createHash('sha256').update(`${scenario}:${models.join(',')}`).digest('hex').slice(0, 32);
+}
 
 let anomalyAnalysisFailures = 0;
 let statsWritebackFailures = 0;
@@ -99,6 +104,16 @@ export async function ensureBuilt(root: string, logger: Logger): Promise<void> {
       })`,
     );
   }
+}
+
+/** Get the latest pricing snapshot version for audit trail use. */
+function getLatestPricingVersion(): string | null {
+  try {
+    const row = getDb().prepare(
+      'SELECT version FROM pricing_snapshots ORDER BY id DESC LIMIT 1'
+    ).get() as { version?: string } | undefined;
+    return row?.version ?? null;
+  } catch { return null; }
 }
 
 /** Validate models + compute all run paths (no PM2, no spawning). */
@@ -217,6 +232,18 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
         limit: budgetCheck.limitUsd, 
         percent: budgetCheck.percentUsed 
       });
+      // Dispatch threshold notification (non-blocking)
+      void (async () => {
+        try {
+          const { loadNotificationConfig, dispatchNotification, DispatchEventType } = await import('../notifications/index.js');
+          loadNotificationConfig(path.join(root, 'configs', 'notifications.yaml'), logger);
+          await dispatchNotification({
+            type: DispatchEventType.onBudgetThreshold,
+            data: { model: modelName, spentUsd: budgetCheck.spentUsd, limitUsd: budgetCheck.limitUsd, percentUsed: budgetCheck.percentUsed },
+            timestamp: new Date().toISOString(),
+          }, logger);
+        } catch { /* non-blocking */ }
+      })();
     }
   }
   
@@ -225,6 +252,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
 
   // Enqueue tasks for each model instead of spawning PM2 workers
   const queue = createQueue();
+  const idemKey = makeIdempotencyKey(spec.scenario, spec.models.map(m => m.model));
   for (const m of spec.models) {
     const resolved = resolveModelForRun(m.model);
     const task: Task = {
@@ -240,6 +268,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
       },
       enqueuedAt: new Date().toISOString(),
       attempts: 0,
+      idempotencyKey: `${idemKey}-${m.model}`,
     };
     await queue.enqueue(task);
   }
@@ -346,7 +375,26 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
   // Record spend for budget tracking
   for (const entry of entries) {
     if (entry.result && typeof entry.result.costUsd === 'number' && entry.result.costUsd > 0) {
-      addSpend(entry.model, entry.result.costUsd, spec.root!, logger);
+      void addSpend(entry.model, entry.result.costUsd, spec.root!, logger);
+      // Write to immutable cost ledger
+      try {
+        const db = getDb();
+        const tokens = entry.result.tokenUsage ?? {};
+        const pricingVersion = getLatestPricingVersion();
+        db.prepare(`INSERT INTO cost_ledger (run_id, model, cost_usd, currency,
+          input_tokens, output_tokens, cache_read_tokens, total_tokens, pricing_version, recorded_at)
+          VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)`).run(
+          spec.runId, entry.model, entry.result.costUsd,
+          tokens.prompt ?? null,
+          tokens.completion ?? null,
+          tokens.cacheReadTokens ?? null,
+          tokens.total ?? null,
+          pricingVersion,
+          new Date().toISOString(),
+        );
+      } catch (e) {
+        logger.warn('cost ledger write failed (non-fatal)', { runId: spec.runId, model: entry.model, err: String(e) });
+      }
     }
   }
   // Run anomaly detection over the just-completed run (best-effort, non-blocking).
@@ -375,13 +423,20 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
     }
     // Record spend for budget tracking
     if (r && typeof r.costUsd === 'number' && r.costUsd > 0) {
-      addSpend(m.model, r.costUsd, root, logger);
+      void addSpend(m.model, r.costUsd, root, logger);
       // Write to immutable cost ledger
       try {
         const db = getDb();
+        const tokens = (r as Record<string, unknown>).tokenUsage as Record<string, number> | undefined ?? {};
         db.prepare(`INSERT INTO cost_ledger (run_id, model, cost_usd, currency, input_tokens, output_tokens, cache_read_tokens, total_tokens, pricing_version, recorded_at)
-          VALUES (?, ?, ?, 'USD', NULL, NULL, NULL, NULL, NULL, ?)`).run(
-          runId, m.model, r.costUsd, new Date().toISOString(),
+          VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)`).run(
+          runId, m.model, r.costUsd,
+          tokens.prompt ?? null,
+          tokens.completion ?? null,
+          tokens.cacheReadTokens ?? null,
+          tokens.total ?? null,
+          null, // pricing_version: to be populated when pricing snapshots are implemented
+          new Date().toISOString(),
         );
       } catch (e) {
         logger.warn('cost ledger write failed (non-fatal)', { runId, model: m.model, err: String(e) });
@@ -431,6 +486,9 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
 
 let killSwitchActive = false;
 
+// Run-level cancellation signals — set when stopRun() is called, cleared on task completion
+const cancelledRuns = new Set<string>();
+
 /** Activate global kill switch — stops new runs, drains ongoing. */
 export function activateKillSwitch(): void { killSwitchActive = true; }
 
@@ -440,10 +498,21 @@ export function deactivateKillSwitch(): void { killSwitchActive = false; }
 /** Check if kill switch is active. */
 export function isKillSwitchActive(): boolean { return killSwitchActive; }
 
-/** Stop a running run (marks as stopped in the index). */
+/** Check if a specific run has been cancelled. */
+export function isRunCancelled(runId: string): boolean {
+  return cancelledRuns.has(runId);
+}
+
+/** Mark a run's cancellation as acknowledged (cleared by runner after stopping). */
+export function clearRunCancelled(runId: string): void {
+  cancelledRuns.delete(runId);
+}
+
+/** Stop a running run (marks as stopped in the index and signals cancellation). */
 export async function stopRun(runId: string): Promise<void> {
   const rec = getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
+  cancelledRuns.add(runId);
   await updateRun(runId, (r) => { r.status = 'stopped'; });
 }
 

@@ -137,10 +137,11 @@ program
 // ── cleanup ──────────────────────────────────────────────────────────────────
 program
   .command('cleanup')
-  .description('Cancel all in-flight arena tasks.')
-  .action(async () => {
+  .description('Cancel all in-flight arena tasks and remove expired artifacts.')
+  .option('-d, --days <n>', 'Remove artifacts older than N days (default: 30)', (v) => Number(v))
+  .action(async (opts: { days?: number }) => {
     try {
-      await cleanupArena();
+      await cleanupArena(opts.days);
     } catch (err) {
       console.error(`cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);

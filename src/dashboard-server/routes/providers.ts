@@ -5,8 +5,9 @@ import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { validateProviderUrl } from '../../providers/url-validator.js';
 import { probeOpenAICompatEndpoint } from '../../providers/capability-probe.js';
 import { audit } from '../../auth/rbac.js';
-import { z } from 'zod';
 import type { AuthedRequest } from '../auth.js';
+import type { ApiKeyRequest } from '../auth-api-types.js';
+import { z } from 'zod';
 
 const CustomProviderInputSchema = z.object({
   id: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/, 'id must be lowercase kebab-case'),
@@ -28,6 +29,12 @@ export function createProvidersRouter(): Router {
     res.json({ builtin: BUILTIN_PROVIDERS, custom });
   });
   router.post('/', async (req, res) => {
+    // If using API key auth, require providers:write scope for mutations
+    const apiKeyCtx = (req as ApiKeyRequest).apiKey;
+    if (apiKeyCtx && !apiKeyCtx.permissions.includes('providers:write')) {
+      res.status(403).json({ error: 'Missing permission: providers:write' });
+      return;
+    }
     const parsed = CustomProviderInputSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid provider input', details: parsed.error.flatten() });
@@ -57,6 +64,11 @@ export function createProvidersRouter(): Router {
     });
   });
   router.delete('/:id', (req, res) => {
+    const apiKeyCtx = (req as ApiKeyRequest).apiKey;
+    if (apiKeyCtx && !apiKeyCtx.permissions.includes('providers:write')) {
+      res.status(403).json({ error: 'Missing permission: providers:write' });
+      return;
+    }
     deleteCustomProvider(getDb(), req.params.id);
     audit((req as AuthedRequest).user?.sub ?? 'system', 'provider.delete', { type: 'provider', id: req.params.id }).catch(() => {});
     res.json({ ok: true });

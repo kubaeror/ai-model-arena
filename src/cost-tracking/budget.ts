@@ -6,6 +6,8 @@ import { BudgetConfigSchema, type BudgetConfig, type BudgetState, type BudgetChe
 
 let budgetConfig: BudgetConfig | null = null;
 let budgetState: BudgetState | null = null;
+// Serialize addSpend calls to prevent concurrent read-modify-write races
+let spendQueue: Promise<void> = Promise.resolve();
 
 const DAY_KEY = () => new Date().toISOString().slice(0, 10);
 const MONTH_KEY = () => new Date().toISOString().slice(0, 7);
@@ -76,23 +78,27 @@ export function saveBudgetState(rootDir: string, logger?: Logger): void {
   logger?.debug('Budget state saved', { path: statePath });
 }
 
-export function addSpend(modelName: string, usd: number, rootDir: string, logger?: Logger): void {
-  if (!budgetConfig) return;
-  
-  const state = loadBudgetState(budgetConfig, rootDir, logger);
-  const dayKey = DAY_KEY();
-  const monthKey = MONTH_KEY();
-  
-  state.global.daily[dayKey] = (state.global.daily[dayKey] ?? 0) + usd;
-  state.global.monthly[monthKey] = (state.global.monthly[monthKey] ?? 0) + usd;
-  
-  if (!state.models[modelName]) {
-    state.models[modelName] = { daily: {}, monthly: {} };
-  }
-  state.models[modelName].daily[dayKey] = (state.models[modelName].daily[dayKey] ?? 0) + usd;
-  state.models[modelName].monthly[monthKey] = (state.models[modelName].monthly[monthKey] ?? 0) + usd;
-  
-  saveBudgetState(rootDir, logger);
+export function addSpend(modelName: string, usd: number, rootDir: string, logger?: Logger): Promise<void> {
+  // Serialize through a promise chain to prevent concurrent read-modify-write races
+  spendQueue = spendQueue.then(() => {
+    if (!budgetConfig) return;
+    
+    const state = loadBudgetState(budgetConfig, rootDir, logger);
+    const dayKey = DAY_KEY();
+    const monthKey = MONTH_KEY();
+    
+    state.global.daily[dayKey] = (state.global.daily[dayKey] ?? 0) + usd;
+    state.global.monthly[monthKey] = (state.global.monthly[monthKey] ?? 0) + usd;
+    
+    if (!state.models[modelName]) {
+      state.models[modelName] = { daily: {}, monthly: {} };
+    }
+    state.models[modelName].daily[dayKey] = (state.models[modelName].daily[dayKey] ?? 0) + usd;
+    state.models[modelName].monthly[monthKey] = (state.models[modelName].monthly[monthKey] ?? 0) + usd;
+    
+    saveBudgetState(rootDir, logger);
+  }, () => { /* noop — prior rejection doesn't block new adds */ });
+  return spendQueue;
 }
 
 function getSpendToday(state: BudgetState, modelName?: string): number {
@@ -208,4 +214,5 @@ export function getBudgetStatus(rootDir: string, logger?: Logger): {
 export function resetBudgetCache(): void {
   budgetConfig = null;
   budgetState = null;
+  spendQueue = Promise.resolve();
 }

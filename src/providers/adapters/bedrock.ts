@@ -6,6 +6,7 @@ import type { CreateAdapterOpts } from '../registry.js';
 
 let BedrockRuntimeClient: typeof import('@aws-sdk/client-bedrock-runtime').BedrockRuntimeClient;
 let ConverseCommand: typeof import('@aws-sdk/client-bedrock-runtime').ConverseCommand;
+type ConverseCommandOutput = import('@aws-sdk/client-bedrock-runtime').ConverseCommandOutput;
 
 async function loadAwsSdk(): Promise<void> {
   if (BedrockRuntimeClient) return;
@@ -78,20 +79,32 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
     return this.withRetry(async () => {
       const client = await this.getClient();
 
-      const converseMessages = messages
+      const converseMessages: Array<{
+        role: 'user' | 'assistant';
+        content: Array<{ text?: string; toolResult?: Record<string, unknown>; toolUse?: { toolUseId: string; name: string; input: unknown } }>;
+      }> = messages
         .filter(m => m.role !== 'system')
-        .map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.toolCalls?.length
-            ? m.toolCalls.map(tc => ({
+        .map(m => {
+          const role = m.role as 'user' | 'assistant';
+          if (m.role === 'tool') {
+            // Tool results — but Converse API routes tool results through user messages
+            const content = [{ toolResult: { toolUseId: m.toolCallId ?? '', content: [{ text: m.content ?? '' }] } }];
+            return { role: 'user' as const, content };
+          }
+          if (m.toolCalls?.length) {
+            return {
+              role,
+              content: m.toolCalls.map(tc => ({
                 toolUse: {
                   toolUseId: tc.id,
                   name: tc.name,
                   input: tc.arguments,
                 },
-              }))
-            : [{ text: m.content ?? '' }],
-        }));
+              })),
+            };
+          }
+          return { role, content: [{ text: m.content ?? '' }] };
+        });
 
       const systemMessage = messages.find(m => m.role === 'system');
 
@@ -109,39 +122,53 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
       if (opts?.temperature !== undefined) inferenceConfig.temperature = opts.temperature;
       if (opts?.maxTokens !== undefined) inferenceConfig.maxTokens = opts.maxTokens;
 
-      const params: Record<string, unknown> = {
+      const input: Record<string, unknown> = {
         modelId: this.modelId,
         messages: converseMessages,
         inferenceConfig,
       };
       if (systemMessage?.content) {
-        params.system = [{ text: systemMessage.content }];
+        input.system = [{ text: systemMessage.content }];
       }
       if (toolConfig) {
-        params.toolConfig = toolConfig;
+        input.toolConfig = toolConfig;
       }
 
-      const command = new ConverseCommand(params as any);
-      const response = await client.send(command as any);
+      const command = new ConverseCommand(input as unknown as import('@aws-sdk/client-bedrock-runtime').ConverseCommandInput);
+      const response: ConverseCommandOutput = await client.send(command);
 
-      const r = response as any;
+      const output = response.output?.message;
+      const usage = response.usage;
+
+      // Extract text and tool calls from content blocks
+      let text: string | null = null;
+      const toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+
+      if (output?.content) {
+        for (const block of output.content) {
+          if (block.text) {
+            text = (text ?? '') + block.text;
+          }
+          if (block.toolUse) {
+            toolCalls.push({
+              id: block.toolUse.toolUseId ?? '',
+              name: block.toolUse.name ?? '',
+              arguments: (block.toolUse.input ?? {}) as Record<string, unknown>,
+            });
+          }
+        }
+      }
 
       return {
-        text: r.output?.message?.content?.[0]?.text ?? null,
-        toolCalls: (r.output?.message?.content ?? [])
-          .filter((c: any) => c.toolUse)
-          .map((c: any) => ({
-            id: c.toolUse.toolUseId,
-            name: c.toolUse.name,
-            arguments: c.toolUse.input ?? {},
-          })),
+        text,
+        toolCalls,
         usage: {
-          prompt: r.usage?.inputTokens,
-          completion: r.usage?.outputTokens,
-          total: r.usage?.totalTokens,
+          prompt: usage?.inputTokens,
+          completion: usage?.outputTokens,
+          total: usage?.totalTokens,
         },
-        stopReason: r.stopReason,
-        raw: r,
+        stopReason: response.stopReason,
+        raw: response,
       };
     }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }

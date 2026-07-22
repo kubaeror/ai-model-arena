@@ -32,25 +32,25 @@ describe('addSpend callable and functional', () => {
     resetBudgetCache();
   });
 
-  it('addSpend increments daily and monthly spend', () => {
+  it('addSpend increments daily and monthly spend', async () => {
     const before = checkBudget('test-model', tmp);
     assert.strictEqual(before.spentUsd, 0);
 
-    addSpend('test-model', 3.00, tmp);
+    await addSpend('test-model', 3.00, tmp);
 
     const after = checkBudget('test-model', tmp);
     assert.strictEqual(after.spentUsd, 3.00);
   });
 
-  it('addSpend accumulates across calls', () => {
-    addSpend('test-model', 2.00, tmp);
+  it('addSpend accumulates across calls', async () => {
+    await addSpend('test-model', 2.00, tmp);
 
     const after = checkBudget('test-model', tmp);
     assert.strictEqual(after.spentUsd, 5.00);
   });
 
-  it('should block when budget exceeded', () => {
-    addSpend('test-model', 10.00, tmp);
+  it('should block when budget exceeded', async () => {
+    await addSpend('test-model', 10.00, tmp);
 
     const check = checkBudget('test-model', tmp);
     assert.strictEqual(check.allowed, false);

@@ -16,6 +16,7 @@ import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
 import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
 import { loadBudgetConfig, checkBudget } from './cost-tracking/index.js';
+import { isKillSwitchActive, isRunCancelled, clearRunCancelled } from './orchestrator/run-lifecycle.js';
 import type { ToolExecutionContext, TokenUsage } from './types.js';
 import { closeDb } from './db/index.js';
 
@@ -69,6 +70,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
       if (runningTask) {
         logger.warn('Task did not finish within 30s, abandoning', { taskId: task.taskId });
+        try {
+          await queue.nack(task._redisId ?? task.taskId, 'runner shutdown timeout');
+        } catch { /* best-effort nack */ }
       }
     }
     if (queue.close) await queue.close();
@@ -99,11 +103,27 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   void cleanupInterval; // keep interval alive, never unref
 
   while (!signal.aborted) {
+    if (isKillSwitchActive()) {
+      if (!runningTask) {
+        logger.info('Kill switch active — stopping dequeue loop');
+        break;
+      }
+      logger.info('Kill switch active — finishing in-flight task before stopping');
+    }
     let task: Task | null = null;
     try {
       task = await queue.dequeue(30000);
       if (!task) continue;
       runningTask = task;
+
+      // Check per-run cancellation before starting execution
+      const runId = task.config.modelRunId as string ?? task.sessionId;
+      if (isRunCancelled(runId)) {
+        logger.info('Run cancelled before execution', { runId, taskId: task.taskId });
+        clearRunCancelled(runId);
+        await queue.ack(task._redisId ?? task.taskId);
+        continue;
+      }
 
       logger.info('Task dequeued', { taskId: task.taskId, model: task.model, scenario: task.scenario });
 
@@ -188,6 +208,11 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               });
             },
             onBudgetCheck: async (_turn: number, _tokenUsage: TokenUsage) => {
+              const cancelledRunId = task!.config.modelRunId as string ?? task!.sessionId;
+              if (isRunCancelled(cancelledRunId)) {
+                logger.info('Run cancelled during execution', { runId: cancelledRunId });
+                return false;
+              }
               const budgetCheck = checkBudget(modelName, outputRoot(), false, logger);
               if (!budgetCheck.allowed) {
                 logger.warn('Budget exceeded during run', { model: modelName, spent: budgetCheck.spentUsd, limit: budgetCheck.limitUsd });

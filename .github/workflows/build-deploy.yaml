@@ -6,6 +6,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write  # needed for cosign keyless signing via OIDC
 
 jobs:
   build-and-deploy:
@@ -55,3 +56,9 @@ jobs:
           docker tag ai-arena/runner:${{ github.sha }} ai-arena/runner:latest
           docker push ai-arena/runner:${{ github.sha }}
           docker push ai-arena/runner:latest
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@59acb6260d86c0f8c4b74df29ce6b83b4182b36b # v3.6.0
+      - name: Sign Docker image
+        run: cosign sign --yes ai-arena/runner:${{ github.sha }}
+        env:
+          COSIGN_EXPERIMENTAL: "1"  # keyless signing via GitHub OIDC

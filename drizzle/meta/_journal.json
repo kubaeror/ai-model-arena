@@ -57,6 +57,13 @@
       "when": 1784673721487,
       "tag": "0007_new_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1784674100000,
+      "tag": "0009_pricing_snapshots",
+      "breakpoints": true
     }
   ]
 }

@@ -69,7 +69,8 @@ spec:
           configMap:
             name: prometheus-config
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: prometheus-data
         - name: tmp
           emptyDir: {}
 ---
@@ -86,6 +87,25 @@ data:
       - job_name: otel-collector
         static_configs:
           - targets: ['otel-collector.observability:8889']
+      - job_name: arena-dashboard
+        static_configs:
+          - targets: ['dashboard.ai-arena:4000']
+        metrics_path: /metrics
+        scrape_interval: 15s
+      - job_name: arena-runner
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [ai-arena]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: runner
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            action: keep
+            regex: '4000'
+        metrics_path: /metrics
+        scrape_interval: 15s
 ---
 apiVersion: v1
 kind: Service
@@ -98,3 +118,16 @@ spec:
   ports:
     - port: 9090
       targetPort: 9090
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: observability
+  labels:
+    app: prometheus
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 30Gi

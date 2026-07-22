@@ -7,15 +7,19 @@ metadata:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    # cert-manager.io/cluster-issuer: letsencrypt-prod   # uncomment after cert-manager is installed
+    # TLS: set your domain below and uncomment the cert-manager annotation
+    # after installing cert-manager: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   ingressClassName: nginx
-  # tls:
-  #   - hosts:
-  #       - arena.example.com
-  #     secretName: dashboard-tls
+  tls:
+    - hosts:
+        # REPLACE with your actual domain before deploying
+        - arena.example.com
+      secretName: dashboard-tls
   rules:
-    - http:
+    - host: arena.example.com  # REPLACE with your actual domain
+      http:
         paths:
           - path: /
             pathType: Prefix

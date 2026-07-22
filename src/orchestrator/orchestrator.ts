@@ -1,4 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { createLogger } from '../logger/pino-logger.js';
+import { outputRoot } from '../paths.js';
 import type { ComparisonEntry } from '../logger/comparison-logger.js';
 import { sleep } from './utils.js';
 import { listRuns, getRunRecord } from './run-index.js';
@@ -22,8 +25,6 @@ import {
 } from './run-lifecycle.js';
 
 // ── Canonical re-export surface for the dashboard server ────────────────────
-// The dashboard imports everything it needs from this one module rather than
-// duplicating PM2 spawn logic.
 export {
   ensureBuilt,
   createRunSpec,
@@ -49,6 +50,14 @@ export { ARENA_PREFIX, DASHBOARD_PROC_NAME } from './utils.js';
 
 export interface CliRunOptions extends RunStartOptions {
   timeoutMs?: number;
+}
+
+const DEFAULT_RETENTION_DAYS = 30;
+
+function daysAgo(days: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d;
 }
 
 /** CLI entry point: spawn workers, wait for completion, finalize, print table. */
@@ -139,8 +148,43 @@ export async function tailLogs(_model: string, _lines = 200): Promise<void> {
   console.log('For structured logs, check the pino output or container logs (kubectl logs).');
 }
 
-/** Cancel in-flight tasks (CLI `cleanup` command). */
-export async function cleanupArena(): Promise<void> {
-  console.log('Cleanup: In-flight tasks will be automatically requeued or sent to DLQ on timeout.');
-}
+/** Cancel in-flight tasks and clean expired artifacts. */
+export async function cleanupArena(retentionDays: number = DEFAULT_RETENTION_DAYS): Promise<void> {
+  const logger = createLogger('ai-arena:cleanup');
+  const root = outputRoot();
+  const cutoff = daysAgo(retentionDays);
+  let removedDirs = 0;
 
+  if (!fs.existsSync(root)) {
+    console.log('No outputs directory. Nothing to clean up.');
+    return;
+  }
+
+  // Walk model directories, then run directories
+  for (const modelDir of fs.readdirSync(root, { withFileTypes: true }).filter(e => e.isDirectory())) {
+    const modelPath = path.join(root, modelDir.name);
+    for (const runDir of fs.readdirSync(modelPath, { withFileTypes: true }).filter(e => e.isDirectory())) {
+      const runPath = path.join(modelPath, runDir.name);
+      try {
+        const stat = fs.statSync(runPath);
+        if (stat.mtime < cutoff) {
+          fs.rmSync(runPath, { recursive: true, force: true });
+          removedDirs++;
+        }
+      } catch {
+        // Permission error or deleted between readdir and stat — skip
+      }
+    }
+    // Remove empty model directories
+    try {
+      const remaining = fs.readdirSync(modelPath);
+      if (remaining.length === 0) {
+        fs.rmdirSync(modelPath);
+        removedDirs++;
+      }
+    } catch { /* skip */ }
+  }
+
+  logger.info('Cleanup complete', { retentionDays, removedDirs });
+  console.log(`Cleanup complete: removed ${removedDirs} expired directories (retention: ${retentionDays} days).`);
+}

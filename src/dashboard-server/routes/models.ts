@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { getDb } from '../../db/client.js';
 import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
-import { audit } from '../../auth/rbac.js';
+import { audit, requireRole } from '../../auth/rbac.js';
 import { z } from 'zod';
 import type { AuthedRequest } from '../auth.js';
 
@@ -28,7 +28,7 @@ export function createModelsRouter(): Router {
   });
 
   // POST /api/models - register a custom OpenAI-compatible provider/model entry
-  router.post('/', (req, res) => {
+  router.post('/', requireRole('editor'), (req, res) => {
     const schema = z.object({
       name: z.string().min(1).max(128),
       apiBase: z.string().url().optional(),
@@ -48,8 +48,10 @@ export function createModelsRouter(): Router {
   });
 
   // DELETE /api/models/:name - remove a custom provider by id
-  router.delete('/:name', (req, res) => {
-    deleteCustomProvider(getDb(), req.params.name);
+  router.delete('/:name', requireRole('editor'), (req, res) => {
+    const name = String(req.params.name);
+    deleteCustomProvider(getDb(), name);
+    audit((req as AuthedRequest).user?.sub ?? 'system', 'model.delete', { type: 'model', id: name }).catch(() => {});
     res.json({ ok: true });
   });
 

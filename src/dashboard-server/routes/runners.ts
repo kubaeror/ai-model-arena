@@ -1,5 +1,7 @@
-import type { Express, Request, Response } from 'express';
+import type { Router, Request, Response } from 'express';
 import { KubeConfig, AppsV1Api, CoreV1Api } from '@kubernetes/client-node';
+import type { RequestHandler } from 'express';
+import { requireRole } from '../../auth/rbac.js';
 
 const kc = new KubeConfig();
 kc.loadFromDefault();
@@ -7,9 +9,9 @@ const appsApi = kc.makeApiClient(AppsV1Api);
 const coreApi = kc.makeApiClient(CoreV1Api);
 const NAMESPACE = process.env.KUBE_NAMESPACE ?? 'ai-arena';
 
-export function registerRunnerRoutes(app: Express): void {
+export function registerRunnerRoutes(router: Router, auth: RequestHandler): void {
   // GET /api/runners — list runner deployments + their pods
-  app.get('/api/runners', async (_req: Request, res: Response) => {
+  router.get('/api/runners', auth, requireRole('admin'), async (_req: Request, res: Response) => {
     try {
       const deploys = await appsApi.listNamespacedDeployment({ namespace: NAMESPACE, labelSelector: 'app=runner' });
       const pods = await coreApi.listNamespacedPod({ namespace: NAMESPACE, labelSelector: 'app=runner' });
@@ -44,7 +46,7 @@ export function registerRunnerRoutes(app: Express): void {
   });
 
   // POST /api/runners/:name/scale — patch deployment replicas
-  app.post('/api/runners/:name/scale', async (req: Request, res: Response) => {
+  router.post('/api/runners/:name/scale', auth, requireRole('admin'), async (req: Request, res: Response) => {
     const { replicas } = req.body ?? {};
     if (typeof replicas !== 'number' || replicas < 0) {
       res.status(400).json({ error: 'replicas must be a non-negative number' });
@@ -64,7 +66,7 @@ export function registerRunnerRoutes(app: Express): void {
   });
 
   // POST /api/runners/:name/drain — scale to 0
-  app.post('/api/runners/:name/drain', async (req: Request, res: Response) => {
+  router.post('/api/runners/:name/drain', auth, requireRole('admin'), async (req: Request, res: Response) => {
     try {
       const name = String(req.params.name);
       await appsApi.patchNamespacedDeployment({
@@ -79,7 +81,7 @@ export function registerRunnerRoutes(app: Express): void {
   });
 
   // GET /api/runners/:name/logs — stream pod logs
-  app.get('/api/runners/:name/logs', async (req: Request, res: Response) => {
+  router.get('/api/runners/:name/logs', auth, requireRole('admin'), async (req: Request, res: Response) => {
     try {
       const provider = String(req.params.name).replace('runner-', '');
       const pods = await coreApi.listNamespacedPod({

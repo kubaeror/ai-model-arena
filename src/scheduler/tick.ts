@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import { getDb } from '../db/index.js';
 import { CronExpressionParser } from 'cron-parser';
 import { updateScheduleState, getScheduleState } from './manager.js';
@@ -32,28 +31,20 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
     const models = JSON.parse(String(row.models)) as string[];
     let scheduleFailed = false;
 
-    for (const model of models) {
-      try {
-        const { createQueue } = await import('../queue/index.js');
-        const queue = createQueue();
-        await queue.enqueue({
-          taskId: `sched-${scheduleId}-${model}-${Date.now()}`,
-          sessionId: crypto.randomUUID(),
-          provider: model.split(':')[0] ?? model,
-          model,
-          scenario: String(row.scenario),
-          config: {},
-          enqueuedAt: now,
-          attempts: 0,
-        });
-      } catch (err) {
-        scheduleFailed = true;
-        logger.warn('Schedule enqueue failed', {
-          scheduleId,
-          model,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+    try {
+      // Route through startRun() for proper budget check + run registration
+      const { startRun } = await import('../orchestrator/run-lifecycle.js');
+      await startRun({
+        scenario: String(row.scenario),
+        models,
+        source: 'scheduler',
+      });
+    } catch (err) {
+      scheduleFailed = true;
+      logger.warn('Schedule startRun failed', {
+        scheduleId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     if (scheduleFailed) {

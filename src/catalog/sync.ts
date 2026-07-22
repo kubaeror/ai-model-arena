@@ -125,7 +125,32 @@ function upsertCatalog(db: Database, data: ModelsDevResponse): number {
     }
   });
   tx();
+  
+  // Snapshot current pricing for audit trail
+  capturePricingSnapshot(db, now);
+  
   return modelCount;
+}
+
+function capturePricingSnapshot(db: Database, version: string): void {
+  const insert = db.prepare(`
+    INSERT INTO pricing_snapshots (version, model_id, input, output, cache_read, cache_write,
+      tier_size, over_200k_input, over_200k_output, over_200k_cache_read, over_200k_cache_write, snapshot_at)
+    VALUES (@version, @model_id, @input, @output, @cache_read, @cache_write,
+      NULL, @over_200k_input, @over_200k_output, @over_200k_cache_read, @over_200k_cache_write, @snapshot_at)
+  `);
+  const rows = db.prepare('SELECT * FROM pricing').all() as Record<string, unknown>[];
+  for (const r of rows) {
+    insert.run({
+      version,
+      model_id: r.model_id,
+      input: r.input, output: r.output,
+      cache_read: r.cache_read, cache_write: r.cache_write,
+      over_200k_input: r.over_200k_input, over_200k_output: r.over_200k_output,
+      over_200k_cache_read: r.over_200k_cache_read, over_200k_cache_write: r.over_200k_cache_write,
+      snapshot_at: version,
+    });
+  }
 }
 
 function updateCacheState(db: Database, source: string, status: string, error: string | undefined, count: number): void {

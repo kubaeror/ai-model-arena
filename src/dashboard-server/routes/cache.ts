@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getDb } from '../../db/client.js';
 import { getCacheStates } from '../../catalog/cache.js';
+import type { ApiKeyRequest } from '../auth-api-types.js';
 
 export function createCacheRouter(): Router {
   const router = Router();
@@ -27,6 +28,12 @@ export function createCacheRouter(): Router {
   });
 
   router.post('/refresh', async (req, res) => {
+    // If using API key auth, require cache:write scope for mutations
+    const apiKeyCtx = (req as ApiKeyRequest).apiKey;
+    if (apiKeyCtx && !apiKeyCtx.permissions.includes('cache:write')) {
+      res.status(403).json({ error: 'Missing permission: cache:write' });
+      return;
+    }
     const source = typeof req.body?.source === 'string' ? req.body.source : null;
     if (!source || !['models.dev', 'modelbench', 'zeroeval'].includes(source)) {
       res.status(400).json({ error: 'source must be one of: models.dev, modelbench, zeroeval' });

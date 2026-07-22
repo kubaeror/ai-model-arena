@@ -15,7 +15,7 @@ import { metricsHandler } from '../observability/metrics.js';
 import { initDb, closeDb, getDb } from '../db/index.js';
 import { ensureFresh } from '../catalog/cache.js';
 import { startCatalogCron, stopCatalogCron } from '../catalog/cron.js';
-import { loadAuthConfig, requireAuth, verifyCredentials, signToken, type AuthedRequest } from './auth.js';
+import { loadAuthConfig, requireAuth, verifyCredentials, signToken, revokeToken, type AuthedRequest } from './auth.js';
 import { requireRole } from '../auth/rbac.js';
 import { maskSecrets } from './secrets.js';
 import { loadApiKeysConfig, requireApiKey } from './auth-api.js';
@@ -171,6 +171,16 @@ async function start(): Promise<void> {
     res.json({ token: signToken(auth, username), username });
   });
 
+  // ── Auth logout (revoke token) ──────────────────────────────────────────
+  app.post('/api/auth/logout', requireAuth(auth), async (req: AuthedRequest, res) => {
+    const h = req.headers.authorization ?? '';
+    const m = /^Bearer\s+(.+)$/i.exec(h);
+    if (m?.[1]) {
+      await revokeToken(m[1]);
+    }
+    res.json({ ok: true });
+  });
+
   // ── Secrets masking on all JSON responses ──────────────────────────────
   app.use((_req, res, next) => {
     const orig = res.json.bind(res) as (body: unknown) => ReturnType<typeof res.json>;
@@ -191,10 +201,11 @@ async function start(): Promise<void> {
   app.use('/api/metrics', requireAuth(auth), requireRole('viewer'), createMetricsRouter());
   app.use('/api/cache', requireAuth(auth), requireRole('viewer'), createCacheRouter());
 
-  // ── Runner management (k8s API) ──────────────────────────────────────────
-  registerRunnerRoutes(app);
+  // ── Runner management (k8s API, admin only) ──────────────────────────────
+  registerRunnerRoutes(app, requireAuth(auth));
 
-  // ── Ops / kill switch (admin only) ───────────────────────────────────────
+  // ── Queue & DLQ routes (admin only) ───────────────────────────────────────
+  registerQueueRoutes(app, requireAuth(auth));
   const { activateKillSwitch, deactivateKillSwitch, isKillSwitchActive } = await import('../orchestrator/run-lifecycle.js');
   app.post('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), (_req, res) => {
     activateKillSwitch();
@@ -207,9 +218,6 @@ async function start(): Promise<void> {
   app.get('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), (_req, res) => {
     res.json({ active: isKillSwitchActive() });
   });
-
-  // ── Queue & DLQ routes ───────────────────────────────────────────────────
-  registerQueueRoutes(app);
 
   // ── Public API (API key auth + rate limiting), versioned under /api/v1 ────────
   app.use('/api/v1/models', requireApiKey(['models:read']), createModelsRouter());
