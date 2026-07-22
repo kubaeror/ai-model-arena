@@ -9,6 +9,7 @@ COPY src ./src
 COPY configs ./configs
 COPY drizzle ./drizzle
 RUN npm run build
+RUN npm audit fix --production
 RUN npm prune --production
 
 # ── dashboard client build ──
@@ -21,7 +22,7 @@ RUN npm run build
 
 # ── runtime stage ──
 FROM node:22-bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends libargon2-1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libargon2-1 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 RUN useradd -r -u 10001 -g users arena && \
