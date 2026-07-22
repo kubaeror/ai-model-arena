@@ -1,0 +1,39 @@
+# Bedrock Runner — Kubernetes ServiceAccount + IAM Policy
+#
+# EKS Pod Identity (preferred) or IRSA is required in production.
+# This manifest creates the SA; IAM trust is configured at the AWS level.
+# See docs/bedrock-iam-policy.json for the least-privilege IAM policy.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bedrock-runner
+  namespace: ai-arena
+  annotations:
+    # EKS Pod Identity — set this to the IAM role ARN created by the
+    # EKS Pod Identity Agent add-on (or eksctl / Terraform).
+    # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/arena-bedrock-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bedrock-runner
+  namespace: ai-arena
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bedrock-runner
+  namespace: ai-arena
+subjects:
+  - kind: ServiceAccount
+    name: bedrock-runner
+    namespace: ai-arena
+roleRef:
+  kind: Role
+  name: bedrock-runner
+  apiGroup: rbac.authorization.k8s.io

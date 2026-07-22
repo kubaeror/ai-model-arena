@@ -65,6 +65,7 @@ interface Pm2Proc {
 export class LiveHub {
   private wss: WebSocketServer;
   private subs = new Map<WebSocket, Set<string>>();
+  private clients = new Map<WebSocket, { sub: string; role: string }>();
   private convSeen = new Map<string, number>();
   private convMtime = new Map<string, number>();
   private logSize = new Map<string, number>();
@@ -76,7 +77,12 @@ export class LiveHub {
     this.wss = new WebSocketServer({
       server,
       path: '/ws',
-      verifyClient: (info: ClientInfo, cb) => cb(this.verify(info, auth)),
+      verifyClient: (info: ClientInfo, cb) => {
+        const result = this.verifyUser(info, auth);
+        // Store user on the request for retrieval in onConnection
+        (info.req as IncomingMessage & { _wsUser?: { sub: string; role: string } })._wsUser = result ?? undefined;
+        cb(result !== null);
+      },
     });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     void pm2h.pm2ConnectPersistent().catch((e) =>
@@ -85,7 +91,7 @@ export class LiveHub {
     this.start();
   }
 
-  private verify(info: ClientInfo, auth: AuthConfig): boolean {
+  private verifyUser(info: ClientInfo, auth: AuthConfig): { sub: string; role: string } | null {
     try {
       const protocols = String(info.req.headers['sec-websocket-protocol'] ?? '');
       const protocolToken = protocols
@@ -94,10 +100,10 @@ export class LiveHub {
         .find((p) => p !== 'access_token' && p.length > 0);
 
       const token = protocolToken;
-      if (!token) return false;
-      return verifyToken(auth, token) != null;
+      if (!token) return null;
+      return verifyToken(auth, token);
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -154,14 +160,16 @@ export class LiveHub {
     }
   }
 
-  private onConnection(ws: WebSocket, _req: IncomingMessage): void {
+  private onConnection(ws: WebSocket, req: IncomingMessage): void {
+    const user = (req as IncomingMessage & { _wsUser?: { sub: string; role: string } })._wsUser ?? { sub: 'anonymous', role: 'viewer' };
+    this.clients.set(ws, user);
     this.subs.set(ws, new Set());
     void this.getProcessStatus()
       .then((processes) => this.send(ws, { type: 'process_status', processes }))
       .catch((err) => this.logger.warn('Failed to get process status on connect', { error: String(err) }));
     ws.on('message', (data) => this.onMessage(ws, data));
-    ws.on('close', () => this.subs.delete(ws));
-    ws.on('error', () => this.subs.delete(ws));
+    ws.on('close', () => { this.subs.delete(ws); this.clients.delete(ws); });
+    ws.on('error', () => { this.subs.delete(ws); this.clients.delete(ws); });
   }
 
   private onMessage(ws: WebSocket, data: { toString: () => string }): void {
@@ -172,6 +180,7 @@ export class LiveHub {
       return;
     }
     if (msg.type === 'subscribe' && typeof msg.runId === 'string') {
+      // Role check: any authenticated user can subscribe to runs
       this.subs.get(ws)?.add(msg.runId);
       void this.sendRunSnapshot(ws, msg.runId);
     } else if (msg.type === 'unsubscribe' && typeof msg.runId === 'string') {

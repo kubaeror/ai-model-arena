@@ -36,7 +36,9 @@ export function createWebhooksRouter(): Router {
     }
     try {
       const input: NewWebhook = { url, events, secret };
-      res.status(201).json({ webhook: insertWebhook(input) });
+      const result = insertWebhook(input);
+      audit((req as AuthedRequest).user?.sub ?? 'system', 'webhook.create', { type: 'webhook', id: String(result.id) }, undefined, { url, events }).catch(() => {});
+      res.status(201).json({ webhook: result });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

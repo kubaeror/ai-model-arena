@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import { z } from 'zod/v4';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
@@ -127,16 +127,35 @@ export const runShellCommand: ToolExecutor = async (args, ctx) => {
     };
   }
 
-  try {
-    const proc = exec(command, {
+  const spawnCmd = (): ReturnType<typeof exec> => {
+    if (ctx.shellPolicy === 'permissive') {
+      return exec(command, {
+        cwd: ctx.sandboxDir,
+        timeout: ctx.shellTimeoutMs,
+        maxBuffer: ctx.maxShellOutputBytes,
+        env: sandboxEnv(),
+        shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+        windowsHide: true,
+        killSignal: 'SIGKILL',
+      });
+    }
+    // Strict mode: use execFile with explicit arg array — no shell injection
+    // possible even if the regex missed something.
+    const parts = command.trim().split(/\s+/);
+    const bin = parts[0]!;
+    const binArgs = parts.slice(1);
+    return execFile(bin, binArgs, {
       cwd: ctx.sandboxDir,
       timeout: ctx.shellTimeoutMs,
       maxBuffer: ctx.maxShellOutputBytes,
       env: sandboxEnv(),
-      shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
       windowsHide: true,
       killSignal: 'SIGKILL',
     });
+  };
+
+  try {
+    const proc = spawnCmd();
     const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
       let stdout = '';
       let stderr = '';

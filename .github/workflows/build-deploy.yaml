@@ -11,8 +11,8 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -25,8 +25,16 @@ jobs:
       - run: npm run build
       - name: Build Docker image
         run: docker build -t ai-arena/runner:${{ github.sha }} .
+      - name: Generate SBOM
+        run: npm ls --all --json --production 2>/dev/null > npm-sbom.json || true
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: npm-sbom.json
+          retention-days: 30
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ai-arena/runner:${{ github.sha }}
           format: table
@@ -43,7 +51,7 @@ jobs:
           docker compose down
       - name: Push Docker image
         run: |
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin <<< "${{ secrets.DOCKER_PASSWORD }}"
           docker tag ai-arena/runner:${{ github.sha }} ai-arena/runner:latest
           docker push ai-arena/runner:${{ github.sha }}
           docker push ai-arena/runner:latest

@@ -15,13 +15,28 @@ import { runAgentLoop } from './agent-loop/loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
 import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
-import type { ToolExecutionContext } from './types.js';
+import { loadBudgetConfig, checkBudget } from './cost-tracking/index.js';
+import type { ToolExecutionContext, TokenUsage } from './types.js';
 import { closeDb } from './db/index.js';
 
 export interface RunnerOptions {
   queue?: TaskQueue;
   signal?: AbortSignal;
   fallbackChain?: FallbackConfig;
+}
+
+const READINESS_FILE = '/tmp/runner-ready';
+
+function markReady(): void {
+  try {
+    const dir = path.dirname(READINESS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(READINESS_FILE, Date.now().toString());
+  } catch { /* non-fatal — probe will retry */ }
+}
+
+function unmarkReady(): void {
+  try { fs.unlinkSync(READINESS_FILE); } catch { /* ignore */ }
 }
 
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
@@ -32,6 +47,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
   initDb(path.join(outputRoot(), 'arena.db'));
 
+  // Load budget config for enforcement in the runner loop
+  loadBudgetConfig(path.join(outputRoot(), '..', 'configs', 'budget.yaml'), logger);
+
   const store = createSessionStore();
   const registry = new ProviderRegistry();
   loadBuiltins(registry);
@@ -40,6 +58,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
   const shutdown = async () => {
     logger.info('Runner shutting down...');
+    unmarkReady();
     ac.abort();
     const task = runningTask;
     if (task) {
@@ -69,6 +88,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   });
 
   logger.info('Runner starting');
+
+  // Mark runner as ready after all initialization (DB, registry, store)
+  // but before entering the dequeue loop.
+  markReady();
 
   const cleanupInterval = setInterval(() => {
     CircuitBreaker.cleanup();
@@ -163,6 +186,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                 tokenOutput: null,
                 createdAt: new Date().toISOString(),
               });
+            },
+            onBudgetCheck: async (_turn: number, _tokenUsage: TokenUsage) => {
+              const budgetCheck = checkBudget(modelName, outputRoot(), false, logger);
+              if (!budgetCheck.allowed) {
+                logger.warn('Budget exceeded during run', { model: modelName, spent: budgetCheck.spentUsd, limit: budgetCheck.limitUsd });
+                return false;
+              }
+              return true;
             },
           }));
           break;

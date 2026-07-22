@@ -12,14 +12,55 @@ data:
             endpoint: 0.0.0.0:4318
           grpc:
             endpoint: 0.0.0.0:4317
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 512
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 512
+        spike_limit_mib: 128
+      tail_sampling:
+        decision_wait: 10s
+        policies:
+          - name: error-policy
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: latency-policy
+            type: latency
+            latency:
+              threshold_ms: 5000
     exporters:
+      otlp/tempo:
+        endpoint: tempo.observability:4317
+        tls:
+          insecure: true
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        namespace: arena
+      loki:
+        endpoint: http://loki.observability:3100/loki/api/v1/push
       debug:
-        verbosity: detailed
+        verbosity: basic
     service:
       pipelines:
         traces:
           receivers: [otlp]
-          exporters: [debug]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/tempo, debug]
+        traces/errors:
+          receivers: [otlp]
+          processors: [memory_limiter, tail_sampling, batch]
+          exporters: [otlp/tempo]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [loki, debug]
 ---
 apiVersion: apps/v1
 kind: Deployment

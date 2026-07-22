@@ -14,6 +14,7 @@ function dlqStreamKey(prefix: string, provider: string): string {
 export class RedisStreamQueue implements TaskQueue {
   private redis: Redis;
   private config: RedisQueueConfig;
+  private reclaimTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(config: RedisQueueConfig) {
     this.config = config;
@@ -25,6 +26,79 @@ export class RedisStreamQueue implements TaskQueue {
       connectTimeout: 10_000,
       lazyConnect: false,
     });
+    this.startReclaimLoop();
+  }
+
+  private startReclaimLoop(): void {
+    this.reclaimTimer = setInterval(() => {
+      void this.reclaimOrphaned().catch(() => { /* silent */ });
+    }, this.config.reclaimIntervalMs);
+    if (this.reclaimTimer.unref) this.reclaimTimer.unref();
+  }
+
+  /**
+   * Periodically claims messages that have been idle (pending in the PEL)
+   * beyond reclaimIdleMs.  This recovers tasks from crashed or disconnected
+   * consumers so they are not permanently orphaned.
+   *
+   * Uses XAUTOCLAIM which atomically claims pending messages and returns
+   * their data in a single round-trip.
+   */
+  private async reclaimOrphaned(): Promise<void> {
+    const provider = this.config.providerFilter;
+    if (!provider) return;
+    const stream = streamKey(this.config.streamPrefix, provider);
+
+    try {
+      let start = '0-0';
+
+      while (true) {
+        const result = await this.redis.xautoclaim(
+          stream,
+          this.config.consumerGroup,
+          this.config.consumerName,
+          this.config.reclaimIdleMs,
+          start,
+          'COUNT', 5,
+        ) as [string, Array<[string, string[]]>];
+
+        if (!Array.isArray(result) || result.length < 2) break;
+
+        const nextStart = result[0] as string;
+        const messages = result[1];
+
+        if (!Array.isArray(messages) || messages.length === 0) break;
+
+        for (const [id, fields] of messages) {
+          const taskData: Record<string, string> = {};
+          for (let i = 0; i < fields.length; i += 2) {
+            taskData[fields[i]!] = fields[i + 1]!;
+          }
+          const task = JSON.parse(taskData.task ?? '{}') as Task;
+
+          if ((task.attempts ?? 0) >= this.config.maxAttempts) {
+            const dlq = dlqStreamKey(this.config.streamPrefix, provider);
+            const dlqFields: (string | number)[] = [
+              'task', JSON.stringify(task),
+              'reason', 'XAUTOCLAIM: max attempts exceeded',
+            ];
+            await this.redis.xadd(dlq, '*', ...dlqFields);
+            await this.redis.xdel(stream, id);
+          } else {
+            task.attempts = (task.attempts ?? 0) + 1;
+            const newFields: (string | number)[] = ['task', JSON.stringify(task)];
+            if (task._traceparent) newFields.push('traceparent', task._traceparent);
+            await this.redis.xadd(stream, '*', ...newFields);
+            await this.redis.xdel(stream, id);
+          }
+        }
+
+        start = nextStart ?? '0-0';
+        if (start === '0-0') break; // no more pending
+      }
+    } catch {
+      // reclaim failures are non-fatal — the loop will retry on next interval
+    }
   }
 
   private async ensureGroup(stream: string): Promise<void> {
@@ -133,7 +207,52 @@ export class RedisStreamQueue implements TaskQueue {
     try { return await this.redis.xlen(dlqStream); } catch { return 0; }
   }
 
+  async deadLetterPeek(limit = 20): Promise<Task[]> {
+    const provider = this.config.providerFilter;
+    if (!provider) return [];
+    const dlqStream = dlqStreamKey(this.config.streamPrefix, provider);
+    try {
+      const msgs = await this.redis.xrange(dlqStream, '-', '+', 'COUNT', limit);
+      return msgs.map(([, fields]) => {
+        const data: Record<string, string> = {};
+        for (let i = 0; i < fields.length; i += 2) data[fields[i]!] = fields[i + 1]!;
+        return { ...JSON.parse(data.task ?? '{}'), dlqReason: data.reason } as Task & { dlqReason?: string };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  async deadLetterRetry(taskId: string): Promise<void> {
+    const provider = this.config.providerFilter;
+    if (!provider) return;
+    const dlqStream = dlqStreamKey(this.config.streamPrefix, provider);
+    const mainStream = streamKey(this.config.streamPrefix, provider);
+
+    // Get the task from the DLQ
+    const msgs = await this.redis.xrange(dlqStream, taskId, taskId);
+    if (msgs.length === 0) return;
+
+    const [, fields] = msgs[0]!;
+    const data: Record<string, string> = {};
+    for (let i = 0; i < fields.length; i += 2) data[fields[i]!] = fields[i + 1]!;
+    const task = JSON.parse(data.task ?? '{}') as Task;
+    task.attempts = 0; // reset attempts for the retry
+
+    // Re-add to main stream
+    const newFields: (string | number)[] = ['task', JSON.stringify(task)];
+    if (task._traceparent) newFields.push('traceparent', task._traceparent);
+    await this.redis.xadd(mainStream, '*', ...newFields);
+
+    // Delete from DLQ
+    await this.redis.xdel(dlqStream, taskId);
+  }
+
   async close(): Promise<void> {
+    if (this.reclaimTimer) {
+      clearInterval(this.reclaimTimer);
+      this.reclaimTimer = null;
+    }
     try {
       await Promise.race([
         this.redis.quit(),

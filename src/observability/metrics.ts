@@ -31,6 +31,19 @@ export const queueDepth = new client.Gauge({
   registers: [register],
 });
 
+export const auditFailures = new client.Counter({
+  name: 'arena_audit_failures_total',
+  help: 'Total audit log write failures',
+  registers: [register],
+});
+
+export const scheduleFailures = new client.Counter({
+  name: 'arena_schedule_failures_total',
+  help: 'Total scheduler job failures',
+  labelNames: ['schedule_id'],
+  registers: [register],
+});
+
 export async function metricsHandler(_req: unknown, res: { set: (k: string, v: string) => void; end: (body: string) => void }) {
   res.set('Content-Type', register.contentType);
   res.end(await register.metrics());

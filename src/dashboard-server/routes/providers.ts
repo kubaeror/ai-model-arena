@@ -3,6 +3,7 @@ import { getDb } from '../../db/client.js';
 import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { validateProviderUrl } from '../../providers/url-validator.js';
+import { probeOpenAICompatEndpoint } from '../../providers/capability-probe.js';
 import { audit } from '../../auth/rbac.js';
 import { z } from 'zod';
 import type { AuthedRequest } from '../auth.js';
@@ -26,18 +27,38 @@ export function createProvidersRouter(): Router {
     const custom = listCustomProviders(getDb()).map(r => ({ ...r, is_builtin: Boolean(r.is_builtin) }));
     res.json({ builtin: BUILTIN_PROVIDERS, custom });
   });
-  router.post('/', (req, res) => {
+  router.post('/', async (req, res) => {
     const parsed = CustomProviderInputSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid provider input', details: parsed.error.flatten() });
       return;
     }
+
+    // Runtime capability detection for OpenAI-compatible providers
+    let health: { reachable?: boolean; error?: string } | null = null;
+    if (parsed.data.adapter === 'openai-compat' && parsed.data.apiBase) {
+      const apiKey = parsed.data.envVar ? process.env[parsed.data.envVar] : undefined;
+      if (apiKey) {
+        try {
+          const result = await probeOpenAICompatEndpoint(parsed.data.apiBase, apiKey, 5_000);
+          health = { reachable: result.reachable, error: result.error };
+        } catch {
+          health = { reachable: false, error: 'probe failed' };
+        }
+      }
+    }
+
     upsertCustomProvider(getDb(), parsed.data);
     audit((req as AuthedRequest).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.data.id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
-    res.status(201).json({ ok: true, id: parsed.data.id });
+    res.status(201).json({
+      ok: true,
+      id: parsed.data.id,
+      health: health ? health : undefined,
+    });
   });
   router.delete('/:id', (req, res) => {
     deleteCustomProvider(getDb(), req.params.id);
+    audit((req as AuthedRequest).user?.sub ?? 'system', 'provider.delete', { type: 'provider', id: req.params.id }).catch(() => {});
     res.json({ ok: true });
   });
   return router;

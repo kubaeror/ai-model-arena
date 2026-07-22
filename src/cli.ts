@@ -65,6 +65,27 @@ program
     }
 
     const root = rootDir();
+    // Early model validation before launching workers
+    initDb(dbPath());
+    const { resolveModelForRun } = await import('./db/model-resolver.js');
+    const invalid: string[] = [];
+    for (const name of models) {
+      if (!resolveModelForRun(name)) invalid.push(name);
+    }
+    if (invalid.length > 0) {
+      const { getDb } = await import('./db/index.js');
+      const allModels = getDb().prepare('SELECT name FROM models ORDER BY name').all() as { name: string }[];
+      const available = allModels.map(r => r.name);
+      console.error(`\nError: Unknown model(s): ${invalid.join(', ')}`);
+      if (available.length > 0) {
+        console.error(`Available models (${available.length} total):`);
+        for (const m of available) console.error(`  - ${m}`);
+      } else {
+        console.error('No models in catalog. Run catalog sync first.');
+      }
+      process.exit(1);
+    }
+
     const runOpts = {
       scenario: opts.scenario,
       models,

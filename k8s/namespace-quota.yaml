@@ -7,8 +7,10 @@ spec:
   hard:
     requests.cpu: "8"
     requests.memory: 16Gi
+    requests.ephemeral-storage: 100Gi
     limits.cpu: "16"
     limits.memory: 32Gi
+    limits.ephemeral-storage: 200Gi
     persistentvolumeclaims: "10"
     pods: "50"
 ---
@@ -23,12 +25,16 @@ spec:
       default:
         cpu: 500m
         memory: 512Mi
+        ephemeral-storage: 1Gi
       defaultRequest:
         cpu: 100m
         memory: 128Mi
+        ephemeral-storage: 256Mi
       max:
         cpu: "4"
         memory: 8Gi
+        ephemeral-storage: 20Gi
       min:
         cpu: 10m
         memory: 32Mi
+        ephemeral-storage: 64Mi

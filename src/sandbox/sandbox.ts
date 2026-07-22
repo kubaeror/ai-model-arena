@@ -57,11 +57,39 @@ export function safeResolve(sandboxDir: string, relativePath: string): string {
   }
 
   const target = path.resolve(sandboxDir, relativePath);
-  const real = fs.existsSync(target) ? fs.realpathSync(target) : target;
-  if (!isWithin(sandboxDir, real)) {
+
+  if (fs.existsSync(target)) {
+    // Target exists — resolve all symlinks in the chain.
+    const real = fs.realpathSync(target);
+    if (!isWithin(sandboxDir, real)) {
+      throw new Error(`Path "${relativePath}" escapes the sandbox.`);
+    }
+    return real;
+  }
+
+  // Target does not exist yet (e.g., a pending write). Find the deepest
+  // existing ancestor, resolve its symlinks, then reconstruct the path so
+  // symlinks placed anywhere in the ancestry-chain can't redirect writes
+  // outside the sandbox.
+  let cursor = target;
+  const missing: string[] = [];
+  while (!fs.existsSync(cursor)) {
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break; // reached filesystem root
+    missing.push(path.basename(cursor));
+    cursor = parent;
+  }
+
+  // cursor is now the deepest existing ancestor or the filesystem root.
+  const safeAncestor = fs.realpathSync(cursor);
+  const safe = missing.reduceRight((acc, seg) => path.join(acc, seg), safeAncestor);
+
+  // Validate the reconstructed path against the resolved sandbox root.
+  const resolvedRoot = fs.existsSync(sandboxDir) ? fs.realpathSync(sandboxDir) : path.resolve(sandboxDir);
+  if (!isWithin(resolvedRoot, safe)) {
     throw new Error(`Path "${relativePath}" escapes the sandbox.`);
   }
-  return real;
+  return safe;
 }
 
 /** True iff `targetAbs` is `sandboxDir` or a descendant of it. */

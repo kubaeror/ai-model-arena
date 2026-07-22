@@ -27,7 +27,7 @@ export function loadSchedulesConfig(configPath: string, logger?: Logger): Schedu
   schedulesConfig = validated;
   
   for (const schedule of validated.schedules) {
-    scheduleStates.set(schedule.id, { id: schedule.id, status: 'idle' });
+    scheduleStates.set(schedule.id, { id: schedule.id, status: 'idle', consecutiveFailures: 0, totalRuns: 0, totalFailures: 0 });
   }
   
   return validated;
@@ -50,7 +50,7 @@ export function getAllScheduleStates(): ScheduleState[] {
 }
 
 export function updateScheduleState(id: string, update: Partial<ScheduleState>): void {
-  const current = scheduleStates.get(id) ?? { id, status: 'idle' };
+  const current = scheduleStates.get(id) ?? { id, status: 'idle' as const, consecutiveFailures: 0, totalRuns: 0, totalFailures: 0 };
   scheduleStates.set(id, { ...current, ...update });
 }
 
@@ -68,7 +68,7 @@ export function addSchedule(configPath: string, schedule: Schedule, logger?: Log
     fs.mkdirSync(dir, { recursive: true });
   }
   fs.writeFileSync(resolvedPath, dump(config));
-  scheduleStates.set(schedule.id, { id: schedule.id, status: 'idle' });
+  scheduleStates.set(schedule.id, { id: schedule.id, status: 'idle', consecutiveFailures: 0, totalRuns: 0, totalFailures: 0 });
 }
 
 export function removeSchedule(configPath: string, id: string, logger?: Logger): boolean {

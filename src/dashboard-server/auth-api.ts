@@ -89,26 +89,39 @@ function checkRateLimit(ctx: RequestContext): { allowed: boolean; remaining: num
   const now = Date.now();
   const minuteBucket = Math.floor(now / 60000);
   const key = `${ctx.keyName}:${minuteBucket}`;
-  
+
   const state = rateLimitStore.get(key);
   if (!state) {
     rateLimitStore.set(key, { count: 0, resetAt: now + 60000 });
   }
-  
+
   const currentState = rateLimitStore.get(key)!;
   const remaining = Math.max(0, ctx.rateLimit - currentState.count);
   const resetIn = Math.max(0, currentState.resetAt - now);
-  
+
   if (currentState.count >= ctx.rateLimit) {
     return { allowed: false, remaining: 0, resetIn };
   }
-  
+
   currentState.count++;
   return { allowed: true, remaining: remaining - 1, resetIn };
 }
 
+function useRedisRateLimiting(): boolean {
+  return process.env.QUEUE_DRIVER === 'redis';
+}
+
+async function redisCheckRateLimit(ctx: RequestContext): Promise<{ allowed: boolean; remaining: number; resetIn: number }> {
+  try {
+    const { redisCheckRateLimit } = await import('./rate-limit-redis.js');
+    return await redisCheckRateLimit(ctx.keyName, ctx.rateLimit, 60_000);
+  } catch {
+    return checkRateLimit(ctx);
+  }
+}
+
 export function requireApiKey(permissions: ApiKeyPermission[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const authHeader = (req.headers as Record<string, string | string[] | undefined>)['x-api-key'];
     const apiKey = typeof authHeader === 'string' ? authHeader : Array.isArray(authHeader) ? authHeader[0] ?? '' : '';
     
@@ -130,7 +143,9 @@ export function requireApiKey(permissions: ApiKeyPermission[]) {
       }
     }
     
-    const rateLimit = checkRateLimit(ctx);
+    const rateLimit = useRedisRateLimiting()
+      ? await redisCheckRateLimit(ctx)
+      : checkRateLimit(ctx);
     if (!rateLimit.allowed) {
       res.status(429).json({ error: 'Rate limit exceeded', retryAfter: rateLimit.resetIn });
       return;

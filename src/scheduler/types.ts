@@ -28,4 +28,7 @@ export interface ScheduleState {
   nextRun?: string;
   status: 'idle' | 'running' | 'error';
   lastError?: string;
+  consecutiveFailures: number;
+  totalRuns: number;
+  totalFailures: number;
 }

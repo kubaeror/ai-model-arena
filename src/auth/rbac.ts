@@ -34,6 +34,12 @@ export function requireOwnership(
   };
 }
 
+let auditFailureCount = 0;
+
+export function getAuditFailureCount(): number {
+  return auditFailureCount;
+}
+
 export async function audit(
   actor: string,
   action: string,
@@ -55,5 +61,12 @@ export async function audit(
       after ? JSON.stringify(after) : null,
       new Date().toISOString(),
     );
-  } catch { /* audit failures are non-fatal */ }
+  } catch {
+    auditFailureCount++;
+    // Increment Prometheus counter if available (non-fatal if prom-client is not loaded)
+    try {
+      const { auditFailures } = await import('../observability/metrics.js');
+      auditFailures.inc();
+    } catch { /* metrics unavailable in test/dev */ }
+  }
 }

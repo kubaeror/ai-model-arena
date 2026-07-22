@@ -1,0 +1,72 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowBedrockConverseInAllowedRegions",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:Converse",
+        "bedrock:ConverseStream",
+        "bedrock:ListFoundationModels",
+        "bedrock:GetFoundationModel"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:us-east-1::foundation-model/*",
+        "arn:aws:bedrock:us-west-2::foundation-model/*",
+        "arn:aws:bedrock:us-east-1:*",
+        "arn:aws:bedrock:us-west-2:*"
+      ],
+      "Condition": {
+        "StringEqualsIfExists": {
+          "aws:RequestedRegion": ["us-east-1", "us-west-2"]
+        }
+      }
+    },
+    {
+      "Sid": "DenyBedrockProvisioningAndDeletion",
+      "Effect": "Deny",
+      "Action": [
+        "bedrock:Create*",
+        "bedrock:Delete*",
+        "bedrock:Put*",
+        "bedrock:Tag*",
+        "bedrock:Untag*",
+        "bedrock:Update*",
+        "bedrock:Associate*",
+        "bedrock:Disassociate*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyOtherBedrockRegions",
+      "Effect": "Deny",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:Converse",
+        "bedrock:ConverseStream"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "aws:RequestedRegion": ["us-east-1", "us-west-2"]
+        }
+      }
+    },
+    {
+      "Sid": "DenyAllOtherAWSServices",
+      "Effect": "Deny",
+      "NotAction": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:Converse",
+        "bedrock:ConverseStream",
+        "bedrock:ListFoundationModels",
+        "bedrock:GetFoundationModel"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

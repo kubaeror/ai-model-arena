@@ -21,4 +21,6 @@ tests/runner/runner.test.ts
 tests/sandbox/escape.test.ts
 tests/sandbox/workspace.test.ts
 tests/security/prompt-injection.test.ts
+tests/smoke/agent-loop-smoke.test.ts
+tests/smoke/trace-smoke.test.ts
 tests/tools/shell-metachar.test.ts

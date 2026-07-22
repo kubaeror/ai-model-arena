@@ -48,9 +48,17 @@ async function start(): Promise<void> {
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
   const auth = loadAuthConfig();
   if (auth.generatedPassword) {
-    logger.warn('No DASHBOARD_PASSWORD set — generated a one-time password', {
-      generatedPassword: auth.generatedPassword,
-    });
+    process.stderr.write(
+      '\n' +
+      '╔══════════════════════════════════════════════════════════════════╗\n' +
+      '║  WARNING: No DASHBOARD_PASSWORD set — generated a one-time      ║\n' +
+      '║  admin password. This password will NOT be shown again and is   ║\n' +
+      '║  NOT written to logs. Save it now or set DASHBOARD_PASSWORD in  ║\n' +
+      '║  your environment to a known value.                              ║\n' +
+      `║  Password: ${auth.generatedPassword.padEnd(48)}║\n` +
+      '╚══════════════════════════════════════════════════════════════════╝\n\n',
+    );
+    logger.warn('No DASHBOARD_PASSWORD set — a one-time password was generated (see stderr output). It will not be shown again.');
   }
   const root = findProjectRoot();
   const allowedOrigins = (process.env.DASHBOARD_CORS_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean);

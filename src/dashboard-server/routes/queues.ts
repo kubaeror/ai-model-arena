@@ -24,7 +24,18 @@ export function registerQueueRoutes(app: Express): void {
     }
   });
 
-  app.post('/api/queues/:provider/tasks/:id/retry', (req: Request, res: Response) => {
-    res.json({ id: req.params.id, retried: true, note: 'Re-queue not implemented yet' });
+  app.post('/api/queues/:provider/tasks/:id/retry', async (req: Request, res: Response) => {
+    try {
+      const taskId = String(req.params.id ?? '');
+      const queue = createQueue();
+      if (queue.deadLetterRetry) {
+        await queue.deadLetterRetry(taskId);
+        res.json({ id: taskId, retried: true });
+      } else {
+        res.status(501).json({ id: req.params.id, retried: false, note: 'DLQ retry not supported by current queue driver' });
+      }
+    } catch (err) {
+      res.status(500).json({ id: req.params.id, retried: false, error: err instanceof Error ? err.message : String(err) });
+    }
   });
 }

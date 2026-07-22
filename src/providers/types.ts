@@ -21,3 +21,11 @@ export interface ProviderDescriptor {
   isBuiltin: boolean;
   capabilities?: ProviderCapabilities;
 }
+
+/** Result of a runtime capability probe against a provider endpoint. */
+export interface ProviderHealthCheck {
+  reachable: boolean;
+  latencyMs: number | null;
+  detectedCapabilities?: Partial<ProviderCapabilities>;
+  error?: string;
+}

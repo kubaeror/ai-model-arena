@@ -23,6 +23,7 @@ spec:
         app: runner
         provider: openai
     spec:
+      terminationGracePeriodSeconds: 60
       runtimeClassName: gvisor
       securityContext:
         runAsNonRoot: true
@@ -75,6 +76,19 @@ spec:
               command: ["pgrep", "-f", "runner"]
             initialDelaySeconds: 30
             periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/runner-ready"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: runner
+              provider: openai
       volumes:
         - name: outputs
           persistentVolumeClaim:

@@ -397,3 +397,35 @@ export interface CatalogCacheStateRow {
   count: number | null;
   next_refresh: string;
 }
+
+// ── Drizzle-inferred types (preferred for new code) ─────────────────────
+// Auto-derived from the table definitions above. Use these instead of the
+// legacy hand-written interfaces when writing new Drizzle ORM code.
+// Prefixed with `Db` to avoid conflicts with domain types.
+
+import type { InferSelectModel } from 'drizzle-orm';
+
+export type DbProvider = InferSelectModel<typeof providers>;
+export type DbModel = InferSelectModel<typeof models>;
+export type DbModelProvider = InferSelectModel<typeof model_providers>;
+export type DbPricing = InferSelectModel<typeof pricing>;
+export type DbBenchmark = InferSelectModel<typeof benchmarks>;
+export type DbModelRuntimeStat = InferSelectModel<typeof model_runtime_stats>;
+export type DbCatalogCacheState = InferSelectModel<typeof catalog_cache_state>;
+export type DbAnomaly = InferSelectModel<typeof anomalies>;
+export type DbWebhook = InferSelectModel<typeof webhooks>;
+export type DbRun = InferSelectModel<typeof runs>;
+export type DbCostLedgerEntry = InferSelectModel<typeof cost_ledger>;
+export type DbRunModel = InferSelectModel<typeof run_models>;
+export type DbSession = InferSelectModel<typeof sessions>;
+export type DbMessage = InferSelectModel<typeof messages>;
+export type DbModelCall = InferSelectModel<typeof model_calls>;
+export type DbUser = InferSelectModel<typeof users>;
+export type DbRole = InferSelectModel<typeof roles>;
+export type DbUserRole = InferSelectModel<typeof user_roles>;
+export type DbAuditLogEntry = InferSelectModel<typeof audit_log>;
+export type DbFile = InferSelectModel<typeof files>;
+export type DbPrompt = InferSelectModel<typeof prompts>;
+export type DbPromptVersion = InferSelectModel<typeof prompt_versions>;
+export type DbOutputMapping = InferSelectModel<typeof output_mappings>;
+export type DbSchedule = InferSelectModel<typeof schedules>;

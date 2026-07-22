@@ -9,7 +9,7 @@ import type {
 import type { ModelAdapter } from '../providers/adapters/base.js';
 import type { ConversationLogger } from '../logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../tools/schema.js';
-import { detectInjection } from '../security/prompt-injection.js';
+import { detectInjection, scanToolResult } from '../security/prompt-injection.js';
 
 export interface AgentLoopOptions {
   adapter: ModelAdapter;
@@ -150,6 +150,20 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       content = truncate(content);
       conv.append({ type: 'tool_result', turn, toolCallId: tc.id, toolName: tc.name, toolResult: content, isError });
       messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content });
+
+      // Scan tool output for indirect prompt injection patterns
+      const scan = scanToolResult(content);
+      if (scan.flagged) {
+        logger.warn('Tool output flagged for injection patterns', {
+          toolName: tc.name,
+          turn,
+          reasons: scan.reasons,
+        });
+        conv.append({
+          type: 'info',
+          content: `⚠ Tool output from "${tc.name}" flagged for injection patterns: ${scan.reasons?.join(', ')}`,
+        });
+      }
     }
 
     if (wantsComplete) {

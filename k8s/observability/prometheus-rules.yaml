@@ -16,6 +16,7 @@ spec:
             severity: warning
           annotations:
             summary: "High task error rate (>5% in 5m)"
+            runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#higherrorrate"
         - alert: RunnerDown
           expr: up{job="arena-runner"} == 0
           for: 5m
@@ -23,6 +24,7 @@ spec:
             severity: critical
           annotations:
             summary: "Runner pod is down"
+            runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#runnerdown"
         - alert: QueueBacklog
           expr: arena_queue_depth > 100
           for: 10m
@@ -30,6 +32,7 @@ spec:
             severity: warning
           annotations:
             summary: "Queue depth exceeds 100 for >10m"
+            runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#queuebacklog"
         - alert: Dashboard5xx
           expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.01
           for: 5m
@@ -37,3 +40,4 @@ spec:
             severity: warning
           annotations:
             summary: "Dashboard 5xx rate >1% in 5m"
+            runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#dashboard5xx"
