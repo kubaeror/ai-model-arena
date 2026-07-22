@@ -153,7 +153,7 @@ export function createRunsRouter(): Router {
   });
 
   // GET /api/runs/:runId/models/:model/files/* — read one sandbox file
-  router.get('/:runId/models/:model/files/*', async (req, res) => {
+  router.get('/:runId/models/:model/files/*filepath', async (req, res) => {
     const entry = findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
