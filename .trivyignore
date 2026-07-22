@@ -2,14 +2,6 @@
 # Debian considers this low-impact and will not backport a patch.
 # The affected code path (zipOpenNewFileInZip4_6) is not exercised
 # by our runtime at all, since we don't process zip files in-app.
+# (Also covered by ignore-unfixed: true in the workflow, kept here
+#  as documentation.)
 CVE-2023-45853
-
-# Node.js pkg false positives — already at patched versions (5.0.7 / 4.0.5)
-# or not present in production tree. Trivy scans nested package.json
-# files in transitive dev deps' own node_modules but those are pruned
-# by `npm prune --production` in the Dockerfile.
-CVE-2026-13149
-CVE-2026-33671
-CVE-2026-48815
-CVE-2026-59873
-CVE-2026-59874

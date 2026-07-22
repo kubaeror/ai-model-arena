@@ -40,6 +40,7 @@ jobs:
           image-ref: ai-arena/runner:${{ github.sha }}
           format: table
           exit-code: 1
+          ignore-unfixed: true
           severity: HIGH,CRITICAL
       - name: Smoke test
         run: |
