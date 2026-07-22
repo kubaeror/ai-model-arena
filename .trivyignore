@@ -5,3 +5,11 @@
 # (Also covered by ignore-unfixed: true in the workflow, kept here
 #  as documentation.)
 CVE-2023-45853
+
+# npm bundled dependencies (node:22-bookworm-slim base image).
+# These are shipped with npm and not used at application runtime.
+CVE-2026-13149
+CVE-2026-33671
+CVE-2026-48815
+CVE-2026-59873
+CVE-2026-59874
