@@ -54,7 +54,7 @@ export const api = {
   del: (path: string, init?: RequestInit) => request(path, { ...init, method: 'DELETE' }),
 };
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -252,5 +252,104 @@ export async function registerWebhook(url: string, events: string[], secret?: st
 }
 export async function deleteWebhook(id: number): Promise<void> {
   await apiFetch(`/api/webhooks/${id}`, { method: 'DELETE' });
+}
+
+// ── Budget ───────────────────────────────────────────────────────────────────
+export interface BudgetModelStatus {
+  daily: { spent: number; limit: number | null };
+  monthly: { spent: number; limit: number | null };
+}
+export interface BudgetStatus {
+  global: BudgetModelStatus;
+  models: Record<string, BudgetModelStatus>;
+}
+export async function getBudget(): Promise<BudgetStatus> {
+  return apiFetch<BudgetStatus>('/api/budget');
+}
+
+// ── Schedules ────────────────────────────────────────────────────────────────
+export interface ScheduleState {
+  id: string;
+  lastRun?: string;
+  nextRun?: string;
+  status: 'idle' | 'running' | 'error';
+  lastError?: string;
+  consecutiveFailures: number;
+  totalRuns: number;
+  totalFailures: number;
+}
+export interface Schedule {
+  id: string;
+  scenario: string;
+  models: string[];
+  cron: string;
+  enabled: boolean;
+  state: ScheduleState | null;
+}
+export async function listSchedules(): Promise<Schedule[]> {
+  const r = await apiFetch<{ schedules: Schedule[] }>('/api/schedules');
+  return r.schedules;
+}
+export async function createSchedule(opts: {
+  id?: string; scenario: string; models: string[]; cron: string; enabled?: boolean;
+}): Promise<{ id: string }> {
+  return apiFetch('/api/schedules', { method: 'POST', body: JSON.stringify(opts) });
+}
+export async function deleteSchedule(id: string): Promise<void> {
+  await apiFetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// ── Regression ───────────────────────────────────────────────────────────────
+export interface RegressionResult {
+  suite: string; runId: string; model: string; passed: boolean; timestamp: string;
+  scenarioResults: Array<{
+    scenario: string; success: boolean;
+    regression?: { passed: boolean; regressions: Array<{ metric: string; baseline: number; current: number; change: number; threshold: number }> };
+    current: { model: string; scenario: string; success: boolean; durationMs: number; turnsUsed: number };
+  }>;
+}
+export async function listRegressionSuites(): Promise<string[]> {
+  const r = await apiFetch<{ suites: string[] }>('/api/regression/suites');
+  return r.suites;
+}
+export async function runRegression(opts: { suite: string; model?: string; updateBaseline?: boolean }): Promise<RegressionResult> {
+  return apiFetch('/api/regression', { method: 'POST', body: JSON.stringify(opts) });
+}
+
+// ── Diff ─────────────────────────────────────────────────────────────────────
+export async function getRunDiff(runId: string, model: string): Promise<{ model: string; diff: string | null }> {
+  return apiFetch(`/api/runs/${encodeURIComponent(runId)}/models/${encodeURIComponent(model)}/diff`);
+}
+
+// ── Killswitch ───────────────────────────────────────────────────────────────
+export async function getKillswitch(): Promise<{ active: boolean }> {
+  return apiFetch('/api/ops/killswitch');
+}
+export async function activateKillswitch(): Promise<{ active: boolean }> {
+  return apiFetch('/api/ops/killswitch', { method: 'POST' });
+}
+export async function deactivateKillswitch(): Promise<{ active: boolean }> {
+  return apiFetch('/api/ops/killswitch', { method: 'DELETE' });
+}
+
+// ── Export ───────────────────────────────────────────────────────────────────
+export function getExportCsvUrl(params?: { model?: string; scenario?: string; from?: string; to?: string }): string {
+  const sp = new URLSearchParams();
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v) sp.set(k, v);
+    }
+  }
+  return `${API_BASE}/api/export/csv?${sp.toString()}`;
+}
+
+// ── Analytics (cost leaderboard) ─────────────────────────────────────────────
+export interface CostLeaderboardEntry {
+  model: string; runs: number; successes: number; successRate: number;
+  totalCost: number; costPerSuccess: number; avgCostPerRun: number; totalTokens: number;
+}
+export async function getCostLeaderboard(): Promise<CostLeaderboardEntry[]> {
+  const r = await apiFetch<{ leaderboard: CostLeaderboardEntry[] }>('/api/analytics/cost');
+  return r.leaderboard;
 }
 

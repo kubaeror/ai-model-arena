@@ -5,11 +5,30 @@ import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useCacheStats, useRefreshCache } from '../hooks/useCache';
 import { useLive } from '../hooks/useLive';
+import { getKillswitch, activateKillswitch, deactivateKillswitch } from '../lib/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 export function Ops() {
   const { data: cacheStats, isLoading } = useCacheStats();
   const refresh = useRefreshCache();
   const { processes } = useLive();
+  const qc = useQueryClient();
+
+  const killswitch = useQuery({
+    queryKey: ['killswitch'],
+    queryFn: getKillswitch,
+    refetchInterval: 10_000,
+  });
+
+  const activateKs = useMutation({
+    mutationFn: activateKillswitch,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['killswitch'] }),
+  });
+
+  const deactivateKs = useMutation({
+    mutationFn: deactivateKillswitch,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['killswitch'] }),
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -40,6 +59,24 @@ export function Ops() {
               </tbody>
             </table>
           )}
+        </PanelBody>
+      </Panel>
+
+      <Panel>
+        <PanelHeader title="Killswitch" actions={
+          killswitch.data?.active ? (
+            <Button variant="danger" size="sm" onClick={() => deactivateKs.mutate()} disabled={deactivateKs.isPending}>Deactivate</Button>
+          ) : (
+            <Button variant="primary" size="sm" onClick={() => activateKs.mutate()} disabled={activateKs.isPending}>Activate</Button>
+          )
+        } />
+        <PanelBody>
+          <div className="flex items-center gap-2">
+            <Badge variant="status" value={killswitch.data?.active ? 'ACTIVE — runners blocked' : 'INACTIVE'} className={killswitch.data?.active ? 'text-red-500' : ''} />
+            {(activateKs.error || deactivateKs.error) && (
+              <span className="text-red-500 text-12">{(activateKs.error ?? deactivateKs.error as Error).message}</span>
+            )}
+          </div>
         </PanelBody>
       </Panel>
 

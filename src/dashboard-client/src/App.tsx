@@ -18,6 +18,13 @@ import { Runners } from './pages/Runners';
 import { Prompts } from './pages/Prompts';
 import { Queues } from './pages/Queues';
 import { OutputMappings } from './pages/OutputMappings';
+import { Scenarios } from './pages/Scenarios';
+import { Anomalies } from './pages/Anomalies';
+import { Comparisons } from './pages/Comparisons';
+import { CostLeaderboard } from './pages/CostLeaderboard';
+import { Budget } from './pages/Budget';
+import { Schedules } from './pages/Schedules';
+import { Regression } from './pages/Regression';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -46,6 +53,13 @@ function Shell() {
               <Route path="/prompts" element={<Prompts />} />
               <Route path="/queues" element={<Queues />} />
               <Route path="/output-mappings" element={<OutputMappings />} />
+              <Route path="/scenarios" element={<Scenarios />} />
+              <Route path="/anomalies" element={<Anomalies />} />
+              <Route path="/comparisons" element={<Comparisons />} />
+              <Route path="/costs" element={<CostLeaderboard />} />
+              <Route path="/budget" element={<Budget />} />
+              <Route path="/schedules" element={<Schedules />} />
+              <Route path="/regression" element={<Regression />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

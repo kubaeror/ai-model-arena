@@ -33,6 +33,9 @@ import { createProvidersRouter } from './routes/providers.js';
 import { createCatalogRouter } from './routes/catalog.js';
 import { createMetricsRouter } from './routes/metrics.js';
 import { createCacheRouter } from './routes/cache.js';
+import { createBudgetRouter } from './routes/budget.js';
+import { createSchedulesRouter } from './routes/schedules.js';
+import { createRegressionRouter } from './routes/regression.js';
 import { registerRunnerRoutes } from './routes/runners.js';
 import { registerQueueRoutes } from './routes/queues.js';
 import { mountOpenApi } from './openapi.js';
@@ -211,6 +214,13 @@ async function start(): Promise<void> {
   app.use('/api/catalog', requireAuth(auth), requireRole('viewer'), createCatalogRouter());
   app.use('/api/metrics', requireAuth(auth), requireRole('viewer'), createMetricsRouter());
   app.use('/api/cache', requireAuth(auth), requireRole('viewer'), createCacheRouter());
+  app.use('/api/analytics', requireAuth(auth), requireRole('viewer'), createAnalyticsRouter());
+  app.use('/api/export', requireAuth(auth), requireRole('viewer'), createExportRouter());
+
+  // ── Budget & scheduling & regression (new) ─────────────────────────────
+  app.use('/api/budget', requireAuth(auth), requireRole('viewer'), createBudgetRouter());
+  app.use('/api/schedules', requireAuth(auth), requireRole('viewer'), createSchedulesRouter());
+  app.use('/api/regression', requireAuth(auth), requireRole('viewer'), createRegressionRouter());
 
   // ── Runner management (k8s API, admin only) ──────────────────────────────
   registerRunnerRoutes(app, requireAuth(auth));
@@ -244,10 +254,6 @@ async function start(): Promise<void> {
   app.use('/api/v1/catalog', requireApiKey(['catalog:read']), createCatalogRouter());
   app.use('/api/v1/metrics', requireApiKey(['metrics:read']), createMetricsRouter());
   app.use('/api/v1/cache', requireApiKey(['cache:read']), createCacheRouter());
-
-  // ── Public API (API key auth) ──────────────────────────────────────────────
-  app.use('/api/analytics', requireApiKey(['analytics:read']), createAnalyticsRouter());
-  app.use('/api/export', requireApiKey(['export:read']), createExportRouter());
 
   // ── OpenAPI interactive docs (public) ──────────────────────────────────────
   mountOpenApi(app);

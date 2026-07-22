@@ -10,6 +10,7 @@ import { Launcher } from '../components/Launcher';
 import { useTpsLeaderboard } from '../hooks/useMetrics';
 import { useRuntimeMetrics } from '../hooks/useMetrics';
 import { useCacheStats } from '../hooks/useCache';
+import { getExportCsvUrl } from '../lib/api';
 
 export function Home() {
   const [launcherOpen, setLauncherOpen] = useState(false);
@@ -47,7 +48,12 @@ export function Home() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <h1 className="font-display text-44 font-700">Mission Control</h1>
-        <Button onClick={() => setLauncherOpen(true)}>+ Run</Button>
+        <div className="flex gap-2">
+          <a href={getExportCsvUrl()} download="arena-export.csv" className="no-underline">
+            <Button variant="ghost" size="sm">Export CSV</Button>
+          </a>
+          <Button onClick={() => setLauncherOpen(true)}>+ Run</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4">

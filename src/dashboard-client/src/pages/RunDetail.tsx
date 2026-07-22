@@ -2,13 +2,13 @@ import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useRunLive } from '../hooks/useLive.js';
-import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, stopRun, restartRun, getTrace } from '../lib/api.js';
+import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, getRunDiff, stopRun, restartRun, getTrace } from '../lib/api.js';
 import { Button, Card, Badge, Select, Spinner } from '../components/ui.js';
 import { ConversationView } from '../components/ConversationView.js';
 import { CodeEditor } from '../components/CodeEditor.js';
 import { TraceWaterfall } from '../components/TraceWaterfall.js';
 
-type Tab = 'conversation' | 'files' | 'logs' | 'trace';
+type Tab = 'conversation' | 'files' | 'logs' | 'trace' | 'diff';
 
 export function RunDetail() {
   const params = useParams<{ runId: string }>();
@@ -46,6 +46,9 @@ export function RunDetail() {
           <Badge color={live.online ? 'green' : run?.status === 'errored' ? 'red' : 'slate'}>{live.online ? 'running' : (run?.status ?? '—')}</Badge>
           <Button size="sm" variant="outline" onClick={() => stopRun(runId)} disabled={!live.online}>Stop</Button>
           <Button size="sm" variant="outline" onClick={() => restartRun(runId)}>Restart</Button>
+          <a href={`/api/export/runs/${encodeURIComponent(runId)}/csv`} download={`${runId}-conversation.csv`}>
+            <Button size="sm" variant="outline">Export CSV</Button>
+          </a>
         </div>
       </div>
 
@@ -69,7 +72,7 @@ export function RunDetail() {
       </div>
 
       <div className="flex gap-1 border-b border-border">
-        {(['conversation', 'files', 'logs', 'trace'] as Tab[]).map((t) => (
+        {(['conversation', 'files', 'logs', 'trace', 'diff'] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm capitalize ${tab === t ? 'border-b-2 border-primary text-foreground' : 'text-muted hover:text-foreground'}`}>{t}</button>
         ))}
       </div>
@@ -82,6 +85,7 @@ export function RunDetail() {
       {tab === 'files' && <FilesPanel runId={runId} model={activeModel} />}
       {tab === 'logs' && <LogsPanel runId={runId} model={activeModel} liveLines={live.logLines} />}
       {tab === 'trace' && <TracePanel runId={runId} model={activeModel} />}
+      {tab === 'diff' && <DiffPanel runId={runId} model={activeModel} />}
     </div>
   );
 }
@@ -168,3 +172,21 @@ function TracePanel({ runId, model }: { runId: string; model: string }) {
   );
 }
 
+function DiffPanel({ runId, model }: { runId: string; model: string }) {
+  const diffQuery = useQuery({
+    queryKey: ['run-diff', runId, model],
+    queryFn: () => getRunDiff(runId, model),
+    enabled: !!model,
+  });
+  if (diffQuery.isLoading) {
+    return <div className="p-1 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading diff…</div>;
+  }
+  const diff = diffQuery.data?.diff;
+  return (
+    <Card className="h-[60vh] overflow-auto nice-scroll">
+      <pre className="px-1 py-3 text-xs font-mono whitespace-pre-wrap text-muted">
+        {diff || '(no diff available)'}
+      </pre>
+    </Card>
+  );
+}

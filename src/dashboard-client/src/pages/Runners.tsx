@@ -1,14 +1,33 @@
+import { useState } from 'react';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
+import { Modal } from '../components/ui/Modal';
 import { useRunners, useScaleRunner, useDrainRunner } from '../hooks/useRunners';
+import { api } from '../lib/api';
 
 export function Runners() {
   const { data: runners, isLoading } = useRunners();
   const scale = useScaleRunner();
   const drain = useDrainRunner();
+  const [logRunner, setLogRunner] = useState<string | null>(null);
+  const [logLines, setLogLines] = useState('');
+  const [logLoading, setLogLoading] = useState(false);
+
+  async function viewLogs(name: string) {
+    setLogRunner(name);
+    setLogLoading(true);
+    try {
+      const res = await api.get(`/api/runners/${encodeURIComponent(name)}/logs`);
+      setLogLines(await res.text());
+    } catch {
+      setLogLines('Failed to fetch logs.');
+    } finally {
+      setLogLoading(false);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -49,6 +68,9 @@ export function Runners() {
                     <Button variant="ghost" size="sm" onClick={() => drain.mutateAsync(r.name)}>
                       Drain
                     </Button>
+                    <Button variant="ghost" size="sm" onClick={() => viewLogs(r.name)}>
+                      Logs
+                    </Button>
                   </div>
                   {r.pods.length > 0 && (
                     <table className="w-full font-mono text-12">
@@ -74,6 +96,14 @@ export function Runners() {
           )}
         </PanelBody>
       </Panel>
+
+      <Modal open={!!logRunner} onClose={() => setLogRunner(null)} title={`Logs: ${logRunner ?? ''}`}>
+        <div className="h-[50vh] overflow-auto nice-scroll">
+          {logLoading ? <div className="p-3"><Spinner /></div> : (
+            <pre className="text-12 font-mono whitespace-pre-wrap text-fg-1">{logLines || '(no logs)'}</pre>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

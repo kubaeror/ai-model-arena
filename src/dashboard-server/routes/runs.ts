@@ -13,6 +13,7 @@ import {
 import type { RunSpec } from '../../orchestrator/run-lifecycle.js';
 import type { RunIndexModelEntry } from '../../orchestrator/run-index.js';
 import { safeResolve } from '../../sandbox/sandbox.js';
+import { readDiffPatch } from '../../sandbox/git.js';
 import { createLogger } from '../../logger/pino-logger.js';
 
 const logger = createLogger('ai-arena:routes:runs');
@@ -218,6 +219,17 @@ export function createRunsRouter(): Router {
     } catch (e) {
       res.status(404).json({ error: e instanceof Error ? e.message : String(e) });
     }
+  });
+
+  // GET /api/runs/:runId/models/:model/diff
+  router.get('/:runId/models/:model/diff', async (req, res) => {
+    const entry = findEntry(req.params.runId as string, req.params.model);
+    if (!entry) {
+      res.status(404).json({ error: 'Run or model not found' });
+      return;
+    }
+    const diff = await readDiffPatch(entry.outputDir);
+    res.json({ model: req.params.model, diff });
   });
 
   return router;

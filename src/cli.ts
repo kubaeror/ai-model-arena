@@ -423,7 +423,16 @@ program
     console.log('');
   });
 
-program.parseAsync(process.argv).catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Default: start the dashboard server when no subcommand is given
+if (process.argv.length <= 2) {
+  process.env.DASHBOARD_PORT = process.env.DASHBOARD_PORT ?? '4000';
+  import('./dashboard-server/server.js').catch((err) => {
+    console.error('Failed to start dashboard server', err);
+    process.exit(1);
+  });
+} else {
+  program.parseAsync(process.argv).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

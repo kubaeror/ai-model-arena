@@ -72,7 +72,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| **CLI** | `src/cli.ts` | Commander-based CLI: `run`, `status`, `logs`, `cleanup`, `regress`, `schedule`, `export`, `diff`, `budget` |
+| **CLI** | `src/cli.ts` | Commander-based CLI: `run`, `status`, `logs`, `cleanup`, `regress`, `schedule`, `export`, `diff`, `budget`. No-args starts the dashboard server. |
 | **Runner** | `src/runner.ts` | Long-lived queue consumer: dequeue → agent loop → checkpoint → ack/nack |
 | **Runner entry** | `src/runner-entry.ts` | Container entrypoint (starts OTel + runner) |
 | **Queue** | `src/queue/` | Abstraction: `types`, `in-memory`, `redis` (Streams with consumer groups + XAUTOCLAIM), `router`, `redis-config` |
@@ -95,7 +95,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Security** | `src/security/` | Prompt injection detection |
 | **Lineage** | `src/lineage/` | Artifact provenance tracking |
 | **Logger** | `src/logger/` | Pino structured logger, conversation/report/result/comparison loggers |
-| **Dashboard server** | `src/dashboard-server/` | Express API + WebSocket gateway, JWT auth, RBAC, 19 route modules |
+| **Dashboard server** | `src/dashboard-server/` | Express API + WebSocket gateway, JWT auth, RBAC, 22 route modules |
 | **Dashboard client** | `src/dashboard-client/` | React + Vite + TanStack Query + Tailwind SPA |
 
 ---
@@ -142,6 +142,10 @@ npm run dashboard:build
 npm run dashboard:start
 # → http://localhost:4000
 
+# Or start via CLI (no-args launches the dashboard server)
+npm run dev
+# → http://localhost:4000
+
 # Docker Compose
 docker compose up -d
 # → http://localhost:4000
@@ -156,13 +160,25 @@ Set `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` in `.env` (authentication is m
 ```
 ai-arena run     -s <scenario> -m <model1,model2,...>  Run a scenario
 ai-arena status                                         List runs
-ai-arena logs    -m <model> [-n <lines>]               Tail model logs
-ai-arena diff    <runId> [-m <model>]                  View run diff
-ai-arena cleanup [-d <days>]                           Cleanup old artifacts
-ai-arena regress -s <suite>                            Run regression suite
-ai-arena schedule list|create|remove                    Manage cron schedules
-ai-arena export  -o <file> [--model <name>]            Export runs to CSV
-ai-arena budget                                         Show budget status
+ai-arena logs    -m <model> [-n <lines>]                Tail model logs
+ai-arena diff    <runId> [-m <model>]                   View run diff
+ai-arena cleanup [-d <days>]                            Cleanup old artifacts
+ai-arena regress -s <suite>                             Run regression suite
+ai-arena schedule list|create|remove                     Manage cron schedules
+ai-arena export  -o <file> [--model <name>]             Export runs to CSV
+ai-arena budget                                          Show budget status
+
+Running ai-arena with no arguments starts the dashboard server.
+All CLI commands are also available through the dashboard UI:
+  run → POST /api/runs (or "+ Run" button)
+  status → GET /api/runs (Home page, Run detail)
+  logs → Run detail → Logs tab (per-model)
+  diff → Run detail → Diff tab
+  regress → /regression page
+  schedule → /schedules page
+  export → Export CSV buttons on Home, RunDetail
+  budget → /budget page
+  cleanup → /runners page (drain, scale)
 ```
 
 ### Run options
