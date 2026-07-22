@@ -1,703 +1,432 @@
 # ai-model-arena
 
-Automated, multi-model **agentic coding** arena. For each configured AI model, it runs an isolated "agentic coding" session where the model receives a task, has access to coding tools (read/write/list files, run shell commands, search code), and operates in its own sandboxed workspace — just like a real coding assistant working in a repo. Every conversation turn and tool call is logged, and all artifacts are saved into a per-model output folder. Sessions are managed via a **queue-based runner** deployable to Kubernetes with KEDA autoscaling.
+Multi-model **agentic coding arena** — run multiple LLMs on the same coding task, concurrently, in sandboxed workspaces, and compare their results.
 
-> Run multiple models (OpenAI, Anthropic, local Ollama/LM Studio) on the same coding task, concurrently, and compare them.
+Models receive a task, get access to coding tools (file ops, shell, search), and work autonomously in an isolated sandbox. Every turn and tool call is logged, all artifacts are saved, and cross-model comparison reports are generated automatically.
+
+Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runner pods that scale to zero via KEDA. A real-time React dashboard provides run monitoring, scenario management, cost tracking, anomaly detection, and observability.
 
 ---
 
 ## Features
 
-- **Per-model isolated sandboxed workspace** with a filesystem tool surface (`read_file`, `write_file`, `list_files`, `run_shell_command`, `search_code`, `task_complete`). Paths cannot escape the sandbox.
-- **Queue-based long-lived runner** (`src/runner.ts`) pulling tasks from Redis Streams or an in-memory queue, with KEDA autoscaling in k8s.
-- **Provider adapters** implementing a shared `sendMessage(messages, tools)` interface: OpenAI (Chat Completions + function calling), Anthropic (Messages API + tool use), and a generic OpenAI-compatible adapter for local models (Ollama / LM Studio).
-- **Agent loop**: prompt → model output → execute tool calls → append results → repeat; stops on `max_turns` or when the model calls `task_complete`.
-- **Retry with exponential backoff** for API calls (429 / 5xx / network), configurable per model.
-- **Structured logging** with `pino` (JSON) plus a per-run `conversation.json`, `report.md`, and machine-readable `result.json`.
-- **Comparison report** (`comparison.md` / `comparison.json`) across all models after a run.
-- **MCP-compatible tool schema** (JSON-Schema `inputSchema`), so tools could later be exposed via a real MCP server.
-- **TypeScript strict mode, ESM**, with `zod` runtime validation of configs and `js-yaml` config parsing.
+- **16+ LLM providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, OpenRouter, Groq, Cerebras, NVIDIA, Mistral, SambaNova, Scaleway, Cloudflare, GitHub Copilot, xAI, Ollama — all behind a unified adapter interface
+- **Sandboxed workspaces** with path escape prevention and shell policy enforcement
+- **Agent loop**: prompt → model response → tool execution → repeat; stops on `task_complete` or `max_turns`
+- **Queue-driven architecture**: Redis Streams (production) or in-memory queue (dev) with KEDA autoscaling
+- **Session persistence**: SQLite (dev) or Postgres (production) via Drizzle ORM, with per-turn checkpointing
+- **OpenTelemetry tracing**: full span trees per run (agent → chat → tool), OTLP export to Tempo/Grafana
+- **Anomaly detection**: z-score based latency, loop, token/cost spike, error rate, and silent failure detection
+- **LLM-as-Judge evaluation**: rubric-based scoring (correctness, fidelity, style, efficiency)
+- **Cost tracking & budgets**: per-model and global daily/monthly limits with enforcement
+- **Regression testing**: baseline snapshots and threshold-based regression detection
+- **Cron scheduler**: recurring runs with notification routing
+- **Notifications**: Slack, Discord, and signed webhooks
+- **Prompt injection detection**: content scanning on user-provided tool arguments
+- **Git integration**: auto-init, per-turn commits, and `diff.patch` generation
+- **Artifact lineage**: provenance tracking for generated files
+- **Prometheus metrics**: runner and dashboard health, queue depth, error rates
+- **Public REST API**: OpenAPI 3.0, API-key auth, per-key rate limiting, Swagger UI at `/api/docs`
+- **Web dashboard**: React + Vite + TanStack Query + Tailwind with live WebSocket updates
 
 ---
 
 ## Architecture
 
 ```
-ai-arena run --scenario express-rest --models gpt-4o,claude-3.7
-        │
-        ▼
- src/cli.ts  ──►  src/orchestrator/orchestrator.ts
-                   │  • creates a run record + sessions
-                   │  • enqueues tasks to the queue per model
-                   │  • polls run index until all models complete
-                   │  • reads each result.json → writes comparison.md/json
+┌──────────────┐     ┌────────────────────────────────────────────────────┐
+│   CLI / API   │────▶│                  Queue (Redis / In-Memory)          │
+└──────────────┘     └──────────────────┬─────────────────────────────────┘
+                                        │
+                    ┌───────────────────┼───────────────────────┐
+                    ▼                   ▼                       ▼
+            ┌──────────────┐   ┌──────────────┐       ┌──────────────┐
+            │   Runner 1   │   │   Runner 2   │  ...  │   Runner N   │
+            │  (OpenAI)    │   │ (Anthropic)  │       │  (Bedrock)   │
+            └──────┬───────┘   └──────┬───────┘       └──────┬───────┘
+                   │                  │                      │
+                   ▼                  ▼                      ▼
+            ┌──────────────────────────────────────────────────────────┐
+            │                    Agent Loop                            │
+            │  send(prompt) → receive(response) → execute(tool_calls)  │
+            │       │              │                    │               │
+            │       ▼              ▼                    ▼               │
+            │  Provider Adapter  Sandbox           Tool Executors       │
+            │  (OpenAI/Anthro/   (fs isolation)   (file/shell/search)  │
+            │   Google/Bedrock/                                        │
+            │   Groq/Cerebras/...)                                      │
+            └──────────────────────────────────────────────────────────┘
                    │
-                   ▼  (one PM2 process per model)
-              src/worker.ts   (name: ai-arena-<model>-<scenario>-<ts>)
-                   │  • loads models.yaml + scenario yaml (zod-validated)
-                   │  • creates outputs/<model>/<runId>/ + sandbox files/
-                   │  • seeds sandbox from scenario template
-                   │  • createAdapter() → runAgentLoop()
-                   │  • validates successCriteria (optional shell command)
-                   │  • writes conversation.json, report.md, result.json
-                   │  • exits 0 (PM2 marks "stopped")
                    ▼
- src/agent-loop/loop.ts   ◄── src/adapters/* (OpenAI/Anthropic/Ollama)
-   send → receive → execute tools (src/tools/executors.ts, scoped to
-   src/sandbox/sandbox.ts) → append → loop → stop
+            ┌─────────────────┐    ┌──────────────────┐
+            │  Session Store   │    │  Output Artifacts │
+            │  (SQLite/PG)     │    │  conversation.json│
+            │  per-turn saves  │    │  report.md        │
+            └─────────────────┘    │  result.json      │
+                                   │  files/           │
+                                   │  diff.patch       │
+                                   └──────────────────┘
 ```
 
-### Project layout
+### Key modules
 
-```
-ai-model-arena/
-├─ Dockerfile                    # multi-stage, non-root user
-├─ docker-compose.yml            # dev: postgres + redis + runner + dashboard
-├─ k8s/                          # Kubernetes manifests (minikube target)
-├─ drizzle/                      # SQLite migrations (Drizzle Kit)
-│  ├─ models.yaml                 # model registry (provider, model id, apiKeyEnv, maxTurns, retry…)
-│  └─ scenarios/
-│     ├─ express-rest.yaml        # sample scenario
-│     └─ templates/express-rest/  # starter files seeded into each sandbox
-├─ outputs/                       # auto-created run outputs (gitignored)
-│  ├─ comparisons/                # comparison_<scenario>_<ts>.md / .json
-│  └─ <model_name>/<scenario>_<timestamp>/
-│     ├─ conversation.json        # full structured transcript
-│     ├─ report.md                # human-readable run summary
-│     ├─ result.json              # machine-readable outcome (used for comparison)
-│     └─ files/                   # final sandbox state (everything the model created/edited)
-├─ src/
-│  ├─ cli.ts                      # entry: run | status | logs | cleanup
-│  ├─ runner.ts                   # long-lived queue-driven runner
-│  ├─ worker.ts                   # legacy: direct per-model session
-│  ├─ config.ts                   # zod schemas + YAML loaders
-│  ├─ paths.ts                    # robust project-root discovery
-│  ├─ types.ts                    # shared interfaces
-│  ├─ types/pm2.d.ts              # ambient pm2 typings (no @types/pm2 needed)
-│  ├─ orchestrator/ (orchestrator, pm2-helpers, run-lifecycle, run-index)
-│  ├─ adapters/ (base, openai, anthropic, ollama, index)
-│  ├─ agent-loop/loop.ts
-│  ├─ sandbox/sandbox.ts
-│  ├─ tools/ (schema, executors, index)
-│  ├─ dashboard-server/ (server, auth, live WS gateway, routes/{models,scenarios,runs})
-│  ├─ dashboard-client/ (React + Vite + TanStack Query + Tailwind app)
-│  └─ logger/ (pino-logger, conversation-logger, report-logger, result-logger, comparison-logger)
-└─ scripts/ (smoke-stub.mjs, ws-smoke.mjs)   # no-API-key smoke tests
-```
+| Module | Path | Purpose |
+|--------|------|---------|
+| **CLI** | `src/cli.ts` | Commander-based CLI: `run`, `status`, `logs`, `cleanup`, `regress`, `schedule`, `export`, `diff`, `budget` |
+| **Runner** | `src/runner.ts` | Long-lived queue consumer: dequeue → agent loop → checkpoint → ack/nack |
+| **Runner entry** | `src/runner-entry.ts` | Container entrypoint (starts OTel + runner) |
+| **Queue** | `src/queue/` | Abstraction: `types`, `in-memory`, `redis` (Streams with consumer groups + XAUTOCLAIM), `router`, `redis-config` |
+| **Agent loop** | `src/agent-loop/loop.ts` | Core send→tool→loop with per-turn budget/cancellation checks |
+| **Providers** | `src/providers/` | Provider registry (+16 providers), descriptor system, circuit breaker, fallback chains |
+| **Provider adapters** | `src/providers/adapters/` | Wire-format translation: `openai`, `anthropic`, `google`, `bedrock`, `openai-compat` |
+| **Tools** | `src/tools/` | Tool schemas (`read_file`, `write_file`, `list_files`, `run_shell_command`, `search_code`, `task_complete`) + executors |
+| **Sandbox** | `src/sandbox/` | Isolated workspace with path escape prevention, shell policy, git integration |
+| **Session store** | `src/session/store.ts` | Message + session persistence per turn |
+| **Database** | `src/db/` | Drizzle ORM: SQLite + Postgres schemas, migrations, model resolver |
+| **Orchestrator** | `src/orchestrator/` | Run lifecycle, run index, PM2 helpers |
+| **Catalog** | `src/catalog/` | models.dev sync, benchmark data, model matching |
+| **Cost tracking** | `src/cost-tracking/` | Pricing config, budget enforcement, per-run cost records |
+| **Evaluation** | `src/evaluation/` | LLM-as-Judge scoring, regression suite runner |
+| **Scheduler** | `src/scheduler/` | Cron-based job manager |
+| **Notifications** | `src/notifications/` | Slack, Discord, signed webhooks |
+| **Anomaly detection** | `src/anomaly-detection/` | Z-score detectors, SQLite-backed anomaly records |
+| **Observability** | `src/observability/` | OTel SDK setup, span instrumentation, trace metadata, stats |
+| **Metrics** | `src/metrics/` | Prometheus metrics for runner/dashboard health |
+| **Security** | `src/security/` | Prompt injection detection |
+| **Lineage** | `src/lineage/` | Artifact provenance tracking |
+| **Logger** | `src/logger/` | Pino structured logger, conversation/report/result/comparison loggers |
+| **Dashboard server** | `src/dashboard-server/` | Express API + WebSocket gateway, JWT auth, RBAC, 19 route modules |
+| **Dashboard client** | `src/dashboard-client/` | React + Vite + TanStack Query + Tailwind SPA |
 
 ---
 
-## Setup
+## Quick start
 
-Requirements: **Node.js ≥ 20.11** (uses `import.meta.dirname`, `fs.cpSync`, global `fetch`).
+**Requirements**: Node.js ≥ 20.11
 
 ```bash
-# 1. install dependencies
+git clone <repo-url> && cd ai-model-arena
 npm install
-
-# 2. add your API keys (copy the template and edit)
 cp .env.example .env
-#   then set OPENAI_API_KEY=... and/or ANTHROPIC_API_KEY=...
-
-# 3. build
-npm run build
+# Edit .env — add at least one API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
 ```
 
-> **PM2 daemon:** the first PM2 call boots the `pm2` daemon (a one-time, slow step). Subsequent calls are instant. If your first `run`/`status` seems to hang, it is just the daemon bootstrapping.
-
----
-
-## Usage
+### Run a scenario
 
 ```bash
-# Run a scenario against one or more models concurrently.
-# Each run gets a unique timestamped run id — previous outputs are never overwritten.
-npm start -- run --scenario express-rest --models gpt-4o,claude-3.7
-# equivalent (after build):
-node dist/cli.js run --scenario express-rest --models gpt-4o,claude-3.7
-
-# Dev mode (runs the CLI via tsx, no separate build needed):
+# Dev mode (tsx, no build)
 npm run dev -- run --scenario express-rest --models gpt-4o
+
+# Or build first, then run
+npm run build
+node dist/cli.js run --scenario express-rest --models gpt-4o,claude-3.7
 ```
 
-`run` options:
+This spawns one runner per model. Each model gets its own sandbox (seeded from the scenario template), runs the agent loop, writes outputs to `outputs/<model>/<scenario>_<timestamp>/`, and the orchestrator prints a comparison table.
 
-| Flag | Description |
-|------|-------------|
-| `-s, --scenario <name>` | Scenario name (`configs/scenarios/<name>.yaml`) or a `.yaml` path. **Required.** |
-| `-m, --models <list>` | Comma-separated model names from `configs/models.yaml`. **Required.** |
-| `--models-config <path>` | Override the models config path (default `configs/models.yaml`). |
-| `--scenarios-dir <path>` | Override the scenarios directory (default `configs/scenarios`). |
-| `--timeout <minutes>` | Overall wait timeout in minutes (default 30). |
-
-Other commands:
-
-```bash
-ai-arena status                      # list arena sessions from the runs index
-ai-arena logs --model <name>         # tail logs for a model
-ai-arena logs --model gpt-4o -n 500  # show the last 500 lines
-ai-arena cleanup                     # cancel in-flight tasks
-```
-
-> The `ai-arena` bin is available after `npm install` (locally via `node dist/cli.js`). To call it as `ai-arena ...` from anywhere, run `npm link`.
-
-### Smoke test (no API key needed)
-
-Validates the agent loop, tools, sandbox, and loggers with a stub adapter:
+### Smoke test (no API keys)
 
 ```bash
 npm run build && node scripts/smoke-stub.mjs
 ```
 
+### Dashboard
+
+```bash
+# Dev mode (API + React dev server)
+npm run dashboard:dev
+# → http://localhost:5173
+
+# Production mode
+npm run dashboard:build
+npm run dashboard:start
+# → http://localhost:4000
+
+# Docker Compose
+docker compose up -d
+# → http://localhost:4000
+```
+
+Set `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` in `.env` (authentication is mandatory, even locally).
+
 ---
 
-## Interpreting results
+## CLI reference
 
-After a run, each model's artifacts live in `outputs/<model>/<scenario>_<timestamp>/`:
+```
+ai-arena run     -s <scenario> -m <model1,model2,...>  Run a scenario
+ai-arena status                                         List runs
+ai-arena logs    -m <model> [-n <lines>]               Tail model logs
+ai-arena diff    <runId> [-m <model>]                  View run diff
+ai-arena cleanup [-d <days>]                           Cleanup old artifacts
+ai-arena regress -s <suite>                            Run regression suite
+ai-arena schedule list|create|remove                    Manage cron schedules
+ai-arena export  -o <file> [--model <name>]            Export runs to CSV
+ai-arena budget                                         Show budget status
+```
+
+### Run options
+
+| Flag | Description |
+|------|-------------|
+| `-s, --scenario <name>` | Scenario name from `configs/scenarios/<name>.yaml` or a `.yaml` path |
+| `-m, --models <list>` | Comma-separated model names from catalog |
+| `--timeout <minutes>` | Overall wait timeout (default: 30) |
+
+---
+
+## Output artifacts
+
+Each model run writes to `outputs/<model>/<scenario>_<timestamp>/`:
 
 | File | Contents |
 |------|----------|
-| `conversation.json` | Full structured transcript: system/user/assistant messages, tool calls (with args), tool results, token usage per turn, timestamps. Durable — flushed after every entry. |
-| `report.md` | Human-readable summary: turns used, tools called, token usage, stop reason, success criteria pass/fail, and a per-turn timeline. |
-| `result.json` | Machine-readable outcome (turns, tools, token usage, stop reason, errors, success, success-criteria details). This is what the comparison is built from. |
-| `files/` | The final sandbox workspace state — everything the model created or edited. |
+| `conversation.json` | Full structured transcript: messages, tool calls/args, tool results, token usage per turn |
+| `report.md` | Human-readable summary with per-turn timeline |
+| `result.json` | Machine-readable outcome (turns, tokens, cost, stop reason, success) |
+| `files/` | Final sandbox state — everything the model created or edited |
+| `diff.patch` | Git diff from initial to final state |
+| `judge_score.json` | LLM-as-Judge rubric scores (if enabled) |
+| `trace-meta.json` | OpenTelemetry span tree for the run |
 
-The cross-model comparison is written to `outputs/comparisons/<scenario>_<timestamp>.md` (and `.json`), and a compact table is printed to the console:
-
-```
-model   | success | turns | tools | duration | stop
---------+---------+-------+-------+----------+-------------
-gpt-4o  | PASS    | 6/25  | 12    | 47.3s    | task_complete
-claude  | FAIL    | 25/25 | 34    | 120.1s   | max_turns
-```
-
-**Stop reasons:** `task_complete` (model called the task_complete tool), `no_tool_calls` (model replied with text and no tools), `max_turns` (hit the turn cap), `api_error` (retries exhausted), `setup_error` / `fatal_error` (worker problem — details in `errors`).
-
-**Success criteria** are evaluated by running the scenario's `successCriteria.command` (default: `npm test`) in the sandbox and comparing the exit code to `expectedExitCode` (default 0); if `expectedOutputContains` is set, the command's combined output must also contain that substring. If a scenario has no success criteria, success is inferred from the `task_complete` stop reason.
+Cross-model comparisons are written to `outputs/comparisons/<scenario>_<timestamp>.md` (and `.json`).
 
 ---
 
-## Adding a new model adapter
+## Configuration
 
-Adapters live in `src/adapters/` and implement the shared `ModelAdapter` interface from `src/adapters/base.ts`:
+### Environment (`.env`)
+
+```bash
+# LLM API keys (referenced by apiKeyEnv in catalog)
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+AWS_BEDROCK_REGION=us-east-1
+
+# Dashboard
+DASHBOARD_USERNAME=admin
+DASHBOARD_PASSWORD=change-me
+DASHBOARD_JWT_SECRET=<random-32-byte-hex>
+DASHBOARD_PORT=4000
+
+# Queue (production)
+QUEUE_DRIVER=redis
+REDIS_URL=redis://localhost:6379
+
+# Database (production)
+DB_DRIVER=postgres
+DATABASE_URL=postgres://arena:arena@localhost:5432/arena
+
+# Observability
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+```
+
+### Configuration files (`configs/`)
+
+| File | Purpose |
+|------|---------|
+| `scenarios/<name>.yaml` | Scenario definitions (prompt, task, success criteria, starter files) |
+| `scenarios/templates/<name>/` | Starter files seeded into sandboxes |
+| `budget.yaml` | Global + per-model budget limits |
+| `evaluation.yaml` | LLM-as-Judge rubric and regression thresholds |
+| `anomaly-detection.yaml` | Z-score thresholds for anomaly detectors |
+| `schedules.yaml` | Cron-based scheduled runs |
+| `notifications.yaml` | Slack/Discord webhook URLs + routing rules |
+| `api-keys.yaml` | Public API keys with permission sets |
+| `regression/<name>.yaml` | Regression suite definitions |
+
+---
+
+## Adding a model
+
+Models are managed through the provider catalog (built-in for 16+ providers). To add a new model:
+
+1. Ensure the provider descriptor exists in `src/providers/descriptors/`
+2. Add the model via the dashboard (**Models** page) or the API
+3. Set the corresponding `apiKeyEnv` value in your `.env`
+
+For a new provider:
+
+1. Create `src/providers/descriptors/<name>.ts` implementing `ProviderDescriptor`
+2. Register it in `src/providers/index.ts` in the `BUILTIN_PROVIDERS` array
+3. If the wire format differs, create `src/providers/adapters/<name>.ts`
+
+The adapter interface is:
 
 ```ts
-export interface ModelAdapter {
+interface ModelAdapter {
   sendMessage(messages: ChatMessage[], tools: ToolDefinition[]): Promise<ModelResponse>;
 }
 ```
 
-To add a provider (e.g. Google Gemini):
-
-1. **Create `src/adapters/google.ts`** extending `BaseAdapter` (which gives you retry/backoff for free):
-
-   ```ts
-   import type { ModelConfig, ChatMessage, ModelResponse, ToolDefinition, Logger } from '../types.js';
-   import { BaseAdapter, HttpError } from './base.js';
-
-   export class GoogleAdapter extends BaseAdapter {
-     constructor(config: ModelConfig, logger?: Logger) { super(config, logger); }
-
-     async sendMessage(messages: ChatMessage[], tools: ToolDefinition[]): Promise<ModelResponse> {
-       return this.withRetry(async () => {
-         // 1. convert ChatMessage[] -> Google's "contents" format
-         // 2. POST to https://generativelanguage.googleapis.com/.../models/<model>:generateContent
-         // 3. on !res.ok throw new HttpError(res.status, await res.text())
-         // 4. parse the response into { text, toolCalls, usage, stopReason }
-       });
-     }
-   }
-   ```
-
-   `ChatMessage` is provider-agnostic: `role` is `system|user|assistant|tool`; assistant messages carry `toolCalls: {id, name, arguments}[]`; tool-result messages carry `toolCallId` + `content`. The job of an adapter is to translate this to/from the provider's wire format (see `src/adapters/openai.ts` and `src/adapters/anthropic.ts` for reference).
-
-2. **Register it** in `src/adapters/index.ts`:
-
-   ```ts
-   case 'google': return new GoogleAdapter(config, logger);
-   ```
-
-3. **Add a model entry** in `configs/models.yaml`:
-
-   ```yaml
-   - name: gemini-2.5
-     provider: google
-     model: gemini-2.5-pro
-     apiKeyEnv: GOOGLE_API_KEY
-     maxTurns: 20
-     temperature: 0.2
-   ```
-
-The retry policy (`maxRetries`, `initialDelayMs`, `maxDelayMs`) is honored automatically by `BaseAdapter.withRetry`, which retries HTTP 429, 5xx, and network errors with exponential backoff + jitter, and respects `Retry-After` when present.
+Circuit breaking and fallback chains are built into the provider registry.
 
 ---
 
-## Adding a new scenario
+## Adding a scenario
 
-Scenarios are YAML files in `configs/scenarios/`. Create `configs/scenarios/<name>.yaml`:
+Create `configs/scenarios/<name>.yaml`:
 
 ```yaml
 name: my-task
-description: What the agent must accomplish.
+description: What the agent must accomplish
 systemPrompt: |
   You are an autonomous coding agent with tools: read_file, write_file,
-  list_files, run_shell_command, search_code. When done & verified, call task_complete.
+  list_files, run_shell_command, search_code. When done, call task_complete.
 task: |
   Implement <...>. Run `npm test`. Then call task_complete.
-# Optional: seed the sandbox with starter files (path relative to this file's dir).
 starterFiles: templates/my-task
-# Optional: validate by running a command in the sandbox after the loop ends.
 successCriteria:
   command: npm test
   expectedExitCode: 0
-  expectedOutputContains: "pass"   # optional
 maxTurns: 25
-shellTimeoutMs: 30000        # default 30s
-maxShellOutputBytes: 524288  # default 512KB
+shellTimeoutMs: 30000
+maxShellOutputBytes: 524288
 ```
 
-Put starter files in `configs/scenarios/templates/<name>/` and reference them via `starterFiles`. They are copied into each model's sandbox before the agent starts.
-
-Run it with: `ai-arena run --scenario my-task --models gpt-4o,claude-3.7`.
+Put starter files in `configs/scenarios/templates/<name>/`. Scenarios can also be created from the dashboard UI with an inline CodeMirror editor.
 
 ---
 
-## Notes & troubleshooting
+## Deployment
 
-- **API keys** are read from environment variables named by `apiKeyEnv` in `models.yaml` (loaded from `.env` via `dotenv`). They are never hardcoded or logged. A missing key fails the worker gracefully (it writes `result.json` with `stopReason: setup_error` and exits 0).
-- **Sandboxing:** all filesystem tools resolve paths relative to the run's `files/` directory and reject anything that escapes it (`..` traversal, absolute paths outside the sandbox, drive-relative paths). `run_shell_command` executes with `cwd` = the sandbox, a configurable timeout, and a max output size.
-- **Idempotent outputs:** every run uses a unique `<scenario>_<YYYYMMDD-HHMMSS>` run id, so previous outputs are never overwritten.
-- **Process lifecycle:** workers always exit 0 (even on task failure) so PM2 records `stopped` rather than `errored`, and never auto-restarts them (`autorestart: false`). Real failures are recorded in `result.json`. The orchestrator judges completion by polling PM2 status and reading `result.json`.
-- **`npm run dev`** runs the CLI via `tsx` without a build step. Production `run` uses the compiled `dist/worker.js` (and auto-builds on first run if `dist/` is missing).
-- **Windows shell:** `run_shell_command` uses `cmd.exe` on Windows and `/bin/sh` elsewhere. The sample `express-rest` scenario needs network access (it runs `npm install express`).
-
-## Web Dashboard
-
-A real-time web UI + API for monitoring runs and managing scenarios/models, wired to the existing orchestrator (no duplicated PM2 logic).
-
-### Architecture
-
-- **Backend** (`src/dashboard-server/`): Express REST API + `ws` WebSocket gateway on a configurable port (default **4000**), JWT auth, and a lightweight JSON run index (`outputs/runs-index.json`). It imports the orchestrator module programmatically.
-- **Frontend** (`src/dashboard-client/`): React + Vite + TanStack Query + Tailwind, with a CodeMirror editor for starter/sandbox files.
-
-### Setup
-
-Add dashboard credentials to your `.env` (the dashboard is **never** exposed unauthenticated, even locally):
-
-```
-DASHBOARD_USERNAME=admin
-DASHBOARD_PASSWORD=change-me
-# optional: DASHBOARD_PORT=4000   DASHBOARD_JWT_SECRET=<random>
-```
-
-If `DASHBOARD_PASSWORD` is unset, the server generates a one-time password and prints it at startup.
-
-### Run it
+### Docker Compose (local dev)
 
 ```bash
-# Dev: API server (tsx) + Vite dev server, concurrently
-npm run dashboard:dev            # dashboard at http://localhost:5173, API proxied to :4000
-
-# Production: build backend + client, then serve the built SPA from Express
-npm run dashboard:build
-npm run dashboard:start          # http://localhost:4000
-
-# Or run it as a managed PM2 process (its own process, separate from workers)
-pm2 start ecosystem.config.cjs   # name: ai-arena-dashboard
+docker compose up -d
+# Starts: postgres, redis, runner, dashboard
 ```
 
-### What you can do in the UI
+### Kubernetes (minikube)
 
-- **Live** — a grid of model cards with real-time PM2 status (online/stopped/errored), CPU, memory, uptime, restarts, and the running scenario/run. Updated over WebSocket (no polling).
-- **Run detail** — the full conversation transcript (chat-style, auto-scrolling as turns stream in live), with expandable tool-call input/output, plus tabs for the **sandbox files** (CodeMirror viewer) and the **PM2 logs**. Stop/Restart controls.
-- **Scenarios** — list, create, edit, delete. The create form has fields for name, system prompt, task, success criteria, max turns, and an **inline CodeMirror editor per starter file** — so you can create a scenario from the UI instead of hand-editing YAML. (Files are written to `configs/scenarios/templates/<name>/` and the YAML is written for you.)
-- **Models** — add/edit/delete model configs. Only the **env-var name** holding a key is ever shown or stored; raw key values never appear anywhere in the UI or API.
-- **Comparisons** — per-run, per-model table (turns, success/fail, tools, duration, stop reason) reusing the run index.
-- **Run launcher** — multi-select models + scenario dropdown → launches a run (calls `POST /api/runs`, which reuses the orchestrator to spawn PM2 workers) and jumps to the new run's detail view.
+```bash
+minikube start --memory=4096 --cpus=2
+helm upgrade --install keda kedacore/keda -n keda --create-namespace
 
-### REST API (auth via `Authorization: Bearer <jwt>`)
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/postgres.yaml -f k8s/redis.yaml -f k8s/output-pvc.yaml
+kubectl apply -f k8s/runner-configmap.yaml
+kubectl apply -f k8s/runner-deployment.yaml
+kubectl apply -f k8s/keda-scaledobject.yaml
+kubectl apply -f k8s/dashboard-deployment.yaml
+kubectl apply -f k8s/dashboard-service.yaml
 
-`POST /api/auth/login` · `GET|POST|DELETE /api/models` · `GET|POST|PUT|DELETE /api/scenarios` · `POST /api/runs` · `GET /api/runs` · `GET /api/runs/:runId` · `GET /api/runs/:runId/models/:model/{conversation,report,files,files/*,logs}` · `POST /api/runs/:runId/{stop,restart}`
+minikube service dashboard -n ai-arena --url
+```
 
-### WebSocket (`/ws?token=<jwt>`)
+KEDA scales runners based on Redis Stream queue depth. Runners scale to zero when idle.
 
-Server broadcasts `process_status` (every 2s), and per-subscribed-run `conversation_update` / `log_line` / `run_completed` events. Clients subscribe with `{type:"subscribe",runId}`. Workers stay stateless — the server reads/writes all state through `outputs/` and the run index, polling conversation/log files for new content.
+See `k8s/README.md` for platform notes (gVisor, RWX PVC, secrets).
 
-### Creating a scenario from the UI (instead of YAML)
+---
 
-1. Open **Scenarios → New scenario**.
-2. Fill name, system prompt, task, success criteria (e.g. `npm test`, exit 0), max turns.
-3. Add starter files inline (path + CodeMirror content). They are seeded into every model's sandbox.
-4. Save → the YAML is written to `configs/scenarios/<name>.yaml` and starter files to `configs/scenarios/templates/<name>/`.
+## Observability
+
+The arena instruments every run with OpenTelemetry spans following GenAI semantic conventions:
+
+- **`invoke_agent`** (root span per run)
+- **`chat`** (per LLM API call — includes token usage, model, temperature)
+- **`execute_tool`** (per tool invocation — duration, success/failure)
+
+Set `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT` to send traces to Tempo/Grafana.
+
+Local trace metadata (`trace-meta.json`) is always recorded and surfaced in the dashboard's **Trace** tab. The **Observability** page provides aggregate stats without an external backend.
+
+Prometheus metrics are exposed by the dashboard server for runner health, queue depth, and error rates.
+
+## Anomaly detection
+
+After each run, anomaly detectors check for:
+
+| Type | Detection method |
+|------|------------------|
+| `latency` | Single tool/call duration exceeds historical p95 (z-score ≥ threshold) |
+| `loop` | Same tool+args repeated consecutively ≥ N times |
+| `token_spike` | Total tokens exceed N× historical average |
+| `cost_spike` | Estimated cost exceeds N× historical average |
+| `error_rate` | Failure rate spikes above baseline |
+| `silent_failure` | Success criteria vs judge score mismatch |
+
+Anomalies are written to SQLite, trigger notifications, and appear on the dashboard **Anomalies** page (filterable, markable as resolved).
+
+## Public API
+
+Interactive docs at `http://localhost:4000/api/docs` (Swagger UI). All endpoints under `/api/v1/`, protected by `X-API-Key` header.
+
+Key endpoints: `models`, `scenarios`, `runs`, `cost`, `traces`, `anomalies`, `observability`, `webhooks`, `export`, `analytics`, `metrics`, `catalog`, `queues`, `runners`, `providers`, `prompts`.
+
+API keys are configured in `configs/api-keys.yaml` with granular permissions (`runs:read`, `runs:write`, `models:read`, `scenarios:read`, `analytics:read`, `export:read`, `traces:read`, `anomalies:read`, `anomalies:write`, `observability:read`, `webhooks:write`).
+
+## Development
+
+```bash
+npm run dev              # Run CLI via tsx (no build)
+npm run build            # TypeScript compilation
+npm run typecheck        # Type checking only
+npm run lint             # ESLint
+npm test                 # All tests (node:test)
+npm run test:ci          # Full CI: typecheck + lint + coverage + db tests
+npm run test:db          # Database-specific tests
+npm run db:generate      # Generate Drizzle migrations
+npm run db:migrate       # Apply Drizzle migrations
+npm run dashboard:dev    # API server + React dev server (concurrently)
+npm run dashboard:build  # Build client + server for production
+npm run dashboard:start  # Serve production build from Express
+```
+
+**Code conventions**: ESM only, Zod for runtime validation, Pino structured logging, all config via env vars, Drizzle ORM for migrations.
+
+## Project structure
+
+```
+ai-model-arena/
+├── src/
+│   ├── cli.ts                    # CLI entry (commander)
+│   ├── runner.ts                 # Queue-driven runner loop
+│   ├── runner-entry.ts           # Container entrypoint
+│   ├── worker.ts                 # Legacy direct session worker
+│   ├── config.ts                 # Zod schemas + YAML loaders
+│   ├── types.ts                  # Shared TypeScript interfaces
+│   ├── agent-loop/               # Core send→tool→loop logic
+│   ├── anomaly-detection/        # Z-score detectors + anomaly DB
+│   ├── auth/                     # Password hashing + RBAC
+│   ├── catalog/                  # models.dev sync + model matching
+│   ├── cost-tracking/            # Pricing + budget enforcement
+│   ├── dashboard-server/         # Express API + WebSocket + 19 route modules
+│   ├── dashboard-client/         # React SPA (Vite + TanStack Query)
+│   ├── db/                       # Drizzle ORM (SQLite + Postgres)
+│   ├── evaluation/               # LLM-as-Judge + regression testing
+│   ├── fs/                       # Locked file writes
+│   ├── lineage/                  # Artifact provenance
+│   ├── logger/                   # Pino + structured loggers
+│   ├── metrics/                  # Prometheus metrics
+│   ├── notifications/            # Slack, Discord, webhooks
+│   ├── observability/            # OpenTelemetry setup + trace instrumentation
+│   ├── orchestrator/             # Run lifecycle, PM2 helpers, run index
+│   ├── providers/                # 16+ provider descriptors + adapters
+│   ├── queue/                    # In-memory + Redis Streams queue
+│   ├── runner/                   # Checkpointing + idempotency
+│   ├── sandbox/                  # Isolated filesystem + git
+│   ├── scheduler/                # Cron job manager
+│   ├── security/                 # Prompt injection detection
+│   ├── session/                  # Session + message persistence
+│   └── tools/                    # Tool schemas + executors
+├── configs/                      # YAML config files
+│   ├── scenarios/                # Scenario definitions + templates
+│   └── regression/               # Regression suite configs
+├── k8s/                          # Kubernetes manifests
+├── drizzle/                      # Drizzle migration SQL
+├── scripts/                      # Smoke tests, migrations, backup/restore
+├── tests/                        # Test suites (mirrors src/ structure)
+├── docs/                         # Audit reports, IAM policies, runbooks
+├── docker-compose.yml            # Local dev stack
+├── Dockerfile                    # Multi-stage production build
+├── openapi.yaml                  # OpenAPI 3.0 spec
+└── tsconfig.json                 # TypeScript strict, ESM, NodeNext
+```
 
 ## License
 
 MIT
-
----
-
-## Extended Features
-
-### Cost Tracking & Budget Management
-
-**Configuring Pricing** (`configs/pricing.yaml`):
-
-```yaml
-models:
-  gpt-4o:
-    input: 0.0025      # $/1K input tokens
-    output: 0.01       # $/1K output tokens
-    cached: 0.00125    # $/1K cached tokens (if applicable)
-```
-
-**Setting Budgets** (`configs/budget.yaml`):
-
-```yaml
-global:
-  daily: 50       # Global daily limit in USD
-  monthly: 500    # Global monthly limit
-
-models:
-  gpt-4o:
-    daily: 20
-    monthly: 150
-
-thresholds:
-  warn: 80        # Alert at 80% of limit
-  block: 100      # Block new runs at 100%
-```
-
-**Budget enforcement**: Runs are blocked when limits are exceeded (use `--force-budget` to override).
-
----
-
-### Git Integration
-
-Each sandbox workspace is automatically initialized as a git repo:
-- Initial commit captures starter files
-- Per-turn commits track file modifications
-- `diff.patch` generated at run completion showing all changes
-
-**CLI**: View diff for any run:
-```bash
-ai-arena diff <runId> -m <model>
-```
-
----
-
-### LLM-as-Judge Evaluation
-
-Configure a judge model in `configs/evaluation.yaml`:
-
-```yaml
-judge:
-  model: gpt-4o
-  enabled: true
-
-rubric:
-  correctness:
-    description: "Code correctness"
-    maxScore: 10
-  fidelity:
-    description: "Instruction fidelity"
-    maxScore: 10
-```
-
-Judge scores are saved to `<run>/judge_score.json`.
-
----
-
-### Regression Testing
-
-Run regression suites against stored baselines:
-
-```bash
-ai-arena regress --suite <name>
-```
-
-Baselines are stored in `outputs/baselines/<model>/<scenario>.json`.
-
----
-
-### Scheduling Runs
-
-**Create a scheduled job** (`configs/schedules.yaml`):
-
-```yaml
-schedules:
-  - id: nightly-regression
-    scenario: express-rest
-    models: [gpt-4o, claude-3.7]
-    cron: "0 3 * * *"    # 3:00 AM daily
-    enabled: true
-    notifications:
-      - slack-runs
-```
-
-**CLI commands**:
-```bash
-ai-arena schedule list
-ai-arena schedule create -s <scenario> -m <models> -c "<cron>"
-ai-arena schedule remove --id <id>
-```
-
----
-
-### Notifications
-
-Configure webhooks in `configs/notifications.yaml`:
-
-```yaml
-channels:
-  slack-runs:
-    type: slack
-    webhookUrl: ${SLACK_WEBHOOK_URL}
-  discord-arena:
-    type: discord
-    webhookUrl: ${DISCORD_WEBHOOK_URL}
-
-routing:
-  onRunCompleted: [slack-runs]
-  onBudgetThreshold: [slack-runs]
-  onRegressionFailed: [slack-runs, discord-arena]
-```
-
-Set `SLACK_WEBHOOK_URL` and `DISCORD_WEBHOOK_URL` in your `.env`.
-
----
-
-### Public API Authentication
-
-Configure API keys in `configs/api-keys.yaml`:
-
-```yaml
-apiKeys:
-  - key: ${ARENA_API_KEY_CI}
-    name: CI Pipeline
-    permissions:
-      - runs:read
-      - runs:write
-      - models:read
-    rateLimit: 100
-```
-
-Requests use `X-API-Key` header:
-```bash
-curl -H "X-API-Key: $ARENA_API_KEY_CI" http://localhost:4000/api/analytics/tools
-```
-
-Available permissions: `runs:read`, `runs:write`, `models:read`, `scenarios:read`, `analytics:read`, `export:read`.
-
----
-
-### CSV Export
-
-**CLI**:
-```bash
-ai-arena export --format csv --output runs.csv
-ai-arena export -o runs.csv --model gpt-4o --from 2024-01-01
-```
-
-**API**:
-- `GET /api/export/csv` — Export all runs
-- `GET /api/runs/:runId/export/csv` — Export single run conversation
-
----
-
-### Tool Analytics Dashboard
-
-Navigate to **Analytics** in the dashboard to view:
-- Tool call distribution (bar chart)
-- Per-tool statistics (total, failed, average per run)
-- Loop incident detection
-
-Navigate to **Cost** for the cost leaderboard ranking models by cost per successful task.
-
----
-
-### End-to-End Example
-
-**1. Create a regression suite** (`configs/regression/default.yaml`):
-```yaml
-name: default
-scenarios:
-  - express-rest
-baselineDir: outputs/baselines
-```
-
-**2. Schedule nightly runs** (`configs/schedules.yaml`):
-```yaml
-schedules:
-  - id: nightly-regression
-    scenario: express-rest
-    models: [gpt-4o]
-    cron: "0 3 * * *"
-    notifications: [slack-runs]
-```
-
-**3. Configure Slack webhook** (`.env`):
-```
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
-```
-
-**4. Result**: Every night at 3 AM, runs execute and post results to Slack. Regressions trigger alerts.
-
----
-
-## OpenTelemetry Observability
-
-ai-model-arena instruments every agent run with OpenTelemetry spans using the
-**GenAI semantic conventions**, so a full trace tree can be reconstructed and
-viewed per run in any OTel-compatible backend.
-
-### Spans
-
-- `invoke_agent` (root, per run) — attributes: `gen_ai.system`, `gen_ai.request.model`, `ai_arena.run_id`, `ai_arena.scenario`, `ai_arena.model_config`.
-- `chat` (per model API call) — attributes: `gen_ai.request.model`, `gen_ai.request.temperature`, `gen_ai.request.max_tokens`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.response.finish_reasons`, `duration`.
-- `execute_tool` (per tool call) — attributes: `gen_ai.tool.name`, tool arguments (redacted/truncated), `duration_ms`, `tool.success`, `tool.error`.
-
-Full prompt/completion content is captured into span attributes **only** when
-`OTEL_CAPTURE_CONTENT=true` (off by default — may contain sensitive data and
-increases payload size).
-
-A lightweight local copy of each run's trace metadata is written to
-`outputs/<model>/<runId>/trace-meta.json` (+ an `index.json` summary with
-`trace_id`, `span_count`, `total_duration_ms`, `error_count`) so the dashboard
-can render an in-app span waterfall. The **Observability** page provides
-aggregate stats (run count, error rate, latency breakdown, recent traces) from
-this local data — no external backend required.
-
-To view a trace for a specific run: open the run in the dashboard and click the
-**Trace** tab for an in-app span waterfall. You can also call `GET /api/v1/traces/:runId`.
-
-## Anomaly Detection
-
-A background analysis module runs after each completed run (and is also
-triggerable over recent history) and flags anomalies using the collected
-metrics + traces, with lightweight, explainable statistics (rolling mean +
-standard deviation, z-score thresholds).
-
-### Anomaly types
-
-| Type | Trigger |
-|------|---------|
-| `latency` | A single tool/model call taking significantly longer than that model+tool's historical p95 (z-score ≥ threshold). |
-| `loop` | Same tool+args combination repeated `consecutiveRepeats` (default 3) times consecutively. |
-| `token_spike` | Total tokens in a run exceeding a configurable multiple of that model's historical average for the scenario. |
-| `cost_spike` | Estimated cost exceeding a multiple of the historical average. |
-| `error_rate` | Tool/API failure rate spiking above the model's historical baseline over the sliding window. |
-| `silent_failure` | Success criteria passed but judge score unusually low (or failed but score unusually high) — a "criteria mismatch" for manual review. |
-
-When an anomaly is detected, a record is written to SQLite
-(`outputs/arena.db`, table `anomalies`: id, run_id, model, type, severity,
-description, detected_at, resolved), a notification is dispatched via the
-existing notifications module (`onAnomalyDetected` routing → Slack/Discord),
-registered webhooks are fired, and the anomaly is surfaced on the dashboard
-**Anomalies** page (filter by model/type/severity/resolved, mark
-resolved/false-positive).
-
-### Configure + tune thresholds
-
-All thresholds live in `configs/anomaly-detection.yaml`:
-
-```yaml
-enabled: true
-slidingWindow: 20          # recent runs feeding the rolling baselines
-minSampleSize: 5           # require >= N historical samples before firing
-
-latency:    { enabled: true, zScoreThreshold: 3, severity: high }
-loop:       { enabled: true, consecutiveRepeats: 3, severity: medium }
-tokenSpike: { enabled: true, multiple: 3, severity: high }
-costSpike:  { enabled: true, multiple: 3, severity: high }
-errorRate:  { enabled: true, zScoreThreshold: 3, severity: high }
-silentFailure:
-  enabled: true
-  lowJudgeScore: 40
-  highJudgeScore: 70
-  severity: medium
-```
-
-Tuning: lower `zScoreThreshold`/`multiple` for more sensitivity (more alerts),
-raise them to reduce noise; raise `minSampleSize` to avoid firing on sparse
-history; widen `slidingWindow` to weight longer-term baselines.
-
-## Webhooks
-
-External systems can register a URL that receives signed POSTs on events
-(`run_completed`, `anomaly_detected`, `budget_exceeded`), decoupling
-notification logic from hardcoded Slack/Discord config:
-
-```bash
-curl -X POST http://localhost:4000/api/v1/webhooks \
-  -H "X-API-Key: $ARENA_API_KEY_CI" -H "content-type: application/json" \
-  -d '{"url":"https://example.com/hook","events":["anomaly_detected"]}'
-```
-
-Deliveries are HMAC-SHA256 signed with the registered secret in the
-`x-arena-signature` header (`sha256=<hex>`).
-
-## Public API
-
-The full OpenAPI spec is at `openapi.yaml` and served interactively at
-**`/api/docs`** (Swagger UI). All endpoints are versioned under `/api/v1/` and
-protected by API-key auth (`X-API-Key`) + per-key rate limiting. New endpoints:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/traces/:runId` | Span metadata tree for a run (+ external trace URL). |
-| GET | `/api/v1/anomalies` | List anomalies (model/type/severity/resolved/date filters). |
-| GET | `/api/v1/anomalies/:id` | Full anomaly detail incl. related run + span data. |
-| PATCH | `/api/v1/anomalies/:id` | Mark resolved / false positive. |
-| GET | `/api/v1/observability/stats` | Avg/p95/p99 latency, error rates, rolling baselines. |
-| GET | `/api/v1/observability/health` | Healthcheck (OTel exporter, SQLite, PM2). |
-| POST | `/api/v1/webhooks` | Register a webhook subscription. |
-| GET | `/api/v1/webhooks` | List webhooks. |
-| DELETE | `/api/v1/webhooks/:id` | Remove a webhook. |
-
-Existing endpoints (models, scenarios, runs, cost, tool analytics, export) are
-all mirrored under `/api/v1/` as well. Permissions include `traces:read`,
-`anomalies:read`, `anomalies:write`, `observability:read`, `webhooks:write`
-(configured in `configs/api-keys.yaml`).
-
-## End-to-End Example
-
-```bash
-# 1. Start the observability stack
-docker compose -f docker-compose.observability.yml up -d
-
-# 2. Configure the arena (.env)
-OTEL_ENABLED=true
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-OTEL_TRACE_UI_BASE_URL=http://localhost:16686
-
-# 3. Run a scenario
-ai-arena run --scenario express-rest --models gpt-4o
-```
-
-Each model worker now emits a full trace tree. Open the run in the dashboard →
-**Trace** tab for an in-app span waterfall.
-
-### Simulate an anomaly
-
-To demonstrate the anomaly-detection + notification flow, throttle a mock model
-so a single `chat` call takes far longer than its baseline (e.g. point a model
-config at a slow/local endpoint that sleeps). After a few normal runs establish a
-baseline, the throttled run will:
-
-1. Produce a `latency` span well above mean + 3·std.
-2. Trigger an anomaly record in `outputs/arena.db`.
-3. Dispatch a Slack/Discord notification (`onAnomalyDetected`) + any registered
-   webhooks.
-4. Surface on the dashboard **Anomalies** page, where it can be marked
-   resolved / false positive.
-
-Verify programmatically:
-
-```bash
-curl -H "X-API-Key: $ARENA_API_KEY_CI" http://localhost:4000/api/v1/anomalies?resolved=false
-curl http://localhost:4000/api/v1/observability/health   # OTel / SQLite / PM2 health
-```
-
-
-
-
