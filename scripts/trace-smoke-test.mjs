@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { initTracing, shutdownTracing } from '../dist/observability/tracing.js';
+import { startOtel, shutdownOtel } from '../dist/observability/otel.js';
 import { runAgentLoopTraced } from '../dist/observability/instrument-loop.js';
 import { readTraceMeta } from '../dist/observability/trace-meta.js';
 import { ConversationLogger } from '../dist/logger/conversation-logger.js';
@@ -19,7 +19,7 @@ const logger = createLogger('smoke');
 process.env.OTEL_ENABLED = 'true';
 process.env.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://127.0.0.1:9'; // nothing listening
 process.env.OTEL_TRACE_UI_BASE_URL = 'http://localhost:16686';
-initTracing();
+startOtel();
 
 const mockAdapter = {
   async sendMessage(_messages, _tools) {
@@ -71,5 +71,5 @@ try {
   console.log('TRACE_TEST_PASS:', ok ? 'true' : 'false');
   if (!ok) process.exitCode = 1;
 } finally {
-  await shutdownTracing();
+  await shutdownOtel();
 }
