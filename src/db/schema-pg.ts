@@ -67,6 +67,22 @@ export const pricing = pgTable('pricing', {
   primaryKey({ columns: [table.model_id, table.tier_size] }),
 ]);
 
+export const pricing_snapshots = pgTable('pricing_snapshots', {
+  id: serial('id').primaryKey(),
+  version: text('version').notNull(),
+  model_id: text('model_id').notNull(),
+  input: real('input'),
+  output: real('output'),
+  cache_read: real('cache_read'),
+  cache_write: real('cache_write'),
+  tier_size: integer('tier_size'),
+  over_200k_input: real('over_200k_input'),
+  over_200k_output: real('over_200k_output'),
+  over_200k_cache_read: real('over_200k_cache_read'),
+  over_200k_cache_write: real('over_200k_cache_write'),
+  snapshot_at: text('snapshot_at').notNull(),
+});
+
 export const benchmarks = pgTable('benchmarks', {
   id: serial('id').primaryKey(),
   model_id: text('model_id').notNull().references(() => models.id),

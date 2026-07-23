@@ -39,6 +39,14 @@ import { createRegressionRouter } from './routes/regression.js';
 import { createSecretsRouter } from './routes/secrets.js';
 import { registerRunnerRoutes } from './routes/runners.js';
 import { registerQueueRoutes } from './routes/queues.js';
+import { createPromptsRouter } from './routes/prompts.js';
+import { createOutputMappingsRouter } from './routes/output-mappings.js';
+import { createSessionsRouter } from './routes/sessions.js';
+import { createUsersRouter } from './routes/users.js';
+import { createAuditRouter } from './routes/audit.js';
+import { createCostRouter } from './routes/cost.js';
+import { createFilesRouter } from './routes/files.js';
+import { attachStreamWs } from './routes/stream.js';
 import { mountOpenApi } from './openapi.js';
 
 const logger = createLogger('ai-arena:dashboard');
@@ -219,6 +227,31 @@ async function start(): Promise<void> {
   app.use('/api/analytics', requireAuth(auth), requireRole('viewer'), createAnalyticsRouter());
   app.use('/api/export', requireAuth(auth), requireRole('viewer'), createExportRouter());
 
+  // ── Prompts (viewer for reads, admin for writes; enqueue is editor) ────
+  app.use('/api/prompts', requireAuth(auth), requireRole('viewer'), createPromptsRouter());
+
+  // ── Output mappings (viewer for reads, admin for writes) ──────────────
+  app.use('/api/output-mappings', requireAuth(auth), requireRole('viewer'), createOutputMappingsRouter());
+
+  // ── Sessions (viewer for reads, admin for deletes) ────────────────────
+  app.use('/api/sessions', requireAuth(auth), requireRole('viewer'), createSessionsRouter());
+
+  // ── User management (admin only) ──────────────────────────────────────
+  app.use('/api/users', requireAuth(auth), requireRole('admin'), createUsersRouter());
+  app.get('/api/roles', requireAuth(auth), requireRole('viewer'), (_req, res) => {
+    const roles = getDb().prepare('SELECT * FROM roles ORDER BY id').all();
+    res.json({ roles });
+  });
+
+  // ── Audit log (admin only) ────────────────────────────────────────────
+  app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
+
+  // ── Cost ledger (viewer for reads) ────────────────────────────────────
+  app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
+
+  // ── Files listing (viewer for reads) ─────────────────────────────────
+  app.use('/api/files', requireAuth(auth), requireRole('viewer'), createFilesRouter());
+
   // ── Budget & scheduling & regression (new) ─────────────────────────────
   app.use('/api/budget', requireAuth(auth), requireRole('viewer'), createBudgetRouter());
   app.use('/api/schedules', requireAuth(auth), requireRole('viewer'), createSchedulesRouter());
@@ -257,8 +290,18 @@ async function start(): Promise<void> {
   app.use('/api/v1/metrics', requireApiKey(['metrics:read']), createMetricsRouter());
   app.use('/api/v1/cache', requireApiKey(['cache:read']), createCacheRouter());
 
-  // ── OpenAPI interactive docs (public) ──────────────────────────────────────
-  mountOpenApi(app);
+  // ── v1 for newly added modules ──────────────────────────────────────────
+  app.use('/api/v1/budget', requireApiKey(['budget:read']), createBudgetRouter());
+  app.use('/api/v1/schedules', requireApiKey(['schedules:read']), createSchedulesRouter());
+  app.use('/api/v1/regression', requireApiKey(['regression:execute']), createRegressionRouter());
+  app.use('/api/v1/cost', requireApiKey(['cost:read']), createCostRouter());
+  app.use('/api/v1/files', requireApiKey(['files:read']), createFilesRouter());
+  app.use('/api/v1/sessions', requireApiKey(['sessions:read']), createSessionsRouter());
+  app.use('/api/v1/prompts', requireApiKey(['prompts:read']), createPromptsRouter());
+  app.use('/api/v1/output-mappings', requireApiKey(['output_mappings:read']), createOutputMappingsRouter());
+
+  // ── OpenAPI interactive docs (authenticated) ──────────────────────────────
+  mountOpenApi(app, requireAuth(auth));
 
   // ── Global error handler (must be last in the middleware chain) ─────────
   app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -282,7 +325,9 @@ async function start(): Promise<void> {
   }
 
   const server = http.createServer(app);
-  // WebSocket gateway (auth via ?token= query).
+  // Session-scoped stream WebSocket (runner ↔ dashboard relay)
+  attachStreamWs(server);
+  // WebSocket gateway (auth via token in Sec-WebSocket-Protocol).
   const hub = new LiveHub(server, auth);
 
   server.listen(port, () => {

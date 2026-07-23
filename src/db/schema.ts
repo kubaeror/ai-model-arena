@@ -69,6 +69,22 @@ export const pricing = sqliteTable('pricing', {
   primaryKey({ columns: [table.model_id, table.tier_size] }),
 ]);
 
+export const pricing_snapshots = sqliteTable('pricing_snapshots', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  version: text('version').notNull(),
+  model_id: text('model_id').notNull(),
+  input: real('input'),
+  output: real('output'),
+  cache_read: real('cache_read'),
+  cache_write: real('cache_write'),
+  tier_size: integer('tier_size'),
+  over_200k_input: real('over_200k_input'),
+  over_200k_output: real('over_200k_output'),
+  over_200k_cache_read: real('over_200k_cache_read'),
+  over_200k_cache_write: real('over_200k_cache_write'),
+  snapshot_at: text('snapshot_at').notNull(),
+});
+
 export const benchmarks = sqliteTable('benchmarks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   model_id: text('model_id').notNull().references(() => models.id),
@@ -409,6 +425,7 @@ export type DbProvider = InferSelectModel<typeof providers>;
 export type DbModel = InferSelectModel<typeof models>;
 export type DbModelProvider = InferSelectModel<typeof model_providers>;
 export type DbPricing = InferSelectModel<typeof pricing>;
+export type DbPricingSnapshot = InferSelectModel<typeof pricing_snapshots>;
 export type DbBenchmark = InferSelectModel<typeof benchmarks>;
 export type DbModelRuntimeStat = InferSelectModel<typeof model_runtime_stats>;
 export type DbCatalogCacheState = InferSelectModel<typeof catalog_cache_state>;
