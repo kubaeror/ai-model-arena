@@ -1,0 +1,443 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner-anthropic
+  namespace: ai-arena
+  labels:
+    app: runner
+    provider: anthropic
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: runner
+      provider: anthropic
+  template:
+    metadata:
+      labels:
+        app: runner
+        provider: anthropic
+    spec:
+      terminationGracePeriodSeconds: 60
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: db-migrate
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          command: ["node", "dist/scripts/db-migrate.js"]
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+          securityContext:
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: runner
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+            - secretRef:
+                name: provider-keys
+          env:
+            - name: REDIS_CONSUMER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ARENA_PROVIDER_FILTER
+              value: anthropic
+          volumeMounts:
+            - name: outputs
+              mountPath: /var/arena/outputs
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/runner-ready"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: runner
+              provider: anthropic
+      volumes:
+        - name: outputs
+          persistentVolumeClaim:
+            claimName: outputs
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner-google
+  namespace: ai-arena
+  labels:
+    app: runner
+    provider: google
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: runner
+      provider: google
+  template:
+    metadata:
+      labels:
+        app: runner
+        provider: google
+    spec:
+      terminationGracePeriodSeconds: 60
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: db-migrate
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          command: ["node", "dist/scripts/db-migrate.js"]
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+          securityContext:
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: runner
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+            - secretRef:
+                name: provider-keys
+          env:
+            - name: REDIS_CONSUMER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ARENA_PROVIDER_FILTER
+              value: google
+          volumeMounts:
+            - name: outputs
+              mountPath: /var/arena/outputs
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/runner-ready"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: runner
+              provider: google
+      volumes:
+        - name: outputs
+          persistentVolumeClaim:
+            claimName: outputs
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner-groq
+  namespace: ai-arena
+  labels:
+    app: runner
+    provider: groq
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: runner
+      provider: groq
+  template:
+    metadata:
+      labels:
+        app: runner
+        provider: groq
+    spec:
+      terminationGracePeriodSeconds: 60
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: db-migrate
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          command: ["node", "dist/scripts/db-migrate.js"]
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+          securityContext:
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: runner
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+            - secretRef:
+                name: provider-keys
+          env:
+            - name: REDIS_CONSUMER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ARENA_PROVIDER_FILTER
+              value: groq
+          volumeMounts:
+            - name: outputs
+              mountPath: /var/arena/outputs
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/runner-ready"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: runner
+              provider: groq
+      volumes:
+        - name: outputs
+          persistentVolumeClaim:
+            claimName: outputs
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner-openrouter
+  namespace: ai-arena
+  labels:
+    app: runner
+    provider: openrouter
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: runner
+      provider: openrouter
+  template:
+    metadata:
+      labels:
+        app: runner
+        provider: openrouter
+    spec:
+      terminationGracePeriodSeconds: 60
+      runtimeClassName: gvisor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: db-migrate
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          command: ["node", "dist/scripts/db-migrate.js"]
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+          securityContext:
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: runner
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+            - secretRef:
+                name: provider-keys
+          env:
+            - name: REDIS_CONSUMER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ARENA_PROVIDER_FILTER
+              value: openrouter
+          volumeMounts:
+            - name: outputs
+              mountPath: /var/arena/outputs
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "runner"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/runner-ready"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: runner
+              provider: openrouter
+      volumes:
+        - name: outputs
+          persistentVolumeClaim:
+            claimName: outputs
+        - name: tmp
+          emptyDir: {}

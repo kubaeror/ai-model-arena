@@ -31,12 +31,12 @@ patches:
                 imagePullPolicy: Never
   - target:
       kind: Deployment
-      name: runner-openai
+      labelSelector: app=runner
     patch: |-
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: runner-openai
+        name: runner
       spec:
         template:
           spec:

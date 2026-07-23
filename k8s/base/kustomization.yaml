@@ -26,10 +26,13 @@ resources:
   - dashboard-ingress.yaml
   - dashboard-rbac.yaml
   - runner-deployment.yaml
+  - runner-providers.yaml
   - keda-scaledobject.yaml
+  - keda-provider-scalers.yaml
   - keda-trigger-auth.yaml
   - scheduler-cronjob.yaml
   - network-policies.yaml
   - pdb.yaml
+  - pdb-providers.yaml
   - bedrock-runner-sa.yaml
   - runtimeclass-gvisor.yaml

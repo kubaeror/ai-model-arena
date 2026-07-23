@@ -1,0 +1,87 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-anthropic-scaler
+  namespace: ai-arena
+spec:
+  scaleTargetRef:
+    name: runner-anthropic
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.ai-arena.svc:6379
+        listType: STREAM
+        length: "5"
+        stream: arena:tasks:anthropic
+      authenticationRef:
+        name: keda-redis-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-google-scaler
+  namespace: ai-arena
+spec:
+  scaleTargetRef:
+    name: runner-google
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.ai-arena.svc:6379
+        listType: STREAM
+        length: "5"
+        stream: arena:tasks:google
+      authenticationRef:
+        name: keda-redis-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-groq-scaler
+  namespace: ai-arena
+spec:
+  scaleTargetRef:
+    name: runner-groq
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.ai-arena.svc:6379
+        listType: STREAM
+        length: "5"
+        stream: arena:tasks:groq
+      authenticationRef:
+        name: keda-redis-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-openrouter-scaler
+  namespace: ai-arena
+spec:
+  scaleTargetRef:
+    name: runner-openrouter
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.ai-arena.svc:6379
+        listType: STREAM
+        length: "5"
+        stream: arena:tasks:openrouter
+      authenticationRef:
+        name: keda-redis-auth
