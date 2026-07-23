@@ -1,0 +1,79 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ai-arena
+
+resources:
+  - ../../base
+  - dev-pv.yaml
+
+images:
+  - name: ghcr.io/kubaeror/ai-model-arena-runner
+    newTag: latest
+
+patches:
+  - target:
+      kind: Deployment
+      name: dashboard
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: dashboard
+      spec:
+        template:
+          spec:
+            initContainers:
+              - name: db-migrate
+                imagePullPolicy: Never
+            containers:
+              - name: dashboard
+                imagePullPolicy: Never
+  - target:
+      kind: Deployment
+      name: runner-openai
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: runner-openai
+      spec:
+        template:
+          spec:
+            initContainers:
+              - name: db-migrate
+                imagePullPolicy: Never
+            containers:
+              - name: runner
+                imagePullPolicy: Never
+  - target:
+      kind: CronJob
+      name: arena-scheduler
+    patch: |-
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: arena-scheduler
+      spec:
+        jobTemplate:
+          spec:
+            template:
+              spec:
+                initContainers:
+                  - name: db-migrate
+                    imagePullPolicy: Never
+                containers:
+                  - name: scheduler
+                    imagePullPolicy: Never
+  - target:
+      kind: PersistentVolumeClaim
+      name: outputs
+    patch: |-
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: outputs
+      spec:
+        selector:
+          matchLabels:
+            storage-tier: outputs

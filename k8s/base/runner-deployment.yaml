@@ -31,10 +31,23 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: db-migrate
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+          command: ["node", "dist/scripts/db-migrate.js"]
+          envFrom:
+            - configMapRef:
+                name: runner-config
+            - secretRef:
+                name: arena-db-auth
+          securityContext:
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
       containers:
         - name: runner
-          image: ai-arena/runner:latest
-          imagePullPolicy: Never
+          image: ghcr.io/kubaeror/ai-model-arena-runner:latest
           envFrom:
             - configMapRef:
                 name: runner-config

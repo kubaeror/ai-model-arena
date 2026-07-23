@@ -4,7 +4,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   id-token: write  # needed for cosign keyless signing via OIDC
 
@@ -25,7 +25,7 @@ jobs:
       - run: npm --prefix src/dashboard-client run test
       - run: npm run build
       - name: Build Docker image
-        run: docker build -t ai-arena/runner:${{ github.sha }} .
+        run: docker build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
       - name: Generate SBOM
         run: npm ls --all --json --production 2>/dev/null > npm-sbom.json || true
       - name: Upload SBOM
@@ -37,7 +37,7 @@ jobs:
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ai-arena/runner:${{ github.sha }}
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
           format: table
           exit-code: 1
           ignore-unfixed: true
@@ -51,15 +51,31 @@ jobs:
           done
           curl -sf http://localhost:4000/health
           docker compose down
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push Docker image
         run: |
-          docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin <<< "${{ secrets.DOCKER_PASSWORD }}"
-          docker tag ai-arena/runner:${{ github.sha }} ai-arena/runner:latest
-          docker push ai-arena/runner:${{ github.sha }}
-          docker push ai-arena/runner:latest
+          docker tag ghcr.io/${{ github.repository }}:${{ github.sha }} ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}:latest
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign Docker image
-        run: cosign sign --yes ai-arena/runner:${{ github.sha }}
+        run: |
+          cosign sign --yes ghcr.io/${{ github.repository }}:${{ github.sha }}
         env:
           COSIGN_EXPERIMENTAL: "1"  # keyless signing via GitHub OIDC
+      - name: Update image tag in repo
+        run: |
+          sed -i "s|newTag: .*|newTag: ${{ github.sha }}|" k8s/overlays/prod/kustomization.yaml
+      - name: Commit image tag update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/overlays/prod/kustomization.yaml
+          git commit -m "chore: bump image tag to ${{ github.sha }}" || echo "No changes to commit"
+          git push

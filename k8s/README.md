@@ -1,46 +1,60 @@
-# Kubernetes Deployment (minikube)
+# Kubernetes Deployment
+
+## Layout
+
+```
+k8s/
+├── argocd/
+│   └── ai-arena-app.yaml              # Argo CD Application
+├── base/                              # Shared manifests (Kustomize)
+│   ├── kustomization.yaml
+│   └── (21 manifests)
+├── overlays/
+│   ├── dev/                           # minikube dev: hostPath PV, imagePullPolicy: Never
+│   │   ├── kustomization.yaml
+│   │   └── dev-pv.yaml
+│   └── prod/                          # GHCR images, EFS StorageClass
+│       └── kustomization.yaml
+└── observability/                     # Separate namespace
+```
 
 ## Platform Notes
 
-- **Target:** local minikube (single-node). HA/failover not testable here.
+- **Dev:** local minikube (single-node). HA/failover not testable here.
 - **gVisor:** only on Linux minikube with `--container-runtime=containerd`. On Windows minikube, runners fall back to seccomp `RuntimeDefault` — remove `runtimeClassName: gvisor` from pod specs.
-- **RWX PVC:** uses `hostPath` — works on single-node minikube only. Production needs NFS/CephFS.
-- **Storage:** PVCs use default `gp2`/`standard` StorageClass. Adjust for your minikube driver.
-
-## Prerequisites
-
-```bash
-minikube start --memory=4096 --cpus=2
-helm repo add kedacore https://kedacore.github.io/charts
-helm repo update
-helm upgrade --install keda kedacore/keda -n keda --create-namespace
-```
+- **RWX PVC (dev):** uses `hostPath` — works on single-node minikube only. Production overlay uses `efs-sc` StorageClass.
+- **Storage:** PVCs use default StorageClass. Adjust for your minikube driver.
 
 ## Deploy
 
+### Dev (minikube)
+
 ```bash
-# Apply infra
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/postgres.yaml -f k8s/redis.yaml -f k8s/output-pvc.yaml
-kubectl -n ai-arena wait --for=condition=ready pod -l app=postgres --timeout=120s
-kubectl -n ai-arena wait --for=condition=ready pod -l app=redis --timeout=60s
+# One-time bootstrap
+./scripts/k8s/bootstrap.sh
 
 # Create secrets
 kubectl -n ai-arena create secret generic dashboard-auth \
   --from-literal=password=change-me \
   --from-literal=jwt-secret=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
-# kubectl -n ai-arena create secret generic provider-keys --from-literal=OPENAI_API_KEY=...
+kubectl -n ai-arena create secret generic provider-keys \
+  --from-literal=OPENAI_API_KEY=...
 
-# Build image
-eval "$(minikube docker-env)"
-docker build -t ai-arena/runner:latest .
+# Deploy via kustomize
+kubectl apply -k k8s/overlays/dev
+```
 
-# Apply apps
-kubectl apply -f k8s/runner-configmap.yaml
-kubectl apply -f k8s/runner-deployment.yaml
-kubectl apply -f k8s/keda-scaledobject.yaml
-kubectl apply -f k8s/dashboard-deployment.yaml
-kubectl apply -f k8s/dashboard-service.yaml
+### Production (Argo CD)
+
+```bash
+# Create sealed secrets (one-time)
+kubectl apply -f k8s/base/arena-secrets-sealed.yaml
+
+# Apply Argo CD Application
+kubectl apply -f k8s/argocd/ai-arena-app.yaml
+
+# Argo CD syncs from k8s/overlays/prod.
+# CI commits the image SHA tag to the prod kustomization.yaml on each push.
 ```
 
 ## Access
@@ -56,7 +70,15 @@ kubectl -n ai-arena port-forward svc/dashboard 4000:4000
 ```bash
 kubectl -n ai-arena get pods -w
 kubectl -n ai-arena logs deploy/runner-openai --tail=50
+kubectl -n ai-arena logs deploy/dashboard -c db-migrate   # check migration init container
 kubectl -n ai-arena exec deploy/redis -- redis-cli PING
+```
+
+## Render Manifests Locally
+
+```bash
+kubectl kustomize k8s/overlays/dev
+kubectl kustomize k8s/overlays/prod
 ```
 
 ## Teardown
