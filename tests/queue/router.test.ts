@@ -1,19 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { streamForProvider, dlqStreamForProvider } from '../../src/queue/router.js';
+import { streamKey, dlqStreamKey } from '../../src/queue/router.js';
 
-test('streamForProvider prefixes with default', () => {
-  assert.equal(streamForProvider('openai'), 'arena:tasks:openai');
+test('streamKey routes openai to openai-compat family', () => {
+  assert.equal(streamKey('arena:tasks', 'openai'), 'arena:tasks:openai-compat');
 });
 
-test('streamForProvider uses custom prefix', () => {
-  assert.equal(streamForProvider('anthropic', 'custom'), 'custom:anthropic');
+test('streamKey routes groq to openai-compat family', () => {
+  assert.equal(streamKey('arena:tasks', 'groq'), 'arena:tasks:openai-compat');
 });
 
-test('dlqStreamForProvider suffixes with dlq', () => {
-  assert.equal(dlqStreamForProvider('openai'), 'arena:tasks:openai:dlq');
+test('streamKey routes cerebras to openai-compat family', () => {
+  assert.equal(streamKey('arena:tasks', 'cerebras'), 'arena:tasks:openai-compat');
 });
 
-test('dlqStreamForProvider uses custom prefix', () => {
-  assert.equal(dlqStreamForProvider('google', 'dead'), 'dead:google:dlq');
+test('streamKey routes anthropic as-is (no remapped family)', () => {
+  assert.equal(streamKey('arena:tasks', 'anthropic'), 'arena:tasks:anthropic');
+});
+
+test('streamKey routes google as-is', () => {
+  assert.equal(streamKey('arena:tasks', 'google'), 'arena:tasks:google');
+});
+
+test('streamKey falls through for unknown provider', () => {
+  assert.equal(streamKey('prefix', 'unknown-provider'), 'prefix:unknown-provider');
+});
+
+test('dlqStreamKey suffixes with :dlq', () => {
+  assert.equal(dlqStreamKey('arena:tasks', 'openai'), 'arena:tasks:openai-compat:dlq');
+});
+
+test('dlqStreamKey for anthropic', () => {
+  assert.equal(dlqStreamKey('arena:tasks', 'anthropic'), 'arena:tasks:anthropic:dlq');
 });

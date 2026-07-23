@@ -2,7 +2,7 @@ import { initDb, closeDb } from '../db/index.js';
 import { migratePostgres, getPgClient } from '../db/postgres.js';
 
 const driver = (process.env.DB_DRIVER ?? 'sqlite').toLowerCase();
-console.log(`Running migrations on ${driver}...`);
+console.error(`Running migrations on ${driver}...`);
 
 if (driver === 'postgres') {
   // initDb sets up the pool but doesn't run drizzle migrations — run them explicitly
@@ -14,5 +14,5 @@ if (driver === 'postgres') {
   initDb();
 }
 
-console.log('Migrations applied successfully.');
+console.error('Migrations applied successfully.');
 await closeDb();
