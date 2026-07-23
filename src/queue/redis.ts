@@ -2,14 +2,7 @@ import { Redis } from 'ioredis';
 import { propagation, context } from '@opentelemetry/api';
 import type { Task, TaskQueue } from './types.js';
 import type { RedisQueueConfig } from './redis-config.js';
-
-function streamKey(prefix: string, provider: string): string {
-  return `${prefix}:${provider}`;
-}
-
-function dlqStreamKey(prefix: string, provider: string): string {
-  return `${prefix}:${provider}:dlq`;
-}
+import { streamKey, dlqStreamKey } from './router.js';
 
 export class RedisStreamQueue implements TaskQueue {
   private redis: Redis;

@@ -1,11 +1,11 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: runner-openai-compat
+  name: runner-anthropic
   namespace: ai-arena
   labels:
     app: runner
-    provider: openai-compat
+    provider: anthropic
 spec:
   replicas: 1
   strategy:
@@ -16,12 +16,12 @@ spec:
   selector:
     matchLabels:
       app: runner
-      provider: openai-compat
+      provider: anthropic
   template:
     metadata:
       labels:
         app: runner
-        provider: openai-compat
+        provider: anthropic
     spec:
       terminationGracePeriodSeconds: 60
       runtimeClassName: gvisor
@@ -61,7 +61,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: ARENA_PROVIDER_FILTER
-              value: openai-compat
+              value: anthropic
           volumeMounts:
             - name: outputs
               mountPath: /var/arena/outputs
@@ -101,7 +101,7 @@ spec:
           labelSelector:
             matchLabels:
               app: runner
-              provider: openai-compat
+              provider: anthropic
       volumes:
         - name: outputs
           persistentVolumeClaim:

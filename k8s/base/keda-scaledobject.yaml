@@ -1,11 +1,11 @@
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: runner-openai-scaler
+  name: runner-openai-compat-scaler
   namespace: ai-arena
 spec:
   scaleTargetRef:
-    name: runner-openai
+    name: runner-openai-compat
   minReplicaCount: 1
   maxReplicaCount: 10
   pollingInterval: 5
@@ -16,6 +16,50 @@ spec:
         address: redis.ai-arena.svc:6379
         listType: STREAM
         length: "5"
-        stream: arena:tasks:openai
+        stream: arena:tasks:openai-compat
+      authenticationRef:
+        name: keda-redis-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-anthropic-scaler
+  namespace: ai-arena
+spec:
+  scaleTargetRef:
+    name: runner-anthropic
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.ai-arena.svc:6379
+        listType: STREAM
+        length: "5"
+        stream: arena:tasks:anthropic
+      authenticationRef:
+        name: keda-redis-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-google-scaler
+  namespace: ai-arena
+spec:
+  scaleTargetRef:
+    name: runner-google
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.ai-arena.svc:6379
+        listType: STREAM
+        length: "5"
+        stream: arena:tasks:google
       authenticationRef:
         name: keda-redis-auth

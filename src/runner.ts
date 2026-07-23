@@ -175,8 +175,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       let currentProvider = resolved.providerId;
       let currentModel = resolved.apiModelId;
+      const descriptor = registry.get(currentProvider);
+      const apiKey = descriptor?.envVar ? process.env[descriptor.envVar] : undefined;
       const executors = buildToolExecutors();
-      let adapter = registry.createAdapter(currentProvider, currentModel, { logger: logger.child('adapter') });
+      let adapter = registry.createAdapter(currentProvider, currentModel, { apiKey, logger: logger.child('adapter') });
       let loopResult;
       let maxFallbackHops = 3;
 
@@ -229,7 +231,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               logger.warn('Falling back', { from: `${currentProvider}/${currentModel}`, to: `${next.provider}/${next.model}` });
               currentProvider = next.provider;
               currentModel = next.model;
-              adapter = registry.createAdapter(currentProvider, currentModel, { logger: logger.child('adapter') });
+              const fallbackDescriptor = registry.get(currentProvider);
+              const fallbackApiKey = fallbackDescriptor?.envVar ? process.env[fallbackDescriptor.envVar] : undefined;
+              adapter = registry.createAdapter(currentProvider, currentModel, { apiKey: fallbackApiKey, logger: logger.child('adapter') });
               maxFallbackHops--;
               continue;
             }
