@@ -50,8 +50,6 @@ spec:
                 name: runner-config
             - secretRef:
                 name: arena-db-auth
-            - secretRef:
-                name: provider-keys
           env:
             - name: DASHBOARD_PORT
               value: "4000"
@@ -72,6 +70,9 @@ spec:
           volumeMounts:
             - name: outputs
               mountPath: /var/arena/outputs
+            - name: provider-keys
+              mountPath: /etc/arena/secrets
+              readOnly: true
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -106,3 +107,6 @@ spec:
         - name: outputs
           persistentVolumeClaim:
             claimName: outputs
+        - name: provider-keys
+          secret:
+            secretName: provider-keys

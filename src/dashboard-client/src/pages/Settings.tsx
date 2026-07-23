@@ -8,6 +8,7 @@ import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
 import { useSettings } from '../providers/SettingsProvider';
+import { SecretsPanel } from '../components/SecretsPanel';
 import { apiFetch, listWebhooks, registerWebhook, deleteWebhook } from '../lib/api';
 import type { WebhookRecord } from '../lib/types';
 
@@ -284,6 +285,7 @@ export function Settings() {
         items={[
           { id: 'general', label: 'General' },
           { id: 'providers', label: 'Providers' },
+          { id: 'secrets', label: 'API Keys' },
           { id: 'webhooks', label: 'Webhooks' },
         ]}
         value={tab}
@@ -306,6 +308,7 @@ export function Settings() {
       )}
 
       {tab === 'providers' && <ProvidersMain />}
+      {tab === 'secrets' && <SecretsPanel />}
       {tab === 'webhooks' && <WebhooksPanel />}
     </div>
   );

@@ -35,6 +35,7 @@ import { initDb, getDb } from './db/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
+import { secretStore } from './secrets/store.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { findProjectRoot, outputRoot, dbPath } from './paths.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
@@ -235,7 +236,7 @@ async function main(): Promise<void> {
   };
 
   // ── Validate API key ──────────────────────────────────────────────────
-  if (resolved.envVar && !process.env[resolved.envVar]) {
+  if (resolved.envVar && !secretStore.get(resolved.envVar)) {
     const msg = `Missing API key: set ${resolved.envVar} in your .env`;
     logger.error(msg);
     conv.append({ type: 'error', content: msg });
@@ -244,7 +245,7 @@ async function main(): Promise<void> {
   }
 
   // ── Run the agentic loop ───────────────────────────────────────────────
-  const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
+  const apiKey = resolved.envVar ? secretStore.get(resolved.envVar) : undefined;
   const registry = new ProviderRegistry();
   loadBuiltins(registry);
   registry.loadCustomFromDb(getDb());

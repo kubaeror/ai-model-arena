@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { outputRoot } from './paths.js';
-import { initDb } from './db/index.js';
+import { initDb, getDb } from './db/index.js';
 import { createQueue, type TaskQueue, type Task } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
@@ -19,6 +19,7 @@ import { loadBudgetConfig, checkBudget } from './cost-tracking/index.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled } from './orchestrator/run-lifecycle.js';
 import type { ToolExecutionContext, TokenUsage } from './types.js';
 import { closeDb } from './db/index.js';
+import { secretStore } from './secrets/store.js';
 
 export interface RunnerOptions {
   queue?: TaskQueue;
@@ -54,6 +55,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const store = createSessionStore();
   const registry = new ProviderRegistry();
   loadBuiltins(registry);
+  registry.loadCustomFromDb(getDb());
 
   let runningTask: Task | null = null;
 
@@ -176,7 +178,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       let currentProvider = resolved.providerId;
       let currentModel = resolved.apiModelId;
       const descriptor = registry.get(currentProvider);
-      const apiKey = descriptor?.envVar ? process.env[descriptor.envVar] : undefined;
+      const apiKey = descriptor?.envVar ? secretStore.get(descriptor.envVar) : undefined;
       const executors = buildToolExecutors();
       let adapter = registry.createAdapter(currentProvider, currentModel, { apiKey, logger: logger.child('adapter') });
       let loopResult;
@@ -232,7 +234,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               currentProvider = next.provider;
               currentModel = next.model;
               const fallbackDescriptor = registry.get(currentProvider);
-              const fallbackApiKey = fallbackDescriptor?.envVar ? process.env[fallbackDescriptor.envVar] : undefined;
+              const fallbackApiKey = fallbackDescriptor?.envVar ? secretStore.get(fallbackDescriptor.envVar) : undefined;
               adapter = registry.createAdapter(currentProvider, currentModel, { apiKey: fallbackApiKey, logger: logger.child('adapter') });
               maxFallbackHops--;
               continue;
