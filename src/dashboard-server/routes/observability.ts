@@ -61,19 +61,19 @@ export function createObservabilityRouter(): Router {
     }
   });
 
-  // GET /health — healthcheck for SQLite.
+  // GET /health — healthcheck for database.
   router.get('/health', async (_req, res) => {
-    let sqlite: { ok: boolean; error?: string } = { ok: false };
+    let dbStatus: { ok: boolean; error?: string } = { ok: false };
     try {
       const db = await getDb();
       await db.run('SELECT 1 AS ok');
-      sqlite = { ok: true };
-    } catch {
-      sqlite = { ok: false, error: INTERNAL_ERROR };
+      dbStatus = { ok: true };
+    } catch (err: any) {
+      dbStatus = { ok: false, error: err?.message ?? INTERNAL_ERROR };
     }
 
-    const healthy = sqlite.ok;
-    res.status(healthy ? 200 : 503).json({ healthy, sqlite, timestamp: new Date().toISOString() });
+    const healthy = dbStatus.ok;
+    res.status(healthy ? 200 : 503).json({ healthy, db: dbStatus, timestamp: new Date().toISOString() });
   });
 
   return router;
