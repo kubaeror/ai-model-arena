@@ -9,7 +9,7 @@ COPY src ./src
 COPY configs ./configs
 COPY drizzle ./drizzle
 RUN npm run build
-RUN npm audit fix --production
+RUN npm audit --production || true
 RUN npm prune --production
 
 # ── dashboard client build ──

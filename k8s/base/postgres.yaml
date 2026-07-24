@@ -28,9 +28,21 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:16
+          securityContext:
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           env:
             - name: POSTGRES_USER
               valueFrom:
@@ -58,17 +70,17 @@ spec:
               memory: 512Mi
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "arena"]
+              command: ["/bin/sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "arena"]
+              command: ["/bin/sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]
             initialDelaySeconds: 5
             periodSeconds: 5
           startupProbe:
             exec:
-              command: ["pg_isready", "-U", "arena"]
+              command: ["/bin/sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]
             failureThreshold: 30
             periodSeconds: 2
   volumeClaimTemplates:

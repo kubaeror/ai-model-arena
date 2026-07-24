@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '../lib/api';
 
 interface SecretEntry {
   envVar: string;
@@ -33,14 +34,13 @@ function providerLabel(envVar: string): string {
 }
 
 async function fetchSecrets(): Promise<SecretsResponse> {
-  const res = await fetch('/api/secrets');
+  const res = await api.get('/api/secrets');
   if (!res.ok) throw new Error('Failed to fetch secrets');
   return res.json();
 }
 
 async function setSecret(envVar: string, value: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`/api/secrets/${encodeURIComponent(envVar)}`, {
-    method: 'PUT',
+  const res = await api.patch(`/api/secrets/${encodeURIComponent(envVar)}`, {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value }),
   });
@@ -52,9 +52,7 @@ async function setSecret(envVar: string, value: string): Promise<{ ok: boolean }
 }
 
 async function deleteSecret(envVar: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`/api/secrets/${encodeURIComponent(envVar)}`, {
-    method: 'DELETE',
-  });
+  const res = await api.del(`/api/secrets/${encodeURIComponent(envVar)}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Request failed' }));
     throw new Error((err as { error?: string }).error ?? 'Failed to delete secret');

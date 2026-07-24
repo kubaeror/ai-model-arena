@@ -6,7 +6,7 @@ import { Button, Card, Input, Field } from '../components/ui.js';
 export function Login() {
   const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);

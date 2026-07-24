@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { LiveProvider } from './hooks/useLive';
 import { SettingsProvider } from './providers/SettingsProvider';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Nav } from './components/Nav';
 import { Home } from './pages/Home';
 import { Catalog } from './pages/Catalog';
@@ -42,6 +43,7 @@ function Shell() {
             <a href="#main-content" className="sr-only focus:not-sr-only">Skip to main content</a>
             <Nav />
             <main id="main-content" className="mx-auto max-w-1600 px-6 py-6">
+              <ErrorBoundary>
               <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/catalog" element={<Catalog />} />
@@ -65,6 +67,7 @@ function Shell() {
                 <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
+              </ErrorBoundary>
             </main>
           </SettingsProvider>
         </LiveProvider>

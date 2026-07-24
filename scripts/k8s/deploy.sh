@@ -11,7 +11,7 @@ kubectl apply -k k8s/overlays/dev
 echo "=== Waiting for rollout ==="
 kubectl -n ai-arena wait --for=condition=ready pod -l app=postgres --timeout=120s
 kubectl -n ai-arena wait --for=condition=ready pod -l app=redis --timeout=60s
-kubectl -n ai-arena rollout status deploy/runner-openai --timeout=120s
+kubectl -n ai-arena rollout status deploy/runner-openai-compat --timeout=120s
 kubectl -n ai-arena rollout status deploy/dashboard --timeout=120s
 
 echo "=== Dashboard URL ==="

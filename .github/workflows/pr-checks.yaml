@@ -64,13 +64,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Render kustomize
+      - name: Render kustomize (dev)
         run: |
           mkdir -p .tmp
-          kubectl kustomize k8s/overlays/dev > .tmp/k8s-rendered.yaml
+          kubectl kustomize k8s/overlays/dev > .tmp/k8s-dev.yaml
+      - name: Render kustomize (prod)
+        run: kubectl kustomize k8s/overlays/prod > .tmp/k8s-prod.yaml
       - uses: docker://ghcr.io/yannh/kubeconform:latest
         with:
-          args: -verbose -summary .tmp/k8s-rendered.yaml
+          args: -verbose -summary .tmp/k8s-dev.yaml
+      - uses: docker://ghcr.io/yannh/kubeconform:latest
+        with:
+          args: -verbose -summary .tmp/k8s-prod.yaml
 
   dockerfile-lint:
     runs-on: ubuntu-latest

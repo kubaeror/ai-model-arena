@@ -33,6 +33,13 @@ spec:
                 allowPrivilegeEscalation: false
                 capabilities:
                   drop: [ALL]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
           containers:
             - name: scheduler
               image: ghcr.io/kubaeror/ai-model-arena-runner:latest
