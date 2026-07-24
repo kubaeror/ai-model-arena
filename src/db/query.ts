@@ -650,10 +650,11 @@ export async function listUsersWithRoles(): Promise<any[]> {
   const db = getDrizzleDb();
   return db.all(sql.raw(`
     SELECT u.id, u.username, u.created_at,
-      GROUP_CONCAT(ur.role_id) AS roles
+      COALESCE(
+        (SELECT string_agg(ur.role_id, ',') FROM user_roles ur WHERE ur.user_id = u.id),
+        ''
+      ) AS roles
     FROM users u
-    LEFT JOIN user_roles ur ON ur.user_id = u.id
-    GROUP BY u.id
     ORDER BY u.created_at ASC
   `));
 }
