@@ -32,41 +32,44 @@ const queryClient = new QueryClient({
 
 function Shell() {
   const { isAuthenticated } = useAuth();
-  if (!isAuthenticated) return <Login />;
   return (
-    <LiveProvider>
-      <SettingsProvider>
-        <BrowserRouter>
-          <a href="#main-content" className="sr-only focus:not-sr-only">Skip to main content</a>
-          <Nav />
-          <main id="main-content" className="mx-auto max-w-1600 px-6 py-6">
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/catalog" element={<Catalog />} />
-              <Route path="/catalog/:id" element={<ModelDetail />} />
-              <Route path="/leaderboard" element={<Leaderboard />} />
-              <Route path="/compare" element={<Compare />} />
-              <Route path="/ops" element={<Ops />} />
-              <Route path="/observability" element={<Observability />} />
-              <Route path="/runs/:runId" element={<RunDetail />} />
-              <Route path="/runners" element={<Runners />} />
-              <Route path="/prompts" element={<Prompts />} />
-              <Route path="/queues" element={<Queues />} />
-              <Route path="/output-mappings" element={<OutputMappings />} />
-              <Route path="/scenarios" element={<Scenarios />} />
-              <Route path="/anomalies" element={<Anomalies />} />
-              <Route path="/comparisons" element={<Comparisons />} />
-              <Route path="/costs" element={<CostLeaderboard />} />
-              <Route path="/budget" element={<Budget />} />
-              <Route path="/schedules" element={<Schedules />} />
-              <Route path="/regression" element={<Regression />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </main>
-        </BrowserRouter>
-      </SettingsProvider>
-    </LiveProvider>
+    <BrowserRouter>
+      {!isAuthenticated ? (
+        <Login />
+      ) : (
+        <LiveProvider>
+          <SettingsProvider>
+            <a href="#main-content" className="sr-only focus:not-sr-only">Skip to main content</a>
+            <Nav />
+            <main id="main-content" className="mx-auto max-w-1600 px-6 py-6">
+              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/catalog" element={<Catalog />} />
+                <Route path="/catalog/:id" element={<ModelDetail />} />
+                <Route path="/leaderboard" element={<Leaderboard />} />
+                <Route path="/compare" element={<Compare />} />
+                <Route path="/ops" element={<Ops />} />
+                <Route path="/observability" element={<Observability />} />
+                <Route path="/runs/:runId" element={<RunDetail />} />
+                <Route path="/runners" element={<Runners />} />
+                <Route path="/prompts" element={<Prompts />} />
+                <Route path="/queues" element={<Queues />} />
+                <Route path="/output-mappings" element={<OutputMappings />} />
+                <Route path="/scenarios" element={<Scenarios />} />
+                <Route path="/anomalies" element={<Anomalies />} />
+                <Route path="/comparisons" element={<Comparisons />} />
+                <Route path="/costs" element={<CostLeaderboard />} />
+                <Route path="/budget" element={<Budget />} />
+                <Route path="/schedules" element={<Schedules />} />
+                <Route path="/regression" element={<Regression />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </main>
+          </SettingsProvider>
+        </LiveProvider>
+      )}
+    </BrowserRouter>
   );
 }
 
