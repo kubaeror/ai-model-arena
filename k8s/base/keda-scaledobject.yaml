@@ -17,6 +17,7 @@ spec:
         listType: STREAM
         length: "5"
         stream: arena:tasks:openai-compat
+        consumerGroup: arena-runners
       authenticationRef:
         name: keda-redis-auth
 ---
@@ -39,6 +40,7 @@ spec:
         listType: STREAM
         length: "5"
         stream: arena:tasks:anthropic
+        consumerGroup: arena-runners
       authenticationRef:
         name: keda-redis-auth
 ---
@@ -61,5 +63,6 @@ spec:
         listType: STREAM
         length: "5"
         stream: arena:tasks:google
+        consumerGroup: arena-runners
       authenticationRef:
         name: keda-redis-auth
