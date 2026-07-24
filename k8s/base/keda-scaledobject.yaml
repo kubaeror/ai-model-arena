@@ -11,13 +11,12 @@ spec:
   pollingInterval: 5
   cooldownPeriod: 60
   triggers:
-    - type: redis
+    - type: redis-streams
       metadata:
         address: redis.ai-arena.svc:6379
-        listType: STREAM
-        length: "5"
         stream: arena:tasks:openai-compat
         consumerGroup: arena-runners
+        pendingEntriesCount: "5"
       authenticationRef:
         name: keda-redis-auth
 ---
@@ -34,13 +33,12 @@ spec:
   pollingInterval: 5
   cooldownPeriod: 60
   triggers:
-    - type: redis
+    - type: redis-streams
       metadata:
         address: redis.ai-arena.svc:6379
-        listType: STREAM
-        length: "5"
         stream: arena:tasks:anthropic
         consumerGroup: arena-runners
+        pendingEntriesCount: "5"
       authenticationRef:
         name: keda-redis-auth
 ---
@@ -57,12 +55,11 @@ spec:
   pollingInterval: 5
   cooldownPeriod: 60
   triggers:
-    - type: redis
+    - type: redis-streams
       metadata:
         address: redis.ai-arena.svc:6379
-        listType: STREAM
-        length: "5"
         stream: arena:tasks:google
         consumerGroup: arena-runners
+        pendingEntriesCount: "5"
       authenticationRef:
         name: keda-redis-auth
