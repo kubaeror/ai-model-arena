@@ -12,16 +12,23 @@ let pgClient: PgClient | null = null;
  * Execute a raw query against the pool.
  * Handles both Drizzle sql.raw template literals and plain strings.
  */
+function extractSql(q: any): string {
+  if (typeof q === 'string') return q;
+  if (q.source) return q.source;
+  // Drizzle sql.raw template — SQL is in queryChunks[0].value[0]
+  if (q.queryChunks?.[0]?.value?.[0]) return q.queryChunks[0].value[0];
+  return String(q);
+}
+
 async function doRawQuery(query: any, ...params: any[]): Promise<any[]> {
-  let sqlStr = typeof query === 'string' ? query :
-    query.source ?? String(query);
+  let sqlStr = extractSql(query);
 
   // Convert SQLite INSERT OR IGNORE / INSERT OR REPLACE to Postgres equivalents
   sqlStr = sqlStr.replace(/INSERT\s+OR\s+IGNORE\s+INTO/i, 'INSERT INTO');
   if (sqlStr.match(/INSERT\s+INTO\s+(\w+)/i) && !sqlStr.match(/ON\s+CONFLICT|RETURNING/i)) {
     // If originally was INSERT OR IGNORE (now INSERT), append ON CONFLICT DO NOTHING
     // We detect this by checking if the original query had OR IGNORE
-    const original = typeof query === 'string' ? query : query.source ?? String(query);
+    const original = extractSql(query);
     if (original.match(/INSERT\s+OR\s+IGNORE/i)) {
       // Strip trailing semicolons and append
       sqlStr = sqlStr.replace(/;?\s*$/, ' ON CONFLICT DO NOTHING');
