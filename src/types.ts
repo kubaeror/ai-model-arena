@@ -77,6 +77,23 @@ export interface ToolExecutionContext {
   shellTimeoutMs: number;
   maxShellOutputBytes: number;
   shellPolicy?: 'strict' | 'permissive';
+  /** If true, web_fetch and web_search are enabled. Defaults to false. */
+  webAccess?: boolean;
+  /** Subagent configuration — set by worker/runner for the `task` tool. */
+  subagent?: SubagentConfig;
+}
+
+export interface SubagentConfig {
+  /** Max turns the subagent can run. Default: 5. */
+  maxTurns: number;
+  /** Adapter for LLM calls — injected as a function to avoid circular deps. */
+  sendMessage: (messages: ChatMessage[], tools: ToolDefinition[]) => Promise<ModelResponse>;
+  /** Logger for the subagent. */
+  logger: Logger;
+  /** Available tools for the subagent (stripped of task + todo tools). */
+  tools: ToolDefinition[];
+  /** Tool executors for the subagent. */
+  executors: ToolExecutorMap;
 }
 
 export type ToolExecutor = (

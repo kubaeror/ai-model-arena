@@ -3,7 +3,8 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { readFile, writeFile, listFiles, runShellCommand } from '../../src/tools/executors.js';
+import { readFile, writeFile, listFiles, runShellCommand, editFile, globFiles } from '../../src/tools/executors.js';
+import { globToRegex } from '../../src/tools/glob-matcher.js';
 import type { ToolExecutionContext } from '../../src/types.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-exec-'));
@@ -99,5 +100,156 @@ describe('tool argument validation', () => {
   it('listFiles rejects non-boolean recursive', async () => {
     const r = await listFiles({ recursive: 'yes' } as any, ctx);
     assert.strictEqual(r.isError, true);
+  });
+});
+
+// ── editFile ──────────────────────────────────────────────────────────────
+
+describe('editFile', () => {
+  let testFile: string;
+  before(() => { fs.mkdirSync(sandbox, { recursive: true }); testFile = path.join(sandbox, 'edit-test.ts'); });
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('replaces a single occurrence', async () => {
+    fs.writeFileSync(testFile, 'const x = 1;\nconst y = 2;\n');
+    const r = await editFile({ path: 'edit-test.ts', old_string: 'const x = 1;', new_string: 'let x = 1;' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(r.content.includes('Replaced 1 occurrence'));
+    assert.strictEqual(fs.readFileSync(testFile, 'utf8'), 'let x = 1;\nconst y = 2;\n');
+  });
+
+  it('replaces all occurrences with replace_all', async () => {
+    fs.writeFileSync(testFile, 'foo bar foo baz foo');
+    const r = await editFile({ path: 'edit-test.ts', old_string: 'foo', new_string: 'qux', replace_all: true }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(r.content.includes('Replaced 3'));
+    assert.strictEqual(fs.readFileSync(testFile, 'utf8'), 'qux bar qux baz qux');
+  });
+
+  it('rejects identical old and new strings', async () => {
+    fs.writeFileSync(testFile, 'hello world');
+    const r = await editFile({ path: 'edit-test.ts', old_string: 'hello', new_string: 'hello' }, ctx);
+    assert.strictEqual(r.isError, true);
+    assert.ok(r.content.includes('identical'));
+  });
+
+  it('rejects when old_string not found', async () => {
+    fs.writeFileSync(testFile, 'hello world');
+    const r = await editFile({ path: 'edit-test.ts', old_string: 'nope', new_string: 'yes' }, ctx);
+    assert.strictEqual(r.isError, true);
+    assert.ok(r.content.includes('not found'));
+  });
+
+  it('rejects when old_string appears multiple times (replace_all=false)', async () => {
+    fs.writeFileSync(testFile, 'hello\nhello\nworld\nhello');
+    const r = await editFile({ path: 'edit-test.ts', old_string: 'hello', new_string: 'hi' }, ctx);
+    assert.strictEqual(r.isError, true);
+    assert.ok(r.content.includes('found 3 times'));
+    assert.ok(r.content.includes('lines:'));
+    assert.ok(r.content.includes('1, 2, 4'));
+  });
+
+  it('rejects missing files', async () => {
+    const r = await editFile({ path: 'nonexistent.ts', old_string: 'a', new_string: 'b' }, ctx);
+    assert.strictEqual(r.isError, true);
+  });
+});
+
+// ── globFiles ─────────────────────────────────────────────────────────────
+
+describe('globFiles', () => {
+  before(() => {
+    fs.mkdirSync(sandbox, { recursive: true });
+    fs.mkdirSync(path.join(sandbox, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(sandbox, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(sandbox, 'src', 'index.ts'), '// index');
+    fs.writeFileSync(path.join(sandbox, 'src', 'utils.ts'), '// utils');
+    fs.writeFileSync(path.join(sandbox, 'src', 'utils.test.ts'), '// test');
+    fs.writeFileSync(path.join(sandbox, 'lib', 'helper.js'), '// helper');
+    fs.writeFileSync(path.join(sandbox, 'README.md'), '# readme');
+  });
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('matches all .ts files with **/*.ts', async () => {
+    const r = await globFiles({ pattern: '**/*.ts' }, ctx);
+    assert.strictEqual(r.isError, false);
+    const matches = r.content.split('\n');
+    assert.ok(matches.includes('src/index.ts'));
+    assert.ok(matches.includes('src/utils.ts'));
+    assert.ok(matches.includes('src/utils.test.ts'));
+    assert.strictEqual(matches.length, 3);
+  });
+
+  it('matches .js files only', async () => {
+    const r = await globFiles({ pattern: '**/*.js' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.strictEqual(r.content, 'lib/helper.js');
+  });
+
+  it('restricts search to a subdirectory with path', async () => {
+    const r = await globFiles({ pattern: '*.ts', path: 'src' }, ctx);
+    assert.strictEqual(r.isError, false);
+    const matches = r.content.split('\n');
+    assert.ok(matches.includes('src/index.ts'));
+    assert.ok(matches.includes('src/utils.ts'));
+    assert.ok(matches.includes('src/utils.test.ts'));
+  });
+
+  it('returns empty when no files match', async () => {
+    const r = await globFiles({ pattern: '**/*.py' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.strictEqual(r.content, 'No files matched.');
+  });
+
+  it('rejects missing directories', async () => {
+    const r = await globFiles({ pattern: '*.ts', path: 'nonexistent' }, ctx);
+    assert.strictEqual(r.isError, true);
+  });
+});
+
+// ── globToRegex ───────────────────────────────────────────────────────────
+
+describe('globToRegex', () => {
+  it('matches simple pattern', () => {
+    const re = globToRegex('*.ts');
+    assert.ok(re.test('file.ts'));
+    assert.ok(!re.test('file.js'));
+    assert.ok(!re.test('src/file.ts'));
+  });
+
+  it('matches ** pattern', () => {
+    const re = globToRegex('**/*.ts');
+    assert.ok(re.test('src/index.ts'));
+    assert.ok(re.test('deeply/nested/file.ts'));
+    assert.ok(!re.test('file.js'));
+  });
+
+  it('matches ? pattern', () => {
+    const re = globToRegex('file-?.ts');
+    assert.ok(re.test('file-a.ts'));
+    assert.ok(re.test('file-1.ts'));
+    assert.ok(!re.test('file-ab.ts'));
+  });
+
+  it('matches character class [abc]', () => {
+    const re = globToRegex('file-[abc].ts');
+    assert.ok(re.test('file-a.ts'));
+    assert.ok(re.test('file-b.ts'));
+    assert.ok(re.test('file-c.ts'));
+    assert.ok(!re.test('file-d.ts'));
+  });
+
+  it('matches brace expansion {a,b}', () => {
+    const re = globToRegex('*.{ts,js}');
+    assert.ok(re.test('file.ts'));
+    assert.ok(re.test('file.js'));
+    assert.ok(!re.test('file.py'));
+  });
+
+  it('handles nested brace + wildcard', () => {
+    const re = globToRegex('src/**/*.{test,spec}.ts');
+    assert.ok(re.test('src/foo/bar.test.ts'));
+    assert.ok(re.test('src/baz.spec.ts'));
+    assert.ok(!re.test('src/foo/bar.ts'));
   });
 });

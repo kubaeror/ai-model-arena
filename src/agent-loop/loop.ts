@@ -31,6 +31,8 @@ export interface AgentLoopResult {
   maxTurns: number;
   totalToolCalls: number;
   toolsCalled: { name: string; count: number }[];
+  /** Per-tool success/fail breakdown. Keyed by tool name, values are {success, fail} counts. */
+  toolSuccessRates: Record<string, { success: number; fail: number }>;
   tokenUsage: TokenUsage;
   stopReason: string;
   errors: string[];
@@ -76,6 +78,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
 
   const usage: TokenUsage = {};
   const toolCounts = new Map<string, number>();
+  const toolSuccessRates: Record<string, { success: number; fail: number }> = {};
   const errors: string[] = [];
   let totalToolCalls = 0;
   let stopReason = 'unknown';
@@ -151,6 +154,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       conv.append({ type: 'tool_result', turn, toolCallId: tc.id, toolName: tc.name, toolResult: content, isError });
       messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content });
 
+      // Track per-tool success/fail rates
+      const rate = toolSuccessRates[tc.name] ?? { success: 0, fail: 0 };
+      if (isError) rate.fail++;
+      else rate.success++;
+      toolSuccessRates[tc.name] = rate;
+
       // Scan tool output for indirect prompt injection patterns
       const scan = scanToolResult(content);
       if (scan.flagged) {
@@ -195,5 +204,5 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
 
   const toolsCalled = [...toolCounts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
   conv.flush();
-  return { turnsUsed, maxTurns, totalToolCalls, toolsCalled, tokenUsage: usage, stopReason, errors };
+  return { turnsUsed, maxTurns, totalToolCalls, toolsCalled, toolSuccessRates, tokenUsage: usage, stopReason, errors };
 }

@@ -185,6 +185,7 @@ async function main(): Promise<void> {
     shellTimeoutMs: scenario.shellTimeoutMs,
     maxShellOutputBytes: scenario.maxShellOutputBytes,
     shellPolicy: scenario.shellPolicy,
+    webAccess: scenario.webAccess,
   };
 
   const sandbox = new Sandbox(sandboxDir);
@@ -252,6 +253,21 @@ async function main(): Promise<void> {
   const adapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger.child('adapter') });
   const executors = buildToolExecutors();
   const maxTurns = scenario.maxTurns ?? resolved.maxTurns;
+
+  // Wire subagent support: strip recursive tools so subagents can't spawn sub-sub-agents
+  const subagentToolNames = new Set(['task', 'todo_read', 'todo_write']);
+  const subagentTools = TOOL_DEFINITIONS.filter(t => !subagentToolNames.has(t.name));
+  const subagentExecutors: typeof executors = {};
+  for (const [name, fn] of Object.entries(executors)) {
+    if (!subagentToolNames.has(name)) subagentExecutors[name] = fn;
+  }
+  toolCtx.subagent = {
+    maxTurns: 5,
+    sendMessage: (msgs, tools) => adapter.sendMessage(msgs, tools),
+    logger: logger.child('subagent'),
+    tools: subagentTools,
+    executors: subagentExecutors,
+  };
 
   let loopResult;
   try {
@@ -323,6 +339,7 @@ async function main(): Promise<void> {
     errors: loopResult.errors,
     success,
     costUsd: costBreakdown.total,
+    toolSuccessRates: loopResult.toolSuccessRates,
     successCriteria: successOutcome
       ? {
           command: successOutcome.command,

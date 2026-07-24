@@ -30,6 +30,7 @@ export interface RunResult {
     passed?: boolean;
   };
   costUsd?: number;
+  toolSuccessRates?: Record<string, { success: number; fail: number }>;
 }
 
 export function writeResultJson(filePath: string, result: RunResult): void {

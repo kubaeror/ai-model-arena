@@ -24,6 +24,7 @@ export const ScenarioConfigSchema = z.object({
   shellTimeoutMs: z.number().int().positive().default(30000),
   shellPolicy: z.enum(['strict', 'permissive']).default('strict'),
   maxShellOutputBytes: z.number().int().positive().default(524288), // 512 KB
+  webAccess: z.boolean().default(false),
 });
 export type ScenarioConfig = z.output<typeof ScenarioConfigSchema>;
 

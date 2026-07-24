@@ -5,6 +5,10 @@ import { z } from 'zod/v4';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
 import { wrapFileContent } from '../security/prompt-injection.js';
+import { globToRegex } from './glob-matcher.js';
+import { webFetch, webSearch } from './web.js';
+import { todoRead, todoWrite } from './todo.js';
+import { task } from './task.js';
 import type { ToolExecutor, ToolExecutorMap } from '../types.js';
 
 const MAX_READ_BYTES = 200 * 1024; // 200 KB per read
@@ -23,6 +27,16 @@ const SearchCodeArgs = z.object({
   caseSensitive: z.boolean().optional().default(false),
 }).strict();
 const TaskCompleteArgs = z.object({ summary: z.string().optional().default('') }).strict();
+const EditFileArgs = z.object({
+  path: z.string().min(1),
+  old_string: z.string(),
+  new_string: z.string(),
+  replace_all: z.boolean().optional().default(false),
+}).strict();
+const GlobArgs = z.object({
+  pattern: z.string().min(1),
+  path: z.string().optional().default('.'),
+}).strict();
 
 function validateArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): { ok: true; data: T } | { ok: false; error: string } {
   const result = schema.safeParse(args);
@@ -263,6 +277,98 @@ export const searchCode: ToolExecutor = async (args, ctx) => {
   return { content: matches.length ? matches.join('\n') : 'No matches found.', isError: false };
 };
 
+// ── edit_file ───────────────────────────────────────────────────────────────
+export const editFile: ToolExecutor = async (args, ctx) => {
+  const v = validateArgs(EditFileArgs, args);
+  if (!v.ok) return { content: v.error, isError: true };
+  const { path: rel, old_string: oldStr, new_string: newStr, replace_all: replaceAll } = v.data;
+  if (!rel) return { content: 'Error: "path" is required.', isError: true };
+  if (oldStr === newStr) return { content: 'Error: old_string and new_string are identical.', isError: true };
+
+  const abs = safeResolve(ctx.sandboxDir, rel);
+  if (!fs.existsSync(abs)) return { content: `Error: file not found: ${rel}`, isError: true };
+  if (!fs.statSync(abs).isFile()) return { content: `Error: not a file: ${rel}`, isError: true };
+
+  const original = fs.readFileSync(abs, 'utf8');
+
+  if (replaceAll) {
+    const count = original.split(oldStr).length - 1;
+    if (count === 0) return { content: `Error: old_string not found in ${rel}`, isError: true };
+    const modified = original.split(oldStr).join(newStr);
+    fs.writeFileSync(abs, modified, 'utf8');
+    return { content: `Replaced ${count} occurrence${count > 1 ? 's' : ''} in ${rel}`, isError: false };
+  }
+
+  // Single replacement: must appear exactly once
+  let idx = 0;
+  let matchCount = 0;
+  let matchLine = 0;
+  let line = 1;
+  const lines: number[] = [];
+
+  for (let i = 0; i < original.length; i++) {
+    if (original[i] === '\n') line++;
+    if (original.slice(i, i + oldStr.length) === oldStr) {
+      matchCount++;
+      if (matchCount === 1) { idx = i; matchLine = line; }
+      lines.push(line);
+    }
+  }
+
+  if (matchCount === 0) {
+    return { content: `Error: old_string not found in ${rel}`, isError: true };
+  }
+  if (matchCount > 1) {
+    return {
+      content: `Error: old_string found ${matchCount} times in ${rel} (lines: ${lines.join(', ')}). Use replace_all=true or provide more surrounding context to make it unique.`,
+      isError: true,
+    };
+  }
+
+  const modified = original.slice(0, idx) + newStr + original.slice(idx + oldStr.length);
+  fs.writeFileSync(abs, modified, 'utf8');
+  return { content: `Replaced 1 occurrence in ${rel} at line ${matchLine}`, isError: false };
+};
+
+// ── glob ─────────────────────────────────────────────────────────────────────
+const MAX_GLOB_FILES = 5000;
+
+export const globFiles: ToolExecutor = async (args, ctx) => {
+  const v = validateArgs(GlobArgs, args);
+  if (!v.ok) return { content: v.error, isError: true };
+  const { pattern, path: relPath } = v.data;
+  if (!pattern) return { content: 'Error: "pattern" is required.', isError: true };
+
+  let targetDir = relPath;
+  if (!targetDir || targetDir === '') targetDir = '.';
+  const absDir = safeResolve(ctx.sandboxDir, targetDir);
+  if (!fs.existsSync(absDir)) return { content: `Error: directory not found: ${targetDir}`, isError: true };
+  if (!fs.statSync(absDir).isDirectory()) return { content: `Error: not a directory: ${targetDir}`, isError: true };
+
+  let regex: RegExp;
+  try {
+    regex = globToRegex(pattern);
+  } catch (e) {
+    return { content: `Error: invalid glob pattern: ${(e as Error).message}`, isError: true };
+  }
+
+  const files = walkFiles(absDir, true);
+  const matches: string[] = [];
+  for (const file of files) {
+    const rel = toRel(ctx.sandboxDir, file);
+    // When searching a subdirectory, also produce a directory-relative path for matching
+    const dirRel = targetDir === '.' ? rel : toRel(absDir, file);
+    if (regex.test(dirRel)) {
+      matches.push(rel);
+      if (matches.length >= MAX_GLOB_FILES) {
+        matches.push('…[truncated, too many matches]');
+        break;
+      }
+    }
+  }
+  return { content: matches.length ? matches.join('\n') : 'No files matched.', isError: false };
+};
+
 // ── task_complete ─────────────────────────────────────────────────────────────
 export const taskComplete: ToolExecutor = async (args) => {
   const v = validateArgs(TaskCompleteArgs, args);
@@ -276,9 +382,16 @@ export function buildToolExecutors(): ToolExecutorMap {
   return {
     read_file: readFile,
     write_file: writeFile,
+    edit_file: editFile,
     list_files: listFiles,
+    glob: globFiles,
     run_shell_command: runShellCommand,
     search_code: searchCode,
+    web_fetch: webFetch,
+    web_search: webSearch,
+    todo_read: todoRead,
+    todo_write: todoWrite,
+    task,
     task_complete: taskComplete,
   };
 }

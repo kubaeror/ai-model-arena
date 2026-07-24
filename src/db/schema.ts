@@ -201,6 +201,21 @@ export const run_models = sqliteTable('run_models', {
   duration_ms: integer('duration_ms'),
 });
 
+export const tool_call_stats = sqliteTable('tool_call_stats', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  run_id: text('run_id').notNull().references(() => runs.run_id),
+  model: text('model').notNull(),
+  tool_name: text('tool_name').notNull(),
+  total: integer('total').notNull().default(0),
+  success_count: integer('success_count').notNull().default(0),
+  fail_count: integer('fail_count').notNull().default(0),
+  recorded_at: text('recorded_at').notNull(),
+}, (table) => [
+  index('idx_tool_stats_run').on(table.run_id),
+  index('idx_tool_stats_model_tool').on(table.model, table.tool_name),
+  index('idx_tool_stats_recorded').on(table.recorded_at),
+]);
+
 export const sessions = sqliteTable('sessions', {
   id: text('id').primaryKey(),
   prompt_id: text('prompt_id'),
@@ -446,3 +461,4 @@ export type DbPrompt = InferSelectModel<typeof prompts>;
 export type DbPromptVersion = InferSelectModel<typeof prompt_versions>;
 export type DbOutputMapping = InferSelectModel<typeof output_mappings>;
 export type DbSchedule = InferSelectModel<typeof schedules>;
+export type DbToolCallStat = InferSelectModel<typeof tool_call_stats>;

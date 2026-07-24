@@ -23,6 +23,20 @@ function applyRuntimeIndices(sqlite: DatabaseType): void {
     `CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log (action)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_run_models_run_model ON run_models (run_id, model)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_user_roles_user_role ON user_roles (user_id, role_id)`,
+    // tool_call_stats table (created here until a proper migration is added)
+    `CREATE TABLE IF NOT EXISTS tool_call_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES runs(run_id),
+      model TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      total INTEGER NOT NULL DEFAULT 0,
+      success_count INTEGER NOT NULL DEFAULT 0,
+      fail_count INTEGER NOT NULL DEFAULT 0,
+      recorded_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tool_stats_run ON tool_call_stats (run_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tool_stats_model_tool ON tool_call_stats (model, tool_name)`,
+    `CREATE INDEX IF NOT EXISTS idx_tool_stats_recorded ON tool_call_stats (recorded_at)`,
   ];
   for (const stmt of stmts) {
     try { sqlite.prepare(stmt).run(); } catch { /* index may already exist */ }

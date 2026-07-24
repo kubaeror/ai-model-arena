@@ -16,6 +16,7 @@ interface RunResult {
   tokenUsage?: { prompt?: number; completion?: number; total?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
   costUsd?: number;
   success: boolean;
+  toolSuccessRates?: Record<string, { success: number; fail: number }>;
 }
 
 export async function writeRunStats(runId: string, root: string): Promise<void> {
@@ -76,4 +77,23 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
     success: result.success ? 1 : 0,
     measured_at: now,
   });
+
+  // Write per-tool success/fail stats
+  if (result.toolSuccessRates) {
+    const insertTool = db.prepare(`
+      INSERT INTO tool_call_stats (run_id, model, tool_name, total, success_count, fail_count, recorded_at)
+      VALUES (@run_id, @model, @tool_name, @total, @success_count, @fail_count, @recorded_at)
+    `);
+    for (const [toolName, rates] of Object.entries(result.toolSuccessRates)) {
+      insertTool.run({
+        run_id: runId,
+        model: result.model,
+        tool_name: toolName,
+        total: rates.success + rates.fail,
+        success_count: rates.success,
+        fail_count: rates.fail,
+        recorded_at: now,
+      });
+    }
+  }
 }

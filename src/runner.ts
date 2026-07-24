@@ -169,6 +169,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         shellTimeoutMs: scenario.shellTimeoutMs,
         maxShellOutputBytes: scenario.maxShellOutputBytes,
         shellPolicy: scenario.shellPolicy,
+        webAccess: scenario.webAccess,
       };
 
       const sandbox = new Sandbox(sandboxDir);
@@ -191,6 +192,21 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const apiKey = descriptor?.envVar ? secretStore.get(descriptor.envVar) : undefined;
       const executors = buildToolExecutors();
       let adapter = registry.createAdapter(currentProvider, currentModel, { apiKey, logger: logger.child('adapter') });
+
+      // Wire subagent support: strip recursive tools
+      const subagentToolNames = new Set(['task', 'todo_read', 'todo_write']);
+      const subagentTools = TOOL_DEFINITIONS.filter(t => !subagentToolNames.has(t.name));
+      const subagentExecutors: typeof executors = {};
+      for (const [name, fn] of Object.entries(executors)) {
+        if (!subagentToolNames.has(name)) subagentExecutors[name] = fn;
+      }
+      toolCtx.subagent = {
+        maxTurns: 5,
+        sendMessage: (msgs, tools) => adapter.sendMessage(msgs, tools),
+        logger: logger.child('subagent'),
+        tools: subagentTools,
+        executors: subagentExecutors,
+      };
       let loopResult;
       let maxFallbackHops = 3;
 

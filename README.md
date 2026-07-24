@@ -13,6 +13,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 - **59 LLM providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, OpenRouter, Groq, Cerebras, NVIDIA, Mistral, SambaNova, Scaleway, Cloudflare, GitHub Copilot, xAI, Ollama, DeepSeek, DeepInfra, Together, Fireworks, Perplexity, Cohere, HuggingFace, Azure, Snowflake Cortex, SAP AI Core, and many more — all behind a unified adapter interface with 3 adapter families (openai-compat, anthropic, google)
 - **Sandboxed workspaces** with path escape prevention and shell policy enforcement
 - **Agent loop**: prompt → model response → tool execution → repeat; stops on `task_complete` or `max_turns`
+- **13 built-in tools**: read_file, write_file, edit_file, glob, list_files, run_shell_command, search_code, web_fetch, web_search, todo_read, todo_write, task (subagent), task_complete
 - **Queue-driven architecture**: Redis Streams (production) or in-memory queue (dev) with KEDA autoscaling
 - **Session persistence**: SQLite (dev) or Postgres (production) via Drizzle ORM, with per-turn checkpointing
 - **OpenTelemetry tracing**: full span trees per run (agent → chat → tool), OTLP export to Tempo/Grafana
@@ -80,7 +81,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Agent loop** | `src/agent-loop/loop.ts` | Core send→tool→loop with per-turn budget/cancellation checks |
 | **Providers** | `src/providers/` | Provider registry (59 providers), descriptor system, 3 adapter families (openai-compat, anthropic, google) |
 | **Provider adapters** | `src/providers/adapters/` | Wire-format translation: `openai-compat`, `anthropic`, `google` (3 adapter families covering all 59 providers) |
-| **Tools** | `src/tools/` | Tool schemas (`read_file`, `write_file`, `list_files`, `run_shell_command`, `search_code`, `task_complete`) + executors |
+| **Tools** | `src/tools/` | 13 tools: read_file, write_file, edit_file, glob, list_files, run_shell_command, search_code, web_fetch, web_search, todo_read, todo_write, task (subagent), task_complete — with JSON-Schema definitions, Zod-validated executors, sandbox enforcement, shell policy, and web access gating |
 | **Sandbox** | `src/sandbox/` | Isolated workspace with path escape prevention, shell policy, git integration |
 | **Session store** | `src/session/store.ts` | Message + session persistence per turn |
 | **Database** | `src/db/` | Drizzle ORM: SQLite + Postgres schemas, migrations, model resolver |
@@ -427,7 +428,7 @@ ai-model-arena/
 │   ├── secrets/                  # Dual-mode secret store
 │   ├── security/                 # Prompt injection detection
 │   ├── session/                  # Session + message persistence
-│   └── tools/                    # Tool schemas + executors
+│   └── tools/                    # 13 tool schemas + executors (edit, glob, web, todo, task)
 ├── configs/                      # YAML config files
 │   ├── scenarios/                # Scenario definitions + templates
 │   └── regression/               # Regression suite configs
