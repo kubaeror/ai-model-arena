@@ -47,7 +47,9 @@ kubectl apply -k k8s/overlays/dev
 ### Production (Argo CD)
 
 ```bash
-# Create sealed secrets (one-time)
+# Create sealed secrets for database credentials (one-time)
+# Edit the plain secrets file first with real DB passwords, then seal it:
+#   kubeseal --namespace ai-arena < plain.yaml > k8s/base/arena-secrets-sealed.yaml
 kubectl apply -f k8s/base/arena-secrets-sealed.yaml
 
 # Apply Argo CD Application
@@ -56,6 +58,14 @@ kubectl apply -f k8s/argocd/ai-arena-app.yaml
 # Argo CD syncs from k8s/overlays/prod.
 # CI commits the image SHA tag to the prod kustomization.yaml on each push.
 ```
+
+**Provider API keys** (OpenAI, Anthropic, Google, etc.) are managed via the dashboard
+UI under Settings → API Keys, NOT via sealed secrets. The dashboard creates and
+manages the `provider-keys` Secret directly through the k8s API. ArgoCD does not
+revert dashboard-set keys because the Secret is excluded from GitOps management.
+
+On first deploy, the `provider-keys` Secret won't exist until keys are set
+via the dashboard. Until then, providers requiring API keys will fail.
 
 ## Access
 
