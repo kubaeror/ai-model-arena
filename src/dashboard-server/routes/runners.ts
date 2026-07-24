@@ -2,6 +2,7 @@ import type { Router, Request, Response } from 'express';
 import { KubeConfig, AppsV1Api, CoreV1Api } from '@kubernetes/client-node';
 import type { RequestHandler } from 'express';
 import { requireRole } from '../../auth/rbac.js';
+import { INTERNAL_ERROR } from '../error-sanitizer.js';
 
 const kc = new KubeConfig();
 kc.loadFromDefault();
@@ -41,7 +42,7 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
 
       res.json({ runners });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
@@ -61,7 +62,7 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
       });
       res.json({ name, replicas });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
@@ -76,7 +77,7 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
       });
       res.json({ name, drained: true });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
@@ -100,7 +101,7 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
       });
       res.type('text/plain').send(logs);
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 }

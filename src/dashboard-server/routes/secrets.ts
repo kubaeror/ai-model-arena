@@ -5,6 +5,7 @@ import { audit } from '../../auth/rbac.js';
 import { secretStore } from '../../secrets/store.js';
 import { isKubernetes, getKubeNamespace, getKubeSecretName } from '../../env/detect.js';
 import type { Request, Response } from 'express';
+import { INTERNAL_ERROR } from '../error-sanitizer.js';
 
 let k8sApi: CoreV1Api | null = null;
 let k8sReady = false;
@@ -61,9 +62,8 @@ export function createSecretsRouter(): Router {
         audit((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar }).catch(() => {});
         res.json({ ok: true, envVar });
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   }) as unknown as Router);
 
@@ -95,9 +95,8 @@ export function createSecretsRouter(): Router {
         audit((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar }).catch(() => {});
         res.json({ ok: true, envVar });
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   }) as unknown as Router);
 

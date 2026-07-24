@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getDb } from '../../db/client.js';
 import { getCacheStates } from '../../catalog/cache.js';
 import type { ApiKeyRequest } from '../auth-api-types.js';
+import { INTERNAL_ERROR } from '../error-sanitizer.js';
 
 export function createCacheRouter(): Router {
   const router = Router();
@@ -49,8 +50,8 @@ export function createCacheRouter(): Router {
         const result = await fetchBenchmarks(source as 'modelbench' | 'zeroeval', { force: true });
         res.json(result);
       }
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 

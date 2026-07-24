@@ -1,4 +1,4 @@
-import type { Express } from 'express';
+import type { Express, RequestHandler } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { load } from 'js-yaml';
@@ -33,8 +33,10 @@ function loadSpec(): { yaml: string; json: unknown } | null {
  *   GET /api/docs/openapi.yaml — raw YAML
  *   GET /api/docs/openapi.json — JSON
  */
-export function mountOpenApi(app: Express): void {
-  app.get('/api/docs', (_req, res) => {
+export function mountOpenApi(app: Express, auth?: RequestHandler): void {
+  const docsAuth = auth ?? ((_req, _res, next) => next());
+
+  app.get('/api/docs', docsAuth, (_req, res) => {
     const spec = loadSpec();
     if (!spec) { res.status(404).type('text/plain').send('openapi.yaml not found'); return; }
     const html = swaggerUiHtml(spec.json as Record<string, unknown>);
@@ -42,19 +44,19 @@ export function mountOpenApi(app: Express): void {
     res.type('text/html').send(html);
   });
 
-  app.get('/api/docs/openapi.yaml', (_req, res) => {
+  app.get('/api/docs/openapi.yaml', docsAuth, (_req, res) => {
     const spec = loadSpec();
     if (!spec) { res.status(404).send('not found'); return; }
     res.type('text/yaml').send(spec.yaml);
   });
 
-  app.get('/api/docs/openapi.json', (_req, res) => {
+  app.get('/api/docs/openapi.json', docsAuth, (_req, res) => {
     const spec = loadSpec();
     if (!spec) { res.status(404).send('not found'); return; }
     res.json(spec.json);
   });
 
-  app.get('/api/v1/docs', (_req, res) => res.redirect(302, '/api/docs'));
+  app.get('/api/v1/docs', docsAuth, (_req, res) => res.redirect(302, '/api/docs'));
 }
 
 function swaggerUiHtml(spec: Record<string, unknown>): string {

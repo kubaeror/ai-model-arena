@@ -83,8 +83,18 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
     process.exit(0);
   };
 
-  process.on('SIGINT', () => { void shutdown(); });
-  process.on('SIGTERM', () => { void shutdown(); });
+  process.on('SIGINT', () => {
+    shutdown().catch((err) => {
+      logger.error('Shutdown error', { signal: 'SIGINT', error: String(err) });
+      process.exit(1);
+    });
+  });
+  process.on('SIGTERM', () => {
+    shutdown().catch((err) => {
+      logger.error('Shutdown error', { signal: 'SIGTERM', error: String(err) });
+      process.exit(1);
+    });
+  });
   process.on('unhandledRejection', (reason) => {
     logger.error('Unhandled rejection', { error: String(reason) });
   });

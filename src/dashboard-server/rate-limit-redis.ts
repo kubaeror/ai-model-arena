@@ -71,9 +71,8 @@ export async function redisCheckRateLimit(
 
     return { allowed, remaining, resetIn };
   } catch {
-    // Fall back to always-allow if Redis is unavailable — the
-    // in-memory limiter in auth-api.ts will handle rate limiting
-    // on a best-effort basis.
-    return { allowed: true, remaining: maxTokens, resetIn: 0 };
+    // Throw so callers fall back to the in-memory rate limiter (auth-api.ts:checkRateLimit).
+    // Failing-open would allow unbounded traffic during a Redis outage.
+    throw new Error('Redis rate limiter unavailable');
   }
 }

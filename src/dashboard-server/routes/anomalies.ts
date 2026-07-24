@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { audit } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
+import { INTERNAL_ERROR } from '../error-sanitizer.js';
 import {
   listAnomalies,
   getAnomaly,
@@ -42,8 +43,8 @@ export function createAnomaliesRouter(): Router {
     };
     try {
       res.json({ anomalies: listAnomalies(q) });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 

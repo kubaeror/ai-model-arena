@@ -2,6 +2,7 @@ import { Redis } from 'ioredis';
 import { propagation, context } from '@opentelemetry/api';
 import type { Task, TaskQueue } from './types.js';
 import type { RedisQueueConfig } from './redis-config.js';
+import { parseTask, safeParseTask } from './task-schema.js';
 import { streamKey, dlqStreamKey } from './router.js';
 
 export class RedisStreamQueue implements TaskQueue {
@@ -67,7 +68,7 @@ export class RedisStreamQueue implements TaskQueue {
           for (let i = 0; i < fields.length; i += 2) {
             taskData[fields[i]!] = fields[i + 1]!;
           }
-          const task = JSON.parse(taskData.task ?? '{}') as Task;
+          const task = parseTask(JSON.parse(taskData.task ?? '{}'));
 
           if ((task.attempts ?? 0) >= this.config.maxAttempts) {
             const dlq = dlqStreamKey(this.config.streamPrefix, provider);
@@ -151,7 +152,7 @@ export class RedisStreamQueue implements TaskQueue {
         for (let i = 0; i < fields.length; i += 2) {
           taskData[fields[i]!] = fields[i + 1]!;
         }
-        const task = JSON.parse(taskData.task ?? '{}') as Task;
+        const task = parseTask(JSON.parse(taskData.task ?? '{}'));
         task._redisId = id;
         if (taskData.traceparent) task._traceparent = taskData.traceparent;
         if (task._traceparent) {
@@ -244,7 +245,7 @@ export class RedisStreamQueue implements TaskQueue {
       const [, fields] = msgs[0]!;
       const taskData: Record<string, string> = {};
       for (let i = 0; i < fields.length; i += 2) taskData[fields[i]!] = fields[i + 1]!;
-      const task = JSON.parse(taskData.task ?? '{}') as Task;
+      const task = parseTask(JSON.parse(taskData.task ?? '{}'));
       task.attempts = (task.attempts ?? 0) + 1;
 
       if (task.attempts >= maxAttempts) {
@@ -283,11 +284,15 @@ export class RedisStreamQueue implements TaskQueue {
     const dlqStream = dlqStreamKey(this.config.streamPrefix, provider);
     try {
       const msgs = await this.redis.xrange(dlqStream, '-', '+', 'COUNT', limit);
-      return msgs.map(([, fields]) => {
-        const data: Record<string, string> = {};
-        for (let i = 0; i < fields.length; i += 2) data[fields[i]!] = fields[i + 1]!;
-        return { ...JSON.parse(data.task ?? '{}'), dlqReason: data.reason } as Task & { dlqReason?: string };
-      });
+      return msgs
+        .map(([, fields]) => {
+          const data: Record<string, string> = {};
+          for (let i = 0; i < fields.length; i += 2) data[fields[i]!] = fields[i + 1]!;
+          const task = safeParseTask(JSON.parse(data.task ?? '{}'));
+          if (!task) return null;
+          return { ...task, dlqReason: data.reason } as Task & { dlqReason?: string };
+        })
+        .filter((t): t is Task & { dlqReason?: string } => t !== null);
     } catch {
       return [];
     }
@@ -306,7 +311,7 @@ export class RedisStreamQueue implements TaskQueue {
     const [, fields] = msgs[0]!;
     const data: Record<string, string> = {};
     for (let i = 0; i < fields.length; i += 2) data[fields[i]!] = fields[i + 1]!;
-    const task = JSON.parse(data.task ?? '{}') as Task;
+    const task = parseTask(JSON.parse(data.task ?? '{}'));
     task.attempts = 0; // reset attempts for the retry
 
     // Re-add to main stream

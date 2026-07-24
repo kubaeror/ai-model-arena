@@ -10,7 +10,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 ## Features
 
-- **16+ LLM providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, OpenRouter, Groq, Cerebras, NVIDIA, Mistral, SambaNova, Scaleway, Cloudflare, GitHub Copilot, xAI, Ollama — all behind a unified adapter interface
+- **59 LLM providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, OpenRouter, Groq, Cerebras, NVIDIA, Mistral, SambaNova, Scaleway, Cloudflare, GitHub Copilot, xAI, Ollama, DeepSeek, DeepInfra, Together, Fireworks, Perplexity, Cohere, HuggingFace, Azure, Snowflake Cortex, SAP AI Core, and many more — all behind a unified adapter interface with 3 adapter families (openai-compat, anthropic, google)
 - **Sandboxed workspaces** with path escape prevention and shell policy enforcement
 - **Agent loop**: prompt → model response → tool execution → repeat; stops on `task_complete` or `max_turns`
 - **Queue-driven architecture**: Redis Streams (production) or in-memory queue (dev) with KEDA autoscaling
@@ -35,15 +35,16 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 ```
 ┌──────────────┐     ┌────────────────────────────────────────────────────┐
-│   CLI / API   │────▶│                  Queue (Redis / In-Memory)          │
+│   CLI / API   │────▶│           Queue (Redis Streams / In-Memory)        │
 └──────────────┘     └──────────────────┬─────────────────────────────────┘
                                         │
-                    ┌───────────────────┼───────────────────────┐
-                    ▼                   ▼                       ▼
-            ┌──────────────┐   ┌──────────────┐       ┌──────────────┐
-            │   Runner 1   │   │   Runner 2   │  ...  │   Runner N   │
-            │  (OpenAI)    │   │ (Anthropic)  │       │  (Bedrock)   │
-            └──────┬───────┘   └──────┬───────┘       └──────┬───────┘
+                    ┌───────────────────┼───────────────────────────────┐
+                    ▼                   ▼                               ▼
+            ┌──────────────┐   ┌──────────────┐               ┌──────────────┐
+            │   Runner     │   │   Runner     │      ...      │   Runner     │
+            │ openai-compat│   │  anthropic   │               │    google    │
+            │  (KEDA x10)  │   │  (KEDA x10)  │               │  (KEDA x10)  │
+            └──────┬───────┘   └──────┬───────┘               └──────┬───────┘
                    │                  │                      │
                    ▼                  ▼                      ▼
             ┌──────────────────────────────────────────────────────────┐
@@ -52,9 +53,9 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
             │       │              │                    │               │
             │       ▼              ▼                    ▼               │
             │  Provider Adapter  Sandbox           Tool Executors       │
-            │  (OpenAI/Anthro/   (fs isolation)   (file/shell/search)  │
-            │   Google/Bedrock/                                        │
-            │   Groq/Cerebras/...)                                      │
+            │  (openai-compat/   (fs isolation)   (file/shell/search)  │
+            │   anthropic/                                             │
+            │   google/...)                                            │
             └──────────────────────────────────────────────────────────┘
                    │
                    ▼
@@ -77,8 +78,8 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Runner entry** | `src/runner-entry.ts` | Container entrypoint (starts OTel + runner) |
 | **Queue** | `src/queue/` | Abstraction: `types`, `in-memory`, `redis` (Streams with consumer groups + XAUTOCLAIM), `router`, `redis-config` |
 | **Agent loop** | `src/agent-loop/loop.ts` | Core send→tool→loop with per-turn budget/cancellation checks |
-| **Providers** | `src/providers/` | Provider registry (+16 providers), descriptor system, circuit breaker, fallback chains |
-| **Provider adapters** | `src/providers/adapters/` | Wire-format translation: `openai`, `anthropic`, `google`, `bedrock`, `openai-compat` |
+| **Providers** | `src/providers/` | Provider registry (59 providers), descriptor system, 3 adapter families (openai-compat, anthropic, google) |
+| **Provider adapters** | `src/providers/adapters/` | Wire-format translation: `openai-compat`, `anthropic`, `google` (3 adapter families covering all 59 providers) |
 | **Tools** | `src/tools/` | Tool schemas (`read_file`, `write_file`, `list_files`, `run_shell_command`, `search_code`, `task_complete`) + executors |
 | **Sandbox** | `src/sandbox/` | Isolated workspace with path escape prevention, shell policy, git integration |
 | **Session store** | `src/session/store.ts` | Message + session persistence per turn |
@@ -93,9 +94,11 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Observability** | `src/observability/` | OTel SDK setup, span instrumentation, trace metadata, stats |
 | **Metrics** | `src/metrics/` | Prometheus metrics for runner/dashboard health |
 | **Security** | `src/security/` | Prompt injection detection |
+| **Secrets** | `src/secrets/` | Dual-mode secret store (k8s-mounted files or `.env` based) |
+| **Environment** | `src/env/` | Platform auto-detection (Kubernetes vs bare-metal) |
 | **Lineage** | `src/lineage/` | Artifact provenance tracking |
 | **Logger** | `src/logger/` | Pino structured logger, conversation/report/result/comparison loggers |
-| **Dashboard server** | `src/dashboard-server/` | Express API + WebSocket gateway, JWT auth, RBAC, 22 route modules |
+| **Dashboard server** | `src/dashboard-server/` | Express API + WebSocket gateway, JWT auth, RBAC, 27 route modules |
 | **Dashboard client** | `src/dashboard-client/` | React + Vite + TanStack Query + Tailwind SPA |
 
 ---
@@ -257,27 +260,17 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 
 ## Adding a model
 
-Models are managed through the provider catalog (built-in for 16+ providers). To add a new model:
+Models are managed through the provider catalog (59 built-in providers across 3 adapter families: `openai-compat`, `anthropic`, `google`). To add a new model:
 
 1. Ensure the provider descriptor exists in `src/providers/descriptors/`
 2. Add the model via the dashboard (**Models** page) or the API
-3. Set the corresponding `apiKeyEnv` value in your `.env`
+3. Set the corresponding `apiKeyEnv` value in your `.env` (or via **Secrets** page in dashboard)
 
 For a new provider:
 
 1. Create `src/providers/descriptors/<name>.ts` implementing `ProviderDescriptor`
 2. Register it in `src/providers/index.ts` in the `BUILTIN_PROVIDERS` array
-3. If the wire format differs, create `src/providers/adapters/<name>.ts`
-
-The adapter interface is:
-
-```ts
-interface ModelAdapter {
-  sendMessage(messages: ChatMessage[], tools: ToolDefinition[]): Promise<ModelResponse>;
-}
-```
-
-Circuit breaking and fallback chains are built into the provider registry.
+3. Map it to an adapter family (`openai-compat`, `anthropic`, or `google`) — most open-source and API-compatible providers use `openai-compat`
 
 ---
 
@@ -317,24 +310,27 @@ docker compose up -d
 
 ### Kubernetes (minikube)
 
+Kubernetes deployments use **Kustomize overlays** (`dev` and `prod`) inheriting from `k8s/base/`. Runners are grouped into 3 adapter-family deployments (openai-compat, anthropic, google), each with KEDA autoscaling:
+
 ```bash
 minikube start --memory=4096 --cpus=2
 helm upgrade --install keda kedacore/keda -n keda --create-namespace
 
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/postgres.yaml -f k8s/redis.yaml -f k8s/output-pvc.yaml
-kubectl apply -f k8s/runner-configmap.yaml
-kubectl apply -f k8s/runner-deployment.yaml
-kubectl apply -f k8s/keda-scaledobject.yaml
-kubectl apply -f k8s/dashboard-deployment.yaml
-kubectl apply -f k8s/dashboard-service.yaml
+# Apply dev overlay (local PVs, :latest images)
+kubectl apply -k k8s/overlays/dev
 
+# Or apply prod overlay (EFS storage, pinned tags)
+kubectl apply -k k8s/overlays/prod
+
+# Access dashboard
 minikube service dashboard -n ai-arena --url
 ```
 
-KEDA scales runners based on Redis Stream queue depth. Runners scale to zero when idle.
+For **Argo CD GitOps**, the application manifest is at `k8s/argocd/ai-arena-app.yaml` (auto-sync + self-heal from `main` branch).
 
-See `k8s/README.md` for platform notes (gVisor, RWX PVC, secrets).
+KEDA scales each adapter-family runner independently based on Redis Stream queue depth. All runners scale to zero when idle.
+
+Observability stack (Prometheus, Grafana, Loki, Promtail, OTel Collector) is in `k8s/observability/`.
 
 ---
 
@@ -404,15 +400,17 @@ ai-model-arena/
 │   ├── runner-entry.ts           # Container entrypoint
 │   ├── worker.ts                 # Legacy direct session worker
 │   ├── config.ts                 # Zod schemas + YAML loaders
+│   ├── env.ts                    # Dashboard env config
 │   ├── types.ts                  # Shared TypeScript interfaces
 │   ├── agent-loop/               # Core send→tool→loop logic
 │   ├── anomaly-detection/        # Z-score detectors + anomaly DB
 │   ├── auth/                     # Password hashing + RBAC
 │   ├── catalog/                  # models.dev sync + model matching
 │   ├── cost-tracking/            # Pricing + budget enforcement
-│   ├── dashboard-server/         # Express API + WebSocket + 19 route modules
+│   ├── dashboard-server/         # Express API + WebSocket + 27 route modules
 │   ├── dashboard-client/         # React SPA (Vite + TanStack Query)
 │   ├── db/                       # Drizzle ORM (SQLite + Postgres)
+│   ├── env/                      # Platform auto-detection (k8s vs bare-metal)
 │   ├── evaluation/               # LLM-as-Judge + regression testing
 │   ├── fs/                       # Locked file writes
 │   ├── lineage/                  # Artifact provenance
@@ -421,11 +419,12 @@ ai-model-arena/
 │   ├── notifications/            # Slack, Discord, webhooks
 │   ├── observability/            # OpenTelemetry setup + trace instrumentation
 │   ├── orchestrator/             # Run lifecycle, PM2 helpers, run index
-│   ├── providers/                # 16+ provider descriptors + adapters
+│   ├── providers/                # 59 provider descriptors + 3 adapter families
 │   ├── queue/                    # In-memory + Redis Streams queue
 │   ├── runner/                   # Checkpointing + idempotency
 │   ├── sandbox/                  # Isolated filesystem + git
 │   ├── scheduler/                # Cron job manager
+│   ├── secrets/                  # Dual-mode secret store
 │   ├── security/                 # Prompt injection detection
 │   ├── session/                  # Session + message persistence
 │   └── tools/                    # Tool schemas + executors

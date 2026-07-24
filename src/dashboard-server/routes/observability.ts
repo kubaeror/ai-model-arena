@@ -3,6 +3,7 @@ import { computeObservabilityStats } from '../../observability/stats.js';
 import { getDb, closeDb } from '../../anomaly-detection/db.js';
 import { listRuns } from '../../orchestrator/run-index.js';
 import { readTraceIndex } from '../../observability/trace-meta.js';
+import { INTERNAL_ERROR } from '../error-sanitizer.js';
 
 /**
  * Observability API:
@@ -18,8 +19,8 @@ export function createObservabilityRouter(): Router {
     const model = typeof req.query.model === 'string' ? String(req.query.model) : undefined;
     try {
       res.json(computeObservabilityStats(model));
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
@@ -55,8 +56,8 @@ export function createObservabilityRouter(): Router {
         }
       }
       res.json({ traces: entries });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
@@ -67,8 +68,8 @@ export function createObservabilityRouter(): Router {
       const db = getDb();
       db.prepare('SELECT 1 AS ok').get();
       sqlite = { ok: true };
-    } catch (err) {
-      sqlite = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } catch {
+      sqlite = { ok: false, error: INTERNAL_ERROR };
       closeDb();
     }
 

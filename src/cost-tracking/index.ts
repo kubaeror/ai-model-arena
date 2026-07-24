@@ -9,9 +9,9 @@ export {
   resetBudgetCache 
 } from './budget.js';
 
-import type { TokenUsage } from './types.js';
+import type { CostTokenUsage } from './types.js';
 
-export function tokenUsageFromPartial(partial: { prompt?: number; completion?: number; total?: number; cached?: number }): TokenUsage {
+export function tokenUsageFromPartial(partial: { prompt?: number; completion?: number; total?: number; cached?: number }): CostTokenUsage {
   return {
     prompt: partial.prompt ?? 0,
     completion: partial.completion ?? 0,
@@ -19,7 +19,7 @@ export function tokenUsageFromPartial(partial: { prompt?: number; completion?: n
   };
 }
 
-export function sumTokenUsage(usages: TokenUsage[]): TokenUsage {
+export function sumTokenUsage(usages: CostTokenUsage[]): CostTokenUsage {
   return usages.reduce(
     (acc, u) => ({
       prompt: acc.prompt + (u.prompt ?? 0),
@@ -30,7 +30,7 @@ export function sumTokenUsage(usages: TokenUsage[]): TokenUsage {
   );
 }
 
-export function ensureTokenUsage(tu?: TokenUsage): TokenUsage {
+export function ensureTokenUsage(tu?: CostTokenUsage): CostTokenUsage {
   return {
     prompt: tu?.prompt ?? 0,
     completion: tu?.completion ?? 0,

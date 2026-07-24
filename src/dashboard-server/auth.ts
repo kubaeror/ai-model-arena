@@ -157,7 +157,7 @@ function parseExpiresInToSeconds(expiresIn: string): number {
 
 /** Express middleware: require a valid Bearer JWT. Checks revocation blacklist after verify. */
 export function requireAuth(cfg: AuthConfig) {
-  return (req: AuthedRequest, res: Response, next: NextFunction): void => {
+  return async (req: AuthedRequest, res: Response, next: NextFunction): Promise<void> => {
     const token = extractToken(req);
     if (!token) {
       res.status(401).json({ error: 'Authentication required' });
@@ -168,18 +168,17 @@ export function requireAuth(cfg: AuthConfig) {
       res.status(401).json({ error: 'Invalid or expired token' });
       return;
     }
-    // Check revocation blacklist (async, but non-blocking — if Redis is down we proceed)
-    void isRevoked(token).then(revoked => {
+    // Check revocation blacklist — if Redis is down, fail-open without revocation check
+    try {
+      const revoked = await isRevoked(token);
       if (revoked) {
         res.status(401).json({ error: 'Token has been revoked' });
-      } else {
-        req.user = verified;
-        next();
+        return;
       }
-    }).catch(() => {
+    } catch {
       // Redis error — proceed without revocation check
-      req.user = verified;
-      next();
-    });
+    }
+    req.user = verified;
+    next();
   };
 }

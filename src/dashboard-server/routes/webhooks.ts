@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { insertWebhook, listWebhooks, deleteWebhook, type NewWebhook } from '../../anomaly-detection/db.js';
 import { audit } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
+import { INTERNAL_ERROR } from '../error-sanitizer.js';
 
 /**
  * Webhook subscriptions API:
@@ -16,8 +17,8 @@ export function createWebhooksRouter(): Router {
   router.get('/', (_req, res) => {
     try {
       res.json({ webhooks: listWebhooks(false) });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
@@ -39,8 +40,8 @@ export function createWebhooksRouter(): Router {
       const result = insertWebhook(input);
       audit((req as AuthedRequest).user?.sub ?? 'system', 'webhook.create', { type: 'webhook', id: String(result.id) }, undefined, { url, events }).catch(() => {});
       res.status(201).json({ webhook: result });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
@@ -58,8 +59,8 @@ export function createWebhooksRouter(): Router {
       }
       audit((req as AuthedRequest).user?.sub ?? 'system', 'webhook.delete', { type: 'webhook', id: String(id) }).catch(() => {});
       res.status(204).send();
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 

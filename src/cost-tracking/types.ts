@@ -46,7 +46,7 @@ export interface BudgetState {
   lastReset: string;
 }
 
-export interface TokenUsage {
+export interface CostTokenUsage {
   prompt: number;
   completion: number;
   cached?: number;

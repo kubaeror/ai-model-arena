@@ -2,6 +2,7 @@ import type { Router, Request, Response } from 'express';
 import type { RequestHandler } from 'express';
 import { createQueue } from '../../queue/index.js';
 import { requireRole } from '../../auth/rbac.js';
+import { INTERNAL_ERROR } from '../error-sanitizer.js';
 
 export function registerQueueRoutes(router: Router, auth: RequestHandler): void {
   router.get('/api/queues', auth, requireRole('admin'), async (_req: Request, res: Response) => {
@@ -10,7 +11,7 @@ export function registerQueueRoutes(router: Router, auth: RequestHandler): void 
       const size = await queue.size();
       const dlqSize = queue.deadLetterSize ? await queue.deadLetterSize() : null;
       res.json({ queues: [{ provider: 'default', depth: size, dlqDepth: dlqSize }] });
-    } catch (e) {
+    } catch {
       res.json({ queues: [] });
     }
   });
@@ -21,7 +22,7 @@ export function registerQueueRoutes(router: Router, auth: RequestHandler): void 
       const queue = createQueue();
       const tasks = queue.deadLetterPeek ? await queue.deadLetterPeek(limit) : [];
       res.json({ provider: req.params.provider, tasks });
-    } catch (e) {
+    } catch {
       res.json({ provider: req.params.provider, tasks: [] });
     }
   });
@@ -36,8 +37,8 @@ export function registerQueueRoutes(router: Router, auth: RequestHandler): void 
       } else {
         res.status(501).json({ id: req.params.id, retried: false, note: 'DLQ retry not supported by current queue driver' });
       }
-    } catch (err) {
-      res.status(500).json({ id: req.params.id, retried: false, error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      res.status(500).json({ id: req.params.id, retried: false, error: INTERNAL_ERROR });
     }
   });
 }
