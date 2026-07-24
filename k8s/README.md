@@ -47,9 +47,26 @@ kubectl apply -k k8s/overlays/dev
 ### Production (Argo CD)
 
 ```bash
+# One-time: install Sealed Secrets controller if not already present
+# k8s/base/arena-secrets-sealed.yaml requires the controller to decrypt
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
+
 # Create sealed secrets for database credentials (one-time)
-# Edit the plain secrets file first with real DB passwords, then seal it:
-#   kubeseal --namespace ai-arena < plain.yaml > k8s/base/arena-secrets-sealed.yaml
+# 1. Create a plain secrets file with real values (do NOT commit):
+#    kubectl create secret generic arena-db-auth -n ai-arena \
+#      --from-literal=DATABASE_URL=postgresql://... \
+#      --from-literal=REDIS_URL=redis://... \
+#      --dry-run=client -o yaml > arena-db-auth-plain.yaml
+#    kubectl create secret generic postgres-auth -n ai-arena \
+#      --from-literal=username=arena --from-literal=password=... \
+#      --dry-run=client -o yaml > postgres-auth-plain.yaml
+# 2. Seal them:
+#    kubeseal < arena-db-auth-plain.yaml > arena-db-auth-sealed.yaml
+#    kubeseal < postgres-auth-plain.yaml > postgres-auth-sealed.yaml
+# 3. Replace the PLACEHOLDER values in k8s/base/arena-secrets-sealed.yaml
+#    with the sealed output, then commit.
+
+# Apply the sealed infra secrets
 kubectl apply -f k8s/base/arena-secrets-sealed.yaml
 
 # Apply Argo CD Application
@@ -60,12 +77,42 @@ kubectl apply -f k8s/argocd/ai-arena-app.yaml
 ```
 
 **Provider API keys** (OpenAI, Anthropic, Google, etc.) are managed via the dashboard
-UI under Settings → API Keys, NOT via sealed secrets. The dashboard creates and
-manages the `provider-keys` Secret directly through the k8s API. ArgoCD does not
-revert dashboard-set keys because the Secret is excluded from GitOps management.
+UI under Settings → API Keys, NOT via sealed secrets. See [Secrets Management](#secrets-management) for details.
 
 On first deploy, the `provider-keys` Secret won't exist until keys are set
 via the dashboard. Until then, providers requiring API keys will fail.
+
+## Secrets Management
+
+The arena uses a **dual approach** to secrets:
+
+| Category | Secret | Method | Managed By | ArgoCD |
+|----------|--------|--------|------------|--------|
+| **Infrastructure** | `arena-db-auth` (DB/Redis URLs, JWT secret), `postgres-auth` (username, password) | [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) | `kubeseal` CLI → git commit | Yes |
+| **Provider API keys** | `provider-keys` (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.) | Dashboard → k8s API directly | Dashboard UI (Settings → API Keys) | No |
+
+### Infra secrets (Sealed Secrets)
+
+Encrypted at rest in git, decrypted at deploy time by the Sealed Secrets controller running in `kube-system`. The controller watches for `SealedSecret` resources and creates plain `Secret` objects.
+
+These are consumed via `envFrom.secretRef` in all workloads (dashboard, runners, scheduler).
+
+**Rotating infra secrets**:
+1. Update the plain secret values on the cluster
+2. Re-seal with `kubeseal`
+3. Commit the updated `arena-secrets-sealed.yaml`
+4. ArgoCD syncs — pods restart to pick up new env vars
+
+### Provider API keys (Dashboard-managed)
+
+API keys for LLM providers are set through the dashboard UI. The dashboard pod has RBAC to `get`, `create`, and `patch` **only** the `provider-keys` Secret — no other secrets are accessible.
+
+Runners mount the Secret as files at `/etc/arena/secrets/` (not `envFrom`), so kubelet auto-refreshes them within ~60s of a dashboard update — no pod restart needed. The application's `SecretStore` reads individual key files from this mount point.
+
+This approach keeps API keys out of ArgoCD's GitOps scope, preventing:
+- Accidental overwrites from stale git state after a UI edit
+- API keys in git history (even encrypted)
+- Requiring kubeseal for routine key rotations
 
 ## Access
 

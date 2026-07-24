@@ -21,6 +21,7 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "4000"
     spec:
+      serviceAccountName: dashboard
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

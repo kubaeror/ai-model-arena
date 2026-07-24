@@ -4,6 +4,11 @@ set -euo pipefail
 echo "=== Starting minikube ==="
 minikube start --memory=4096 --cpus=2
 
+echo "=== Installing Sealed Secrets ==="
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
+echo "Waiting for Sealed Secrets controller to be ready..."
+kubectl -n kube-system wait --for=condition=ready pod -l name=sealed-secrets-controller --timeout=120s
+
 echo "=== Installing KEDA ==="
 helm repo add kedacore https://kedacore.github.io/charts
 helm repo update

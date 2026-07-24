@@ -315,13 +315,16 @@ Kubernetes deployments use **Kustomize overlays** (`dev` and `prod`) inheriting 
 
 ```bash
 minikube start --memory=4096 --cpus=2
-helm upgrade --install keda kedacore/keda -n keda --create-namespace
 
-# Apply dev overlay (local PVs, :latest images)
-kubectl apply -k k8s/overlays/dev
+# One-time bootstrap (installs Sealed Secrets, KEDA, builds image)
+./scripts/k8s/bootstrap.sh
 
-# Or apply prod overlay (EFS storage, pinned tags)
-kubectl apply -k k8s/overlays/prod
+# Deploy via kustomize
+./scripts/k8s/deploy.sh
+
+# Or manually:
+kubectl apply -k k8s/overlays/dev   # dev overlay (local PVs, :latest images)
+kubectl apply -k k8s/overlays/prod  # prod overlay (EFS storage, pinned tags)
 
 # Access dashboard
 minikube service dashboard -n ai-arena --url
@@ -332,6 +335,19 @@ For **Argo CD GitOps**, the application manifest is at `k8s/argocd/ai-arena-app.
 KEDA scales each adapter-family runner independently based on Redis Stream queue depth. All runners scale to zero when idle.
 
 Observability stack (Prometheus, Grafana, Loki, Promtail, OTel Collector) is in `k8s/observability/`.
+
+#### Secrets Management
+
+The arena uses a **dual approach** to secrets in Kubernetes:
+
+| Category | Method | Managed By | ArgoCD |
+|----------|--------|------------|--------|
+| **Infrastructure** (DB credentials, Redis password, JWT secret) | [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) — encrypted at rest in git, decrypted by in-cluster controller | `kubeseal` CLI → git commit | Yes |
+| **Provider API keys** (OpenAI, Anthropic, Google, etc.) | Dashboard UI patches the `provider-keys` Secret via k8s API | Dashboard (Settings → API Keys) | No |
+
+Infra secrets are consumed as `envFrom.secretRef`. Provider keys are mounted as files at `/etc/arena/secrets/` in runner pods — kubelet auto-refreshes the mount within ~60s of dashboard updates, so no pod restart is needed.
+
+See [k8s/README.md](k8s/README.md#secrets-management) for the full sealing workflow and rotation procedures.
 
 ---
 
