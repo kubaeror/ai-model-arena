@@ -39,6 +39,7 @@ patches:
       spec:
         template:
           spec:
+            runtimeClassName: gvisor
             initContainers:
               - name: db-migrate
                 imagePullPolicy: IfNotPresent

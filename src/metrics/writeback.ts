@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDb } from '../db/index.js';
+import { getDrizzleDb } from '../db/index.js';
+import { models, model_runtime_stats, tool_call_stats } from '../db/schema.js';
 import { aggregateLatency, computeTps } from './runtime.js';
 import { extractCacheMetrics } from './cache-metrics.js';
 import { matchModelToCanonical, type CatalogEntry } from '../catalog/match.js';
@@ -20,7 +21,7 @@ interface RunResult {
 }
 
 export async function writeRunStats(runId: string, root: string): Promise<void> {
-  const db = getDb();
+  const db = getDrizzleDb();
   const outputsDir = path.join(root, 'outputs');
 
   // Find the run's model dir
@@ -45,7 +46,7 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
     ? JSON.parse(fs.readFileSync(tracePath, 'utf8')) as TraceMeta
     : { spans: [] };
 
-  const catalog = db.prepare('SELECT id, name, provider_id FROM models').all() as CatalogEntry[];
+  const catalog = (await db.select({ id: models.id, name: models.name, provider_id: models.provider_id }).from(models)).map((r: any) => ({ id: r.id, name: r.name, provider_id: r.provider_id })) as CatalogEntry[];
   const canonicalId = matchModelToCanonical(result.model, undefined, catalog) ?? matchModelToCanonical(undefined, undefined, catalog, result.model);
   if (!canonicalId) return;
 
@@ -60,32 +61,28 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
   // No schema changes needed for the existing model_runtime_stats table.
 
   const now = new Date().toISOString();
-  db.prepare(`
-    INSERT INTO model_runtime_stats (model_id, run_id, latency_p50_ms, latency_p95_ms, tps, ttft_ms, cache_hit_rate, cache_read_tokens, cache_write_tokens, cost_usd, success, measured_at)
-    VALUES (@model_id, @run_id, @latency_p50_ms, @latency_p95_ms, @tps, NULL, @cache_hit_rate, @cache_read_tokens, @cache_write_tokens, @cost_usd, @success, @measured_at)
-    ON CONFLICT(model_id, run_id) DO UPDATE SET
-      latency_p50_ms=@latency_p50_ms, latency_p95_ms=@latency_p95_ms, tps=@tps,
-      cache_hit_rate=@cache_hit_rate, cache_read_tokens=@cache_read_tokens, cache_write_tokens=@cache_write_tokens,
-      cost_usd=@cost_usd, success=@success, measured_at=@measured_at
-  `).run({
+  await db.insert(model_runtime_stats).values({
     model_id: canonicalId, run_id: runId,
     latency_p50_ms: p50, latency_p95_ms: p95, tps,
-    cache_hit_rate: cache.cacheHitRate,
-    cache_read_tokens: cache.cacheReadTokens,
-    cache_write_tokens: cache.cacheWriteTokens,
+    ttft_ms: null, cache_hit_rate: cache.cacheHitRate,
+    cache_read_tokens: cache.cacheReadTokens, cache_write_tokens: cache.cacheWriteTokens,
     cost_usd: result.costUsd ?? null,
     success: result.success ? 1 : 0,
     measured_at: now,
+  }).onConflictDoUpdate({
+    target: [model_runtime_stats.model_id, model_runtime_stats.run_id],
+    set: {
+      latency_p50_ms: p50, latency_p95_ms: p95, tps,
+      cache_hit_rate: cache.cacheHitRate, cache_read_tokens: cache.cacheReadTokens,
+      cache_write_tokens: cache.cacheWriteTokens, cost_usd: result.costUsd ?? null,
+      success: result.success ? 1 : 0, measured_at: now,
+    },
   });
 
   // Write per-tool success/fail stats
   if (result.toolSuccessRates) {
-    const insertTool = db.prepare(`
-      INSERT INTO tool_call_stats (run_id, model, tool_name, total, success_count, fail_count, recorded_at)
-      VALUES (@run_id, @model, @tool_name, @total, @success_count, @fail_count, @recorded_at)
-    `);
     for (const [toolName, rates] of Object.entries(result.toolSuccessRates)) {
-      insertTool.run({
+      await db.insert(tool_call_stats).values({
         run_id: runId,
         model: result.model,
         tool_name: toolName,

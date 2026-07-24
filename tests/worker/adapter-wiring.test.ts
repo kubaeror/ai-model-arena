@@ -33,7 +33,7 @@ test('resolveModelForRun finds model by friendly name in DB', async () => {
   globalThis.fetch = mockFetch({ 'models.dev/api.json': () => MODELS_DEV });
   try {
     await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
-    const resolved = resolveModelForRun('GPT-4o');
+    const resolved = await resolveModelForRun('GPT-4o');
     assert.ok(resolved);
     assert.equal(resolved!.providerId, 'openai');
     assert.equal(resolved!.apiModelId, 'gpt-4o');
@@ -53,7 +53,7 @@ test('resolveModelForRun returns null for unknown model', async () => {
   globalThis.fetch = mockFetch({ 'models.dev/api.json': () => MODELS_DEV });
   try {
     await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
-    assert.equal(resolveModelForRun('nonexistent-model'), null);
+    assert.equal(await resolveModelForRun('nonexistent-model'), null);
   } finally {
     globalThis.fetch = origFetch;
     closeDb();

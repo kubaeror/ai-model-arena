@@ -3,7 +3,6 @@ import path from 'node:path';
 import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { ProviderRegistry, loadBuiltins } from '../providers/index.js';
-import { getDb } from '../db/index.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import type { EvaluationConfig, JudgeResult, JudgeScore, Rubric } from './types.js';
 import { EvaluationConfigSchema } from './types.js';
@@ -77,7 +76,7 @@ export async function runJudgeScoring(
   const judgeConfig = config.judge;
   if (!judgeConfig?.enabled) return null;
 
-  const resolved = resolveModelForRun(judgeConfig.model);
+  const resolved = await resolveModelForRun(judgeConfig.model);
   if (!resolved) {
     logger?.warn('Judge model not found in catalog', { model: judgeConfig.model });
     return null;
@@ -85,7 +84,7 @@ export async function runJudgeScoring(
   const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
   const registry = new ProviderRegistry();
   loadBuiltins(registry);
-  registry.loadCustomFromDb(getDb());
+  await registry.loadCustomFromDb();
   const adapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger?.child('judge') });
   
   const prompt = buildJudgePrompt(config.rubric, task, files);

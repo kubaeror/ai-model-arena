@@ -67,13 +67,13 @@ function computeStats(arr: number[]): Stats {
 }
 
 /** Build a `RunHistory` over recent runs (excluding `excludeRunId`). */
-export function buildRunHistory(
+export async function buildRunHistory(
   model: string,
   scenario: string,
   slidingWindow: number,
   excludeRunId?: string,
-): RunHistory {
-  const idx = loadRunIndex();
+): Promise<RunHistory> {
+  const idx = await loadRunIndex();
   // Newest first, then take the window.
   const runs = idx.runs
     .filter((r) => r.runId !== excludeRunId)

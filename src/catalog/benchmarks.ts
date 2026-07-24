@@ -1,5 +1,5 @@
-import type { Database } from 'better-sqlite3';
-import { getDb } from '../db/index.js';
+import { getDrizzleDb } from '../db/index.js';
+import { benchmarks, catalog_cache_state, models } from '../db/schema.js';
 import { ModelbenchResponseSchema, type ModelbenchResponse, ZeroEvalModelSchema } from './types.js';
 import { matchModelToCanonical, type CatalogEntry } from './match.js';
 import type { SyncResult } from './sync.js';
@@ -17,28 +17,23 @@ export interface BenchmarkOpts {
 }
 
 export async function fetchBenchmarks(source: 'modelbench' | 'zeroeval', _opts: BenchmarkOpts = {}): Promise<SyncResult> {
-  const db = getDb();
+  const db = getDrizzleDb();
   try {
-    const catalog = db.prepare('SELECT id, name, provider_id FROM models').all() as CatalogEntry[];
+    const catalogRows: any[] = await db.select({ id: models.id, name: models.name, provider_id: models.provider_id }).from(models);
+    const catalog = catalogRows.map(r => ({ id: r.id, name: r.name, provider_id: r.provider_id })) as CatalogEntry[];
     let count: number;
     if (source === 'modelbench') count = await fetchModelbench(db, catalog);
     else count = await fetchZeroEval(db, catalog);
-    updateCacheState(db, source, 'ok', undefined, count);
+    await updateCacheState(db, source, 'ok', undefined, count);
     return { source, ok: true, count };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    updateCacheState(db, source, 'error', msg, 0);
+    await updateCacheState(db, source, 'error', msg, 0);
     return { source, ok: false, count: 0, error: msg };
   }
 }
 
-async function fetchModelbench(db: Database, catalog: CatalogEntry[]): Promise<number> {
-  const upsertBenchmark = db.prepare(`
-    INSERT INTO benchmarks (model_id, benchmark, source, score, measured_at, source_url, is_preferred)
-    VALUES (@model_id, @benchmark, @source, @score, @measured_at, @source_url, @is_preferred)
-    ON CONFLICT(model_id, benchmark, source) DO UPDATE SET
-      score=@score, measured_at=@measured_at, source_url=@source_url, is_preferred=@is_preferred
-  `);
+async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number> {
   const now = new Date().toISOString();
   let count = 0;
   let page = 1;
@@ -55,43 +50,37 @@ async function fetchModelbench(db: Database, catalog: CatalogEntry[]): Promise<n
     const raw = await res.json();
     const parsed = ModelbenchResponseSchema.parse(raw) as ModelbenchResponse;
     total = parsed.meta?.total ?? parsed.data.length;
-    const tx = db.transaction(() => {
-      for (const m of parsed.data) {
-        const canonicalId = matchModelToCanonical(undefined, undefined, catalog, m.name);
-        if (!canonicalId) continue;
-        const benchmarks: Array<[string, number]> = [];
-        if (m.intelligence_score !== undefined) benchmarks.push(['Intelligence Index', m.intelligence_score]);
-        if (m.coding_score !== undefined) benchmarks.push(['Coding Score', m.coding_score]);
-        if (m.agentic_score !== undefined) benchmarks.push(['Agentic Score', m.agentic_score]);
-        if (m.speed_tps !== undefined) benchmarks.push(['Speed TPS', m.speed_tps]);
-        if (m.benchmark_data) {
-          for (const [k, v] of Object.entries(m.benchmark_data)) {
-            if (typeof v === 'number' && !benchmarks.some(b => b[0] === k)) benchmarks.push([k, v]);
-          }
-        }
-        for (const [name, score] of benchmarks) {
-          upsertBenchmark.run({
-            model_id: canonicalId, benchmark: name, source: 'modelbench', score,
-            measured_at: now, source_url: m.source ?? null,
-            is_preferred: PREFERRED_MODELBENCH.has(name) ? 1 : 0,
-          });
-          count++;
+    for (const m of parsed.data) {
+      const canonicalId = matchModelToCanonical(undefined, undefined, catalog, m.name);
+      if (!canonicalId) continue;
+      const benchEntries: Array<[string, number]> = [];
+      if (m.intelligence_score !== undefined) benchEntries.push(['Intelligence Index', m.intelligence_score]);
+      if (m.coding_score !== undefined) benchEntries.push(['Coding Score', m.coding_score]);
+      if (m.agentic_score !== undefined) benchEntries.push(['Agentic Score', m.agentic_score]);
+      if (m.speed_tps !== undefined) benchEntries.push(['Speed TPS', m.speed_tps]);
+      if (m.benchmark_data) {
+        for (const [k, v] of Object.entries(m.benchmark_data)) {
+          if (typeof v === 'number' && !benchEntries.some(b => b[0] === k)) benchEntries.push([k, v]);
         }
       }
-    });
-    tx();
+      for (const [name, score] of benchEntries) {
+        await db.insert(benchmarks).values({
+          model_id: canonicalId, benchmark: name, source: 'modelbench', score,
+          measured_at: now, source_url: m.source ?? null,
+          is_preferred: PREFERRED_MODELBENCH.has(name) ? 1 : 0,
+        }).onConflictDoUpdate({
+          target: [benchmarks.model_id, benchmarks.benchmark, benchmarks.source],
+          set: { score, measured_at: now, source_url: m.source ?? null, is_preferred: PREFERRED_MODELBENCH.has(name) ? 1 : 0 },
+        });
+        count++;
+      }
+    }
     page++;
   }
   return count;
 }
 
-async function fetchZeroEval(db: Database, catalog: CatalogEntry[]): Promise<number> {
-  const upsertBenchmark = db.prepare(`
-    INSERT INTO benchmarks (model_id, benchmark, source, score, measured_at, source_url, is_preferred)
-    VALUES (@model_id, @benchmark, @source, @score, @measured_at, @source_url, @is_preferred)
-    ON CONFLICT(model_id, benchmark, source) DO UPDATE SET
-      score=@score, measured_at=@measured_at, source_url=@source_url, is_preferred=@is_preferred
-  `);
+async function fetchZeroEval(db: any, catalog: CatalogEntry[]): Promise<number> {
   const now = new Date().toISOString();
   let count = 0;
   const res = await fetch(ZEROEVAL_API);
@@ -101,37 +90,38 @@ async function fetchZeroEval(db: Database, catalog: CatalogEntry[]): Promise<num
   }
   const raw = await res.json();
   const parsed = ZeroEvalModelSchema.parse(raw) as Record<string, Record<string, unknown>>;
-  const tx = db.transaction(() => {
-    for (const [modelKey, fields] of Object.entries(parsed)) {
-      const modelName = typeof fields.model_name === 'string' ? fields.model_name : modelKey;
-      const canonicalId = matchModelToCanonical(undefined, undefined, catalog, modelName);
-      if (!canonicalId) continue;
-      for (const [k, v] of Object.entries(fields)) {
-        if (k === 'model_name' || k === 'model_id') continue;
-        if (typeof v !== 'number') continue;
-        const benchName = ZEROEVAL_BENCH_MAP[k.toLowerCase()] ?? k;
-        upsertBenchmark.run({
-          model_id: canonicalId, benchmark: benchName, source: 'zeroeval', score: v,
-          measured_at: now, source_url: null, is_preferred: 0,
-        });
-        count++;
-      }
+  for (const [modelKey, fields] of Object.entries(parsed)) {
+    const modelName = typeof fields.model_name === 'string' ? fields.model_name : modelKey;
+    const canonicalId = matchModelToCanonical(undefined, undefined, catalog, modelName);
+    if (!canonicalId) continue;
+    for (const [k, v] of Object.entries(fields)) {
+      if (k === 'model_name' || k === 'model_id') continue;
+      if (typeof v !== 'number') continue;
+      const benchName = ZEROEVAL_BENCH_MAP[k.toLowerCase()] ?? k;
+      await db.insert(benchmarks).values({
+        model_id: canonicalId, benchmark: benchName, source: 'zeroeval', score: v as number,
+        measured_at: now, source_url: null, is_preferred: 0,
+      }).onConflictDoUpdate({
+        target: [benchmarks.model_id, benchmarks.benchmark, benchmarks.source],
+        set: { score: v as number, measured_at: now, source_url: null, is_preferred: 0 },
+      });
+      count++;
     }
-  });
-  tx();
+  }
   return count;
 }
 
-function updateCacheState(db: Database, source: string, status: string, error: string | undefined, count: number): void {
+async function updateCacheState(db: any, source: string, status: string, error: string | undefined, count: number): Promise<void> {
   const now = new Date();
   const next = new Date(now.getTime() + REFRESH_INTERVAL_MS).toISOString();
-  db.prepare(`
-    INSERT INTO catalog_cache_state (source, last_fetch, last_status, last_error, count, next_refresh)
-    VALUES (@source, @last_fetch, @last_status, @last_error, @count, @next_refresh)
-    ON CONFLICT(source) DO UPDATE SET
-      last_fetch=@last_fetch, last_status=@last_status, last_error=@last_error, count=@count, next_refresh=@next_refresh
-  `).run({
+  await db.insert(catalog_cache_state).values({
     source, last_fetch: now.toISOString(), last_status: status,
     last_error: error ?? null, count, next_refresh: next,
+  }).onConflictDoUpdate({
+    target: catalog_cache_state.source,
+    set: {
+      last_fetch: now.toISOString(), last_status: status,
+      last_error: error ?? null, count, next_refresh: next,
+    },
   });
 }

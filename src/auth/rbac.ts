@@ -48,19 +48,16 @@ export async function audit(
   after?: unknown,
 ): Promise<void> {
   try {
-    const { getDb } = await import('../db/client.js');
-    const db = getDb();
-    db.prepare(
-      'INSERT INTO audit_log (actor, action, entity_type, entity_id, before, after, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).run(
+    const { insertAuditEntry } = await import('../db/query.js');
+    await insertAuditEntry({
       actor,
       action,
-      entity.type,
-      entity.id ?? null,
-      before ? JSON.stringify(before) : null,
-      after ? JSON.stringify(after) : null,
-      new Date().toISOString(),
-    );
+      entityType: entity.type,
+      entityId: entity.id ?? null,
+      before: before ? JSON.stringify(before) : null,
+      after: after ? JSON.stringify(after) : null,
+      at: new Date().toISOString(),
+    });
   } catch {
     auditFailureCount++;
     // Increment Prometheus counter if available (non-fatal if prom-client is not loaded)

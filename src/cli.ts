@@ -70,12 +70,12 @@ program
     const { resolveModelForRun } = await import('./db/model-resolver.js');
     const invalid: string[] = [];
     for (const name of models) {
-      if (!resolveModelForRun(name)) invalid.push(name);
+      if (!(await resolveModelForRun(name))) invalid.push(name);
     }
     if (invalid.length > 0) {
-      const { getDb } = await import('./db/index.js');
-      const allModels = getDb().prepare('SELECT name FROM models ORDER BY name').all() as { name: string }[];
-      const available = allModels.map(r => r.name);
+      const { listModelsWithPricing } = await import('./db/query.js');
+      const rows = await listModelsWithPricing();
+      const available = (rows as Array<{ name: string }>).map(r => r.name);
       console.error(`\nError: Unknown model(s): ${invalid.join(', ')}`);
       if (available.length > 0) {
         console.error(`Available models (${available.length} total):`);
@@ -188,7 +188,7 @@ program
       baselineDir,
       config.thresholds,
       async (mdl, scenario) => {
-        const runs = listRuns().filter(
+        const runs = (await listRuns()).filter(
           (r) => r.scenario === scenario && r.models.includes(mdl) && r.status === 'completed',
         );
         if (runs.length === 0) return null;
@@ -315,8 +315,8 @@ program
   .option('--scenario <name>', 'Filter by scenario')
   .option('--from <date>', 'From date (ISO format)')
   .option('--to <date>', 'To date (ISO format)')
-  .action((opts) => {
-    const runs = listRuns();
+  .action(async (opts) => {
+    const runs = await listRuns();
     
     let filtered = runs;
     if (opts.model) filtered = filtered.filter(r => r.models.includes(opts.model));
@@ -371,7 +371,7 @@ program
   .argument('<runId>', 'Run ID')
   .option('-m, --model <name>', 'Model name (required if run has multiple models)')
   .action(async (runId: string, opts: { model?: string }) => {
-    const run = getRunRecord(runId);
+    const run = await getRunRecord(runId);
     if (!run) {
       console.error(`Run not found: ${runId}`);
       process.exit(1);

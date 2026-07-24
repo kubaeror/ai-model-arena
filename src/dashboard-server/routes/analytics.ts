@@ -2,7 +2,9 @@ import { Router } from 'express';
 import { promises as fsp } from 'node:fs';
 import { listRuns } from '../../orchestrator/orchestrator.js';
 import { extractToolCallsFromConversation } from '../../logger/conversation-parser.js';
-import { getDb } from '../../db/client.js';
+import { getDrizzleDb } from '../../db/index.js';
+import { tool_call_stats, run_models } from '../../db/schema.js';
+import { eq, inArray, sql } from 'drizzle-orm';
 
 // ── In-memory cache (30s TTL) ──────────────────────────────────────────────
 
@@ -100,12 +102,7 @@ function detectLoopsInConversation(conv: Record<string, unknown>): LoopIncident[
     const t2 = turnTools.get(turns[i + 1]!) ?? [];
     const t3 = turnTools.get(turns[i + 2]!) ?? [];
     if (t1.length > 0 && JSON.stringify(t1) === JSON.stringify(t2) && JSON.stringify(t2) === JSON.stringify(t3)) {
-      incidents.push({
-        runId: (conv.runId as string) ?? '',
-        model: (conv.meta as Record<string, unknown>)?.model as string ?? '',
-        turn: turns[i]!,
-        tools: t1,
-      });
+      incidents.push({ runId: (conv.runId as string) ?? '', model: (conv.meta as Record<string, unknown>)?.model as string ?? '', turn: turns[i]!, tools: t1 });
     }
   }
   return incidents;
@@ -125,8 +122,8 @@ export function createAnalyticsRouter(): Router {
     const cached = getCached(toolsCache, cacheKey);
     if (cached) { res.json(cached); return; }
 
-    const db = getDb();
-    const runs = listRuns();
+    const db = getDrizzleDb();
+    const runs = await listRuns();
 
     // Build date + scenario filter
     let filteredRuns = runs;
@@ -138,21 +135,30 @@ export function createAnalyticsRouter(): Router {
     const runIds = filteredRuns.map(r => r.runId);
     let dbRows: ToolStatRow[] = [];
     if (runIds.length > 0) {
-      const placeholders = runIds.map(() => '?').join(',');
-      let sql = `SELECT model, tool_name, SUM(total) as total, SUM(success_count) as success_count, SUM(fail_count) as fail_count FROM tool_call_stats WHERE run_id IN (${placeholders})`;
-      const params: string[] = [...runIds];
-      if (filterModel) { sql += ' AND model = ?'; params.push(filterModel); }
-      sql += ' GROUP BY model, tool_name ORDER BY model, total DESC';
-      dbRows = db.prepare(sql).all(...params) as ToolStatRow[];
+      let query = db.select({
+        model: tool_call_stats.model,
+        tool_name: tool_call_stats.tool_name,
+        total: sql<number>`SUM(${tool_call_stats.total})`,
+        success_count: sql<number>`SUM(${tool_call_stats.success_count})`,
+        fail_count: sql<number>`SUM(${tool_call_stats.fail_count})`,
+      }).from(tool_call_stats)
+        .where(inArray(tool_call_stats.run_id, runIds as any))
+        .groupBy(tool_call_stats.model, tool_call_stats.tool_name);
+
+      if (filterModel) {
+        query = query.where(eq(tool_call_stats.model, filterModel)) as any;
+      }
+      const result = await query.orderBy(sql`model`, sql`total DESC`);
+      dbRows = result as unknown as ToolStatRow[];
     }
 
     // Track which (run_id, model) pairs we have DB data for
-    // Re-query to get the set of covered run_ids
     const coveredRunIds = new Set<string>();
     if (runIds.length > 0) {
-      const coveredSql = `SELECT DISTINCT run_id FROM tool_call_stats WHERE run_id IN (${runIds.map(() => '?').join(',')})`;
-      const coveredRows = db.prepare(coveredSql).all(...runIds) as { run_id: string }[];
-      for (const r of coveredRows) coveredRunIds.add(r.run_id);
+      const coveredRows = await db.select({ run_id: tool_call_stats.run_id }).from(tool_call_stats)
+        .where(inArray(tool_call_stats.run_id, runIds as any))
+        .all();
+      for (const r of coveredRows as any[]) coveredRunIds.add(r.run_id);
     }
 
     // ── File fallback: scan runs not in DB ────────────────────────────────
@@ -170,7 +176,6 @@ export function createAnalyticsRouter(): Router {
         if (filterModel && perModel.model !== filterModel) continue;
 
         if (coveredRunIds.has(run.runId)) {
-          // DB covers this run — success/fail counts come from the DB aggregate
           const result = await readResultFile(perModel.resultPath);
           if (result?.success === true) successfulRuns++;
           continue;
@@ -210,13 +215,13 @@ export function createAnalyticsRouter(): Router {
       perModelMap.set(mk, existing);
     }
 
-    // For DB-covered runs where we didn't have per-model data in the aggregation,
-    // re-query for run-level success
+    // For DB-covered runs, query run-level success
     if (coveredRunIds.size > 0) {
       const coveredList = [...coveredRunIds];
-      const placeholders = coveredList.map(() => '?').join(',');
-      const successSql = `SELECT run_id, model, success FROM run_models WHERE run_id IN (${placeholders})`;
-      const successRows = db.prepare(successSql).all(...coveredList) as { run_id: string; model: string; success: number | null }[];
+      const successRows = await db.select({ run_id: run_models.run_id, model: run_models.model, success: run_models.success })
+        .from(run_models)
+        .where(inArray(run_models.run_id, coveredList as any))
+        .all() as any[];
       for (const row of successRows) {
         if (row.success === 1) successfulRuns++;
       }
@@ -227,7 +232,7 @@ export function createAnalyticsRouter(): Router {
       entry.success_rate = entry.total > 0 ? entry.success_count / entry.total : 0;
     }
 
-    // ── Aggregate tool-level stats (merged across models) ─────────────────
+    // ── Aggregate tool-level stats ─────────────────────────────────────────
     const toolAggMap = new Map<string, { total: number; failed: number; success: number; runCount: number; successRunCount: number }>();
     for (const entry of perModelMap.values()) {
       const stats = toolAggMap.get(entry.tool_name) ?? { total: 0, failed: 0, success: 0, runCount: 0, successRunCount: 0 };
@@ -252,8 +257,7 @@ export function createAnalyticsRouter(): Router {
     }
     toolStats.sort((a, b) => b.totalCalls - a.totalCalls);
 
-    const perModel = [...perModelMap.values()]
-      .sort((a, b) => b.total - a.total);
+    const perModel = [...perModelMap.values()].sort((a, b) => b.total - a.total);
 
     const failedRate = totalRuns > 0 ? (totalRuns - successfulRuns) / totalRuns : 0;
     const avgCallsPerSuccess = successfulRuns > 0 ? totalToolCalls / successfulRuns : 0;
@@ -282,23 +286,32 @@ export function createAnalyticsRouter(): Router {
     const cached = getCached(trendCache, cacheKey);
     if (cached) { res.json(cached); return; }
 
-    const db = getDb();
+    const db = getDrizzleDb();
     const dayCount = Math.min(parseInt(days ?? '30', 10) || 30, 90);
     const since = new Date(Date.now() - dayCount * 24 * 60 * 60 * 1000).toISOString();
 
-    let sql = `SELECT DATE(recorded_at) as date, model, tool_name, SUM(total) as total_calls, SUM(success_count) as success_count, SUM(fail_count) as fail_count, COUNT(DISTINCT run_id) as run_count FROM tool_call_stats WHERE recorded_at >= ?`;
-    const params: string[] = [since];
+    let query = db.select({
+      date: sql<string>`DATE(${tool_call_stats.recorded_at})`,
+      model: tool_call_stats.model,
+      tool_name: tool_call_stats.tool_name,
+      total_calls: sql<number>`SUM(${tool_call_stats.total})`,
+      success_count: sql<number>`SUM(${tool_call_stats.success_count})`,
+      fail_count: sql<number>`SUM(${tool_call_stats.fail_count})`,
+      run_count: sql<number>`COUNT(DISTINCT ${tool_call_stats.run_id})`,
+    }).from(tool_call_stats)
+      .where(sql`${tool_call_stats.recorded_at} >= ${since}`);
 
-    if (filterModel) { sql += ' AND model = ?'; params.push(filterModel); }
-    if (filterTool) { sql += ' AND tool_name = ?'; params.push(filterTool); }
-    sql += ' GROUP BY date, model, tool_name ORDER BY date ASC';
+    if (filterModel) query = query.where(eq(tool_call_stats.model, filterModel)) as any;
+    if (filterTool) query = query.where(eq(tool_call_stats.tool_name, filterTool)) as any;
 
-    const rows = db.prepare(sql).all(...params) as (ToolStatRow & { date: string; run_count: number })[];
+    const rows = await query.groupBy(sql`date`, tool_call_stats.model, tool_call_stats.tool_name)
+      .orderBy(sql`date ASC`)
+      .all() as any[];
 
-    const trends: ToolTrendPoint[] = rows.map(r => ({
+    const trends: ToolTrendPoint[] = rows.map((r: any) => ({
       date: r.date,
-      totalCalls: r.total,
-      successRate: r.total > 0 ? r.success_count / r.total : 0,
+      totalCalls: r.total_calls,
+      successRate: r.total_calls > 0 ? r.success_count / r.total_calls : 0,
       toolName: r.tool_name,
       model: r.model,
       runCount: r.run_count,
@@ -311,7 +324,7 @@ export function createAnalyticsRouter(): Router {
   // ── GET /cost — Cost leaderboard ───────────────────────────────────────
 
   router.get('/cost', async (req, res) => {
-    const runs = listRuns();
+    const runs = await listRuns();
     const filterModel = req.query.model as string | undefined;
 
     const modelStats = new Map<string, { runs: number; successes: number; totalCost: number; totalTokens: number }>();

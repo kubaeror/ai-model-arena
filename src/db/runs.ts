@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { findProjectRoot } from '../paths.js';
-import { getDb } from './index.js';
+import { getDrizzleDb } from './index.js';
+import { runs, run_models } from './schema.js';
+import { eq, desc } from 'drizzle-orm';
 
 export interface RunIndexModelEntry {
   model: string;
@@ -58,7 +60,7 @@ function pmToDb(entry: RunIndexModelEntry): Record<string, unknown> {
   };
 }
 
-function dbToPm(row: Record<string, unknown>): RunIndexModelEntry {
+function dbToPm(row: any): RunIndexModelEntry {
   return {
     runId: String(row.run_id ?? ''),
     model: String(row.model ?? ''),
@@ -82,53 +84,48 @@ export function indexPath(): string {
   return path.join(findProjectRoot(), 'outputs', 'runs-index.json');
 }
 
-export function loadRunIndex(): RunIndexFile {
-  return { runs: listRuns() };
+export async function loadRunIndex(): Promise<RunIndexFile> {
+  return { runs: await listRuns() };
 }
 
-export function saveRunIndex(_idx: RunIndexFile): void {
-  // No-op: writes go through upsertRun to the SQLite table.
-}
+export function saveRunIndex(_idx: RunIndexFile): void {}
 
-export function listRuns(): RunIndexRecord[] {
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM runs ORDER BY started_at DESC').all() as Record<string, unknown>[];
-  const allPm = db.prepare('SELECT * FROM run_models ORDER BY run_id').all() as Record<string, unknown>[];
-  const pmByRun = new Map<string, Record<string, unknown>[]>();
+export async function listRuns(): Promise<RunIndexRecord[]> {
+  const db = getDrizzleDb();
+  const rows: any[] = await db.select().from(runs).orderBy(desc(runs.started_at));
+  const allPm: any[] = await db.select().from(run_models).orderBy(run_models.run_id);
+  const pmByRun = new Map<string, any[]>();
   for (const pm of allPm) {
     const rid = String(pm.run_id);
-    let list = pmByRun.get(rid);
-    if (!list) { list = []; pmByRun.set(rid, list); }
-    list.push(pm);
+    let lst = pmByRun.get(rid);
+    if (!lst) { lst = []; pmByRun.set(rid, lst); }
+    lst.push(pm);
   }
-  return rows.map((r) => {
-    const models = JSON.parse(String(r.models)) as string[];
-    return {
-      runId: String(r.run_id),
-      scenario: String(r.scenario),
-      models,
-      startedAt: String(r.started_at),
-      finishedAt: r.finished_at ? String(r.finished_at) : null,
-      status: String(r.status) as RunIndexRecord['status'],
-      source: String(r.source) as RunIndexRecord['source'],
-      perModel: (pmByRun.get(String(r.run_id)) ?? []).map(dbToPm),
-      comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
-      comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
-      createdBy: r.created_by ? String(r.created_by) : undefined,
-    };
-  });
+  return rows.map((r: any) => ({
+    runId: String(r.run_id),
+    scenario: String(r.scenario),
+    models: JSON.parse(String(r.models)) as string[],
+    startedAt: String(r.started_at),
+    finishedAt: r.finished_at ? String(r.finished_at) : null,
+    status: String(r.status) as RunIndexRecord['status'],
+    source: String(r.source) as RunIndexRecord['source'],
+    perModel: (pmByRun.get(String(r.run_id)) ?? []).map(dbToPm),
+    comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
+    comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
+    createdBy: r.created_by ? String(r.created_by) : undefined,
+  }));
 }
 
-export function getRunRecord(runId: string): RunIndexRecord | undefined {
-  const db = getDb();
-  const r = db.prepare('SELECT * FROM runs WHERE run_id = ?').get(runId) as Record<string, unknown> | undefined;
-  if (!r) return undefined;
-  const perModel = db.prepare('SELECT * FROM run_models WHERE run_id = ?').all(runId) as Record<string, unknown>[];
-  const models = JSON.parse(String(r.models)) as string[];
+export async function getRunRecord(runId: string): Promise<RunIndexRecord | undefined> {
+  const db = getDrizzleDb();
+  const rows: any[] = await db.select().from(runs).where(eq(runs.run_id, runId)).limit(1);
+  if (rows.length === 0) return undefined;
+  const r = rows[0];
+  const perModel: any[] = await db.select().from(run_models).where(eq(run_models.run_id, runId));
   return {
     runId: String(r.run_id),
     scenario: String(r.scenario),
-    models,
+    models: JSON.parse(String(r.models)) as string[],
     startedAt: String(r.started_at),
     finishedAt: r.finished_at ? String(r.finished_at) : null,
     status: String(r.status) as RunIndexRecord['status'],
@@ -140,34 +137,64 @@ export function getRunRecord(runId: string): RunIndexRecord | undefined {
   };
 }
 
-export function upsertRun(record: RunIndexRecord): Promise<void> {
-  const db = getDb();
-  const tx = db.transaction(() => {
-    db.prepare(`INSERT OR REPLACE INTO runs (run_id, scenario, models, started_at, finished_at, status, source, comparison_md_path, comparison_json_path, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      record.runId, record.scenario, JSON.stringify(record.models), record.startedAt,
-      record.finishedAt, record.status, record.source, record.comparisonMdPath, record.comparisonJsonPath,
-      record.createdBy ?? null,
-    );
-    if (record.perModel && record.perModel.length > 0) {
-      const insertPm = db.prepare(`INSERT OR REPLACE INTO run_models
-        (run_id, model, proc_name, output_dir, sandbox_dir, result_path, conversation_path, report_path, log_file, status, success, turns_used, total_tool_calls, stop_reason, duration_ms)
-        VALUES (@run_id, @model, @proc_name, @output_dir, @sandbox_dir, @result_path, @conversation_path, @report_path, @log_file, @status, @success, @turns_used, @total_tool_calls, @stop_reason, @duration_ms)`);
-      for (const pm of record.perModel) {
-        insertPm.run(pmToDb(pm));
-      }
-    }
+export async function upsertRun(record: RunIndexRecord): Promise<void> {
+  const db = getDrizzleDb();
+  await db.insert(runs).values({
+    run_id: record.runId,
+    scenario: record.scenario,
+    models: JSON.stringify(record.models),
+    started_at: record.startedAt,
+    finished_at: record.finishedAt,
+    status: record.status,
+    source: record.source,
+    comparison_md_path: record.comparisonMdPath,
+    comparison_json_path: record.comparisonJsonPath,
+    created_by: record.createdBy ?? null,
+  }).onConflictDoUpdate({
+    target: runs.run_id,
+    set: {
+      scenario: record.scenario,
+      models: JSON.stringify(record.models),
+      started_at: record.startedAt,
+      finished_at: record.finishedAt,
+      status: record.status,
+      source: record.source,
+      comparison_md_path: record.comparisonMdPath,
+      comparison_json_path: record.comparisonJsonPath,
+      created_by: record.createdBy ?? null,
+    },
   });
-  tx();
-  return Promise.resolve();
+  if (record.perModel && record.perModel.length > 0) {
+    for (const pm of record.perModel) {
+      await db.insert(run_models).values(pmToDb(pm) as any).onConflictDoUpdate({
+        target: [run_models.run_id, run_models.model],
+        set: {
+          proc_name: pm.procName,
+          output_dir: pm.outputDir,
+          sandbox_dir: pm.sandboxDir,
+          result_path: pm.resultPath,
+          conversation_path: pm.conversationPath,
+          report_path: pm.reportPath,
+          log_file: pm.logFile,
+          status: pm.status,
+          success: pm.success != null ? (pm.success ? 1 : 0) : null,
+          turns_used: pm.turnsUsed ?? null,
+          total_tool_calls: pm.totalToolCalls ?? null,
+          stop_reason: pm.stopReason ?? null,
+          duration_ms: pm.durationMs ?? null,
+        } as any,
+      });
+    }
+  }
 }
 
-export function updateRun(
+export async function updateRun(
   runId: string,
   mutator: (rec: RunIndexRecord) => void,
 ): Promise<RunIndexRecord | undefined> {
-  const rec = getRunRecord(runId);
-  if (!rec) return Promise.resolve(undefined);
+  const rec = await getRunRecord(runId);
+  if (!rec) return undefined;
   mutator(rec);
-  return upsertRun(rec).then(() => rec);
+  await upsertRun(rec);
+  return rec;
 }

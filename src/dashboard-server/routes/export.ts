@@ -31,7 +31,7 @@ export function createExportRouter(): Router {
   
   router.get('/csv', async (req, res) => {
     const { model: filterModel, scenario: filterScenario, from, to } = req.query as ExportFilters;
-    const runs = listRuns();
+    const runs = await listRuns();
     
     let filteredRuns = runs;
     
@@ -91,7 +91,7 @@ export function createExportRouter(): Router {
   
   router.get('/runs/:runId/csv', async (req, res) => {
     const { runId } = req.params;
-    const run = getRunRecord(runId);
+    const run = await getRunRecord(runId);
     if (!run) {
       res.status(404).json({ error: 'Run not found' });
       return;

@@ -1,65 +1,81 @@
 import { Router } from 'express';
-import { getDb } from '../../db/client.js';
+import {
+  listCatalogModels, getModelDetail,
+} from '../../db/query.js';
 
 export function createCatalogRouter(): Router {
   const router = Router();
 
   // GET /api/models?provider=&reasoning=&tool_call=&min_context=&sort=
-  router.get('/models', (req, res) => {
-    const db = getDb();
-    const where: string[] = [];
-    const params: Record<string, unknown> = {};
-    if (typeof req.query.provider === 'string') { where.push('m.provider_id = @provider'); params.provider = req.query.provider; }
-    if (req.query.reasoning === '1') where.push('m.reasoning = 1');
-    if (req.query.tool_call === '1') where.push('m.tool_call = 1');
-    if (req.query.min_context) { where.push('m.context_limit >= @min_context'); params.min_context = Number(req.query.min_context); }
-    const sort = req.query.sort === 'context' ? 'm.context_limit DESC' : req.query.sort === 'name' ? 'm.name ASC' : 'm.name ASC';
-    const sql = `
-      SELECT m.id, m.name, m.family, m.provider_id, m.release_date, m.attachment, m.reasoning, m.temperature,
-        m.tool_call, m.context_limit, m.output_limit, m.status, m.reasoning_options,
-        p.input, p.output, p.cache_read, p.cache_write
-      FROM models m LEFT JOIN pricing p ON p.model_id = m.id AND p.tier_size IS NULL
-      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-      ORDER BY ${sort}
-    `;
-    const rows = db.prepare(sql).all(params);
+  router.get('/models', async (req, res) => {
+    const rows = await listCatalogModels({
+      provider: typeof req.query.provider === 'string' ? req.query.provider : undefined,
+      reasoning: req.query.reasoning === '1',
+      toolCall: req.query.tool_call === '1',
+      minContext: req.query.min_context ? Number(req.query.min_context) : undefined,
+      sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
+    });
     res.json({ data: rows });
   });
 
-  router.get('/models/:id', (req, res) => {
-    const db = getDb();
-    const model = db.prepare(`
-      SELECT m.*, p.input, p.output, p.cache_read, p.cache_write, p.tier_size
-      FROM models m LEFT JOIN pricing p ON p.model_id = m.id
-      WHERE m.id = ?
-    `).get(req.params.id);
+  router.get('/models/:id', async (req, res) => {
+    const model = (await getModelDetail(req.params.id))[0] ?? null;
     if (!model) { res.status(404).json({ error: 'Model not found' }); return; }
-    const benchmarks = db.prepare('SELECT benchmark, source, score, measured_at, source_url, is_preferred FROM benchmarks WHERE model_id = ? ORDER BY benchmark').all(req.params.id);
-    const runtime = db.prepare('SELECT run_id, latency_p50_ms, latency_p95_ms, tps, ttft_ms, cache_hit_rate, cost_usd, success, measured_at FROM model_runtime_stats WHERE model_id = ? ORDER BY measured_at DESC LIMIT 50').all(req.params.id);
+    const { paginatedQuery } = await import('../../db/query.js');
+    const { rows: benchmarks } = await paginatedQuery({
+      table: 'benchmarks', select: 'benchmark, source, score, measured_at, source_url, is_preferred',
+      whereClause: 'model_id = ?', params: [req.params.id],
+      orderBy: 'benchmark', limit: 200, offset: 0,
+    });
+    const { rows: runtime } = await paginatedQuery({
+      table: 'model_runtime_stats',
+      select: 'run_id, latency_p50_ms, latency_p95_ms, tps, ttft_ms, cache_hit_rate, cost_usd, success, measured_at',
+      whereClause: 'model_id = ?', params: [req.params.id],
+      orderBy: 'measured_at DESC', limit: 50, offset: 0,
+    });
     res.json({ model, benchmarks, runtime });
   });
 
-  router.get('/benchmarks', (req, res) => {
-    const db = getDb();
+  router.get('/benchmarks', async (req, res) => {
     const where: string[] = [];
-    const params: Record<string, unknown> = {};
-    if (typeof req.query.name === 'string') { where.push('benchmark = @name'); params.name = req.query.name; }
-    if (typeof req.query.source === 'string') { where.push('source = @source'); params.source = req.query.source; }
-    if (typeof req.query.model === 'string') { where.push('model_id = @model'); params.model = req.query.model; }
-    const sql = `SELECT * FROM benchmarks ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY benchmark, score DESC`;
-    res.json({ data: db.prepare(sql).all(params) });
+    const params: string[] = [];
+    if (typeof req.query.name === 'string') { where.push('benchmark = ?'); params.push(req.query.name); }
+    if (typeof req.query.source === 'string') { where.push('source = ?'); params.push(req.query.source); }
+    if (typeof req.query.model === 'string') { where.push('model_id = ?'); params.push(req.query.model); }
+    const { paginatedQuery } = await import('../../db/query.js');
+    const { rows } = await paginatedQuery({
+      table: 'benchmarks',
+      whereClause: where.length ? where.join(' AND ') : '1=1',
+      params,
+      orderBy: 'benchmark, score DESC',
+      limit: 1000,
+      offset: 0,
+    });
+    res.json({ data: rows });
   });
 
-  router.get('/benchmarks/:modelId', (req, res) => {
-    const db = getDb();
-    res.json({ data: db.prepare('SELECT * FROM benchmarks WHERE model_id = ? ORDER BY benchmark').all(req.params.modelId) });
+  router.get('/benchmarks/:modelId', async (req, res) => {
+    const { paginatedQuery } = await import('../../db/query.js');
+    const { rows } = await paginatedQuery({
+      table: 'benchmarks',
+      whereClause: 'model_id = ?', params: [req.params.modelId],
+      orderBy: 'benchmark', limit: 200, offset: 0,
+    });
+    res.json({ data: rows });
   });
 
-  router.get('/pricing', (req, res) => {
-    const db = getDb();
-    const where = typeof req.query.model === 'string' ? 'WHERE model_id = ?' : '';
+  router.get('/pricing', async (req, res) => {
     const params = typeof req.query.model === 'string' ? [req.query.model] : [];
-    res.json({ data: db.prepare(`SELECT * FROM pricing ${where} ORDER BY model_id`).all(...params) });
+    const { paginatedQuery } = await import('../../db/query.js');
+    const { rows } = await paginatedQuery({
+      table: 'pricing',
+      whereClause: typeof req.query.model === 'string' ? 'model_id = ?' : '1=1',
+      params,
+      orderBy: 'model_id',
+      limit: 5000,
+      offset: 0,
+    });
+    res.json({ data: rows });
   });
 
   return router;

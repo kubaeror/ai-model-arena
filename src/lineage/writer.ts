@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDb } from '../db/index.js';
+import { insertFile } from '../db/query.js';
 
 export interface LineageRecord {
   id: string;
@@ -46,14 +46,13 @@ export async function writeWithLineage(
   await fs.promises.writeFile(`${targetAbs}.lineage.json`, JSON.stringify(lineage, null, 2));
 
   try {
-    const db = getDb();
-    db.prepare(
-      'INSERT INTO files (id, run_id, path, prompt_id, prompt_version, model, config_hash, task_id, trace_id, produced_at, produced_by_tool) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(
-      lineage.id, lineage.runId, lineage.path, lineage.promptId ?? null, lineage.promptVersion ?? null,
-      lineage.model, lineage.configHash ?? null, lineage.taskId ?? null, lineage.traceId ?? null,
-      lineage.producedAt, lineage.producedByTool ?? null,
-    );
+    await insertFile({
+      id: lineage.id, runId: lineage.runId, path: lineage.path,
+      promptId: lineage.promptId ?? null, promptVersion: lineage.promptVersion ?? null,
+      model: lineage.model, configHash: lineage.configHash ?? null,
+      taskId: lineage.taskId ?? null, traceId: lineage.traceId ?? null,
+      producedAt: lineage.producedAt, producedByTool: lineage.producedByTool ?? null,
+    });
   } catch {
     // DB may not be available in all paths; lineage sidecar is the durable record.
   }

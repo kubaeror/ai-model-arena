@@ -12,7 +12,7 @@ import { loadBudgetConfig, checkBudget, addSpend } from '../cost-tracking/index.
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
-import { initDb, getDb } from '../db/index.js';
+import { initDb } from '../db/index.js';
 import { outputRoot, dbPath } from '../paths.js';
 import { createQueue } from '../queue/index.js';
 import type { Task } from '../queue/types.js';
@@ -107,22 +107,20 @@ export async function ensureBuilt(root: string, logger: Logger): Promise<void> {
 }
 
 /** Get the latest pricing snapshot version for audit trail use. */
-function getLatestPricingVersion(): string | null {
+async function getLatestPricingVersion(): Promise<string | null> {
   try {
-    const row = getDb().prepare(
-      'SELECT version FROM pricing_snapshots ORDER BY id DESC LIMIT 1'
-    ).get() as { version?: string } | undefined;
-    return row?.version ?? null;
+    const { getLatestPricingVersion: q } = await import('../db/query.js');
+    return q();
   } catch { return null; }
 }
 
 /** Validate models + compute all run paths (no PM2, no spawning). */
-export function createRunSpec(opts: RunStartOptions): RunSpec {
+export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   const root = pm2h.projectRoot();
   const scenariosDir = opts.scenariosDir ?? path.join(root, 'configs', 'scenarios');
   initDb(dbPath());
   for (const name of opts.models) {
-    const resolved = resolveModelForRun(name);
+    const resolved = await resolveModelForRun(name);
     if (!resolved) {
       throw new Error(`Model not found in catalog: ${name}. Run catalog sync first.`);
     }
@@ -130,8 +128,8 @@ export function createRunSpec(opts: RunStartOptions): RunSpec {
 
   const ts = pm2h.timestamp();
   const runId = `${opts.scenario}_${ts}`;
-  const perModel: PerModelSpec[] = opts.models.map((model) => {
-    const resolved = resolveModelForRun(model);
+  const perModel: PerModelSpec[] = await Promise.all(opts.models.map(async (model) => {
+    const resolved = await resolveModelForRun(model);
     const procName = pm2h.sanitizeName(`${pm2h.ARENA_PREFIX}${model}-${opts.scenario}-${ts}`);
     const outputDir = path.join(outputRoot(), model, runId);
     const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
@@ -147,7 +145,7 @@ export function createRunSpec(opts: RunStartOptions): RunSpec {
       reportPath: path.join(outputDir, 'report.md'),
       logFile: path.join(pm2LogDir, `${runId}.log`),
     };
-  });
+  }));
   return {
     runId,
     scenario: opts.scenario,
@@ -247,14 +245,14 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     }
   }
   
-  const spec = createRunSpec(opts);
+  const spec = await createRunSpec(opts);
   const runId = spec.runId;
 
   // Enqueue tasks for each model instead of spawning PM2 workers
   const queue = createQueue();
   const idemKey = makeIdempotencyKey(spec.scenario, spec.models.map(m => m.model));
   for (const m of spec.models) {
-    const resolved = resolveModelForRun(m.model);
+    const resolved = await resolveModelForRun(m.model);
     const task: Task = {
       taskId: `${runId}-${m.model}`,
       sessionId: `${runId}-${m.model}`,
@@ -280,7 +278,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
 
 /** Query live status for each model in a run from the runs table. */
 export async function checkRunStatus(spec: RunSpec): Promise<PerModelStatus[]> {
-  const rec = getRunRecord(spec.runId);
+  const rec = await getRunRecord(spec.runId);
   return spec.models.map((m) => {
     const pm = rec?.perModel.find((x) => x.model === m.model);
     return {
@@ -301,7 +299,7 @@ export function isRunComplete(spec: RunSpec): Promise<boolean> {
 
 /** True iff every model in a run is stopped (from the runs table). */
 export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
-  const rec = getRunRecord(runId);
+  const rec = await getRunRecord(runId);
   if (!rec || rec.perModel.length === 0) return true;
   return rec.perModel.every((m) => m.status !== 'running');
 }
@@ -378,20 +376,18 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
       void addSpend(entry.model, entry.result.costUsd, spec.root!, logger);
       // Write to immutable cost ledger
       try {
-        const db = getDb();
+        const { insertCostLedgerEntry } = await import('../db/query.js');
         const tokens = entry.result.tokenUsage ?? {};
-        const pricingVersion = getLatestPricingVersion();
-        db.prepare(`INSERT INTO cost_ledger (run_id, model, cost_usd, currency,
-          input_tokens, output_tokens, cache_read_tokens, total_tokens, pricing_version, recorded_at)
-          VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)`).run(
-          spec.runId, entry.model, entry.result.costUsd,
-          tokens.prompt ?? null,
-          tokens.completion ?? null,
-          tokens.cacheReadTokens ?? null,
-          tokens.total ?? null,
+        const pricingVersion = await getLatestPricingVersion();
+        await insertCostLedgerEntry({
+          runId: spec.runId, model: entry.model, costUsd: entry.result.costUsd,
+          inputTokens: tokens.prompt ?? null,
+          outputTokens: tokens.completion ?? null,
+          cacheReadTokens: tokens.cacheReadTokens ?? null,
+          totalTokens: tokens.total ?? null,
           pricingVersion,
-          new Date().toISOString(),
-        );
+          recordedAt: new Date().toISOString(),
+        });
       } catch (e) {
         logger.warn('cost ledger write failed (non-fatal)', { runId: spec.runId, model: entry.model, err: String(e) });
       }
@@ -407,14 +403,14 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
 
 /** Finalize by runId (resolves paths from the index). Used by the dashboard watcher. */
 export async function finalizeRunByRunId(runId: string, logger: Logger): Promise<void> {
-  const rec = getRunRecord(runId);
+  const rec = await getRunRecord(runId);
   if (!rec) return;
   const root = pm2h.projectRoot();
   const { mdPath, jsonPath } = aggregate(root, {
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
-  const perModel: RunIndexModelEntry[] = rec.perModel.map((m) => {
+  const perModel: RunIndexModelEntry[] = await Promise.all(rec.perModel.map(async (m) => {
     let r: { success?: boolean; turnsUsed?: number; totalToolCalls?: number; stopReason?: string; durationMs?: number; costUsd?: number } | undefined;
     try {
       r = JSON.parse(fs.readFileSync(m.resultPath, 'utf8'));
@@ -426,18 +422,17 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
       void addSpend(m.model, r.costUsd, root, logger);
       // Write to immutable cost ledger
       try {
-        const db = getDb();
+        const { insertCostLedgerEntry } = await import('../db/query.js');
         const tokens = (r as Record<string, unknown>).tokenUsage as Record<string, number> | undefined ?? {};
-        db.prepare(`INSERT INTO cost_ledger (run_id, model, cost_usd, currency, input_tokens, output_tokens, cache_read_tokens, total_tokens, pricing_version, recorded_at)
-          VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)`).run(
-          runId, m.model, r.costUsd,
-          tokens.prompt ?? null,
-          tokens.completion ?? null,
-          tokens.cacheReadTokens ?? null,
-          tokens.total ?? null,
-          null, // pricing_version: to be populated when pricing snapshots are implemented
-          new Date().toISOString(),
-        );
+        await insertCostLedgerEntry({
+          runId, model: m.model, costUsd: r.costUsd,
+          inputTokens: tokens.prompt ?? null,
+          outputTokens: tokens.completion ?? null,
+          cacheReadTokens: tokens.cacheReadTokens ?? null,
+          totalTokens: tokens.total ?? null,
+          pricingVersion: null,
+          recordedAt: new Date().toISOString(),
+        });
       } catch (e) {
         logger.warn('cost ledger write failed (non-fatal)', { runId, model: m.model, err: String(e) });
       }
@@ -445,7 +440,7 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
     return r
       ? { ...m, status: 'completed', success: r.success, turnsUsed: r.turnsUsed, totalToolCalls: r.totalToolCalls, stopReason: r.stopReason, durationMs: r.durationMs }
       : { ...m, status: 'errored' };
-  });
+  }));
   await patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
   logger.info('Finalized run via watcher', { runId, md: mdPath });
   // Run anomaly detection over the just-completed run (best-effort, non-blocking).
@@ -510,7 +505,7 @@ export function clearRunCancelled(runId: string): void {
 
 /** Stop a running run (marks as stopped in the index and signals cancellation). */
 export async function stopRun(runId: string): Promise<void> {
-  const rec = getRunRecord(runId);
+  const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   cancelledRuns.add(runId);
   await updateRun(runId, (r) => { r.status = 'stopped'; });
@@ -518,7 +513,7 @@ export async function stopRun(runId: string): Promise<void> {
 
 /** Restart a run by re-enqueuing tasks. */
 export async function restartRun(runId: string): Promise<void> {
-  const rec = getRunRecord(runId);
+  const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   await updateRun(runId, (r) => {
     r.status = 'running';

@@ -20,8 +20,8 @@ const logger = createLogger('ai-arena:routes:runs');
 import { audit, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 
-function findEntry(runId: string, model: string): RunIndexModelEntry | undefined {
-  return getRunRecord(runId)?.perModel.find((m) => m.model === model);
+async function findEntry(runId: string, model: string): Promise<RunIndexModelEntry | undefined> {
+  return (await getRunRecord(runId))?.perModel.find((m) => m.model === model);
 }
 
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache']);
@@ -55,8 +55,8 @@ export function createRunsRouter(): Router {
   const router = Router();
 
   // GET /api/runs — list all runs (from the index, no filesystem scan)
-  router.get('/', (_req, res) => {
-    res.json({ runs: listRuns() });
+  router.get('/', async (_req, res) => {
+    res.json({ runs: await listRuns() });
   });
 
   // POST /api/runs — trigger a new run (non-blocking; uses the orchestrator)
@@ -94,7 +94,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId — run metadata + live per-model status
   router.get('/:runId', async (req, res) => {
-    const rec = getRunRecord(req.params.runId as string);
+    const rec = await getRunRecord(req.params.runId as string);
     if (!rec) {
       res.status(404).json({ error: 'Run not found' });
       return;
@@ -116,7 +116,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/conversation
   router.get('/:runId/models/:model/conversation', async (req, res) => {
-    const entry = findEntry(req.params.runId as string, req.params.model);
+    const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -131,7 +131,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/report
   router.get('/:runId/models/:model/report', async (req, res) => {
-    const entry = findEntry(req.params.runId as string, req.params.model);
+    const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -140,8 +140,8 @@ export function createRunsRouter(): Router {
   });
 
   // GET /api/runs/:runId/models/:model/files — list sandbox files
-  router.get('/:runId/models/:model/files', (req, res) => {
-    const entry = findEntry(req.params.runId as string, req.params.model);
+  router.get('/:runId/models/:model/files', async (req, res) => {
+    const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -155,7 +155,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/files/* — read one sandbox file
   router.get('/:runId/models/:model/files/*filepath', async (req, res) => {
-    const entry = findEntry(req.params.runId as string, req.params.model);
+    const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -179,7 +179,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/logs — tail PM2 log
   router.get('/:runId/models/:model/logs', async (req, res) => {
-    const entry = findEntry(req.params.runId as string, req.params.model);
+    const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;
@@ -190,7 +190,7 @@ export function createRunsRouter(): Router {
   // POST /api/runs/:runId/stop
   router.post('/:runId/stop', requireRole('editor'), async (req, res) => {
     try {
-      const rec = getRunRecord(req.params.runId as string);
+      const rec = await getRunRecord(req.params.runId as string);
       if (!rec) { res.status(404).json({ error: 'run not found' }); return; }
       if (rec.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
         res.status(403).json({ error: 'forbidden: not the run owner' });
@@ -207,7 +207,7 @@ export function createRunsRouter(): Router {
   // POST /api/runs/:runId/restart
   router.post('/:runId/restart', requireRole('editor'), async (req, res) => {
     try {
-      const rec = getRunRecord(req.params.runId as string);
+      const rec = await getRunRecord(req.params.runId as string);
       if (!rec) { res.status(404).json({ error: 'run not found' }); return; }
       if (rec.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
         res.status(403).json({ error: 'forbidden: not the run owner' });
@@ -223,7 +223,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/diff
   router.get('/:runId/models/:model/diff', async (req, res) => {
-    const entry = findEntry(req.params.runId as string, req.params.model);
+    const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
       return;

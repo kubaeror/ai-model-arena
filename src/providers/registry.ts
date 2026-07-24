@@ -5,8 +5,6 @@ import { AnthropicAdapter } from './adapters/anthropic.js';
 import { GoogleAdapter } from './adapters/google.js';
 import { BedrockAdapter } from './adapters/bedrock.js';
 import { validateProviderUrl } from './url-validator.js';
-import type { Database } from 'better-sqlite3';
-import type { ProviderRow } from '../db/schema.js';
 
 export interface CreateAdapterOpts {
   apiKey?: string;
@@ -50,8 +48,9 @@ export class ProviderRegistry {
     for (const d of descriptors) this.register(d);
   }
 
-  loadCustomFromDb(db: Database): void {
-    const rows = db.prepare('SELECT * FROM providers WHERE is_builtin = 0').all() as ProviderRow[];
+  async loadCustomFromDb(): Promise<void> {
+    const { listCustomProviders } = await import('./custom.js');
+    const rows = await listCustomProviders();
     for (const r of rows) {
       this.register({
         id: r.id, name: r.name, apiBase: r.api_base ?? undefined,

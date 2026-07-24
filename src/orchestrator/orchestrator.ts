@@ -109,7 +109,7 @@ function printComparisonTable(entries: ComparisonEntry[]): void {
 
 /** All runs from the index. */
 export async function listArenaProcesses(): Promise<Record<string, unknown>[]> {
-  return listRuns().map(r => ({
+  return (await listRuns()).map(r => ({
     name: r.runId,
     status: r.status,
     pid: null,
@@ -120,7 +120,7 @@ export async function listArenaProcesses(): Promise<Record<string, unknown>[]> {
 
 /** Print a status table of all runs (CLI `status` command). */
 export async function printStatus(): Promise<void> {
-  const runs = listRuns();
+  const runs = await listRuns();
   if (runs.length === 0) {
     console.log('No ai-arena runs found.');
     console.log('Run one with: ai-arena run --scenario <name> --models <list>');

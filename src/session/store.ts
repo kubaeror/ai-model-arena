@@ -1,5 +1,9 @@
 import crypto from 'node:crypto';
-import { getDb } from '../db/index.js';
+import {
+  createSession, getSessionById, updateSessionStatus,
+  createMessage, listMessagesBySession,
+  upsertModelCall, getModelCallBySessionAndTurn,
+} from '../db/query.js';
 
 export type SessionStatus = 'active' | 'completed' | 'errored';
 
@@ -49,81 +53,79 @@ export interface SessionStore {
 
 class SqliteSessionStore implements SessionStore {
   async createSession(opts: { promptId?: string; promptVersion?: number; model: string }): Promise<Session> {
-    const db = getDb();
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO sessions (id, prompt_id, prompt_version, model, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'active', ?, ?)`).run(
-      id, opts.promptId ?? null, opts.promptVersion ?? null, opts.model, now, now,
-    );
+    await createSession({
+      id, promptId: opts.promptId ?? null, promptVersion: opts.promptVersion ?? null,
+      model: opts.model, status: 'active', createdAt: now, updatedAt: now,
+    });
     return { id, promptId: opts.promptId ?? null, promptVersion: opts.promptVersion ?? null, model: opts.model, status: 'active', createdAt: now, updatedAt: now };
   }
 
   async loadSession(sessionId: string): Promise<Session | null> {
-    const db = getDb();
-    const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as Record<string, unknown> | undefined;
+    const row = await getSessionById(sessionId);
     if (!row) return null;
     return {
-      id: String(row.id),
-      promptId: row.prompt_id ? String(row.prompt_id) : null,
-      promptVersion: row.prompt_version != null ? Number(row.prompt_version) : null,
-      model: row.model ? String(row.model) : null,
-      status: String(row.status) as SessionStatus,
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
+      id: row.id,
+      promptId: row.prompt_id ?? null,
+      promptVersion: row.prompt_version ?? null,
+      model: row.model ?? null,
+      status: row.status as SessionStatus,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     };
   }
 
   async appendMessage(sessionId: string, msg: StoredMessage): Promise<void> {
-    getDb().prepare(`INSERT INTO messages (id, session_id, turn, role, content, tool_calls, tool_call_id, token_input, token_output, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      msg.id, sessionId, msg.turn, msg.role, msg.content, msg.toolCalls, msg.toolCallId, msg.tokenInput, msg.tokenOutput, msg.createdAt,
-    );
+    await createMessage({
+      id: msg.id, sessionId, turn: msg.turn, role: msg.role,
+      content: msg.content, toolCalls: msg.toolCalls, toolCallId: msg.toolCallId,
+      tokenInput: msg.tokenInput, tokenOutput: msg.tokenOutput, createdAt: msg.createdAt,
+    });
   }
 
   async listMessages(sessionId: string): Promise<StoredMessage[]> {
-    const rows = getDb().prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY turn, created_at').all(sessionId) as Record<string, unknown>[];
+    const rows = await listMessagesBySession(sessionId);
     return rows.map(r => ({
-      id: String(r.id),
-      sessionId: String(r.session_id),
-      turn: Number(r.turn),
-      role: String(r.role),
-      content: r.content ? String(r.content) : null,
-      toolCalls: r.tool_calls ? String(r.tool_calls) : null,
-      toolCallId: r.tool_call_id ? String(r.tool_call_id) : null,
-      tokenInput: r.token_input != null ? Number(r.token_input) : null,
-      tokenOutput: r.token_output != null ? Number(r.token_output) : null,
-      createdAt: String(r.created_at),
+      id: r.id,
+      sessionId: r.session_id,
+      turn: r.turn,
+      role: r.role,
+      content: r.content ?? null,
+      toolCalls: r.tool_calls ?? null,
+      toolCallId: r.tool_call_id ?? null,
+      tokenInput: r.token_input ?? null,
+      tokenOutput: r.token_output ?? null,
+      createdAt: r.created_at,
     }));
   }
 
   async recordModelCall(call: ModelCallRecord): Promise<void> {
-    const db = getDb();
-    db.prepare(`INSERT INTO model_calls (id, session_id, turn, provider, model, request_hash, response_text, usage, latency_ms, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(session_id, turn) DO UPDATE SET response_text=excluded.response_text, usage=excluded.usage, latency_ms=excluded.latency_ms, created_at=excluded.created_at`).run(
-      crypto.randomUUID(), call.sessionId, call.turn, call.provider, call.model, call.requestHash,
-      call.responseText, call.usage ? JSON.stringify(call.usage) : null, call.latencyMs, new Date().toISOString(),
-    );
+    await upsertModelCall({
+      id: crypto.randomUUID(), sessionId: call.sessionId, turn: call.turn,
+      provider: call.provider, model: call.model, requestHash: call.requestHash,
+      responseText: call.responseText, usage: call.usage ? JSON.stringify(call.usage) : null,
+      latencyMs: call.latencyMs, createdAt: new Date().toISOString(),
+    });
   }
 
   async getModelCall(sessionId: string, turn: number): Promise<ModelCallRecord | null> {
-    const row = getDb().prepare('SELECT * FROM model_calls WHERE session_id = ? AND turn = ?').get(sessionId, turn) as Record<string, unknown> | undefined;
+    const row = await getModelCallBySessionAndTurn(sessionId, turn);
     if (!row) return null;
     return {
-      sessionId: String(row.session_id),
-      turn: Number(row.turn),
-      provider: String(row.provider),
-      model: String(row.model),
-      requestHash: String(row.request_hash),
-      responseText: row.response_text ? String(row.response_text) : null,
-      usage: row.usage ? JSON.parse(String(row.usage)) : null,
-      latencyMs: row.latency_ms != null ? Number(row.latency_ms) : null,
+      sessionId: row.session_id,
+      turn: row.turn,
+      provider: row.provider,
+      model: row.model,
+      requestHash: row.request_hash,
+      responseText: row.response_text ?? null,
+      usage: row.usage ? JSON.parse(row.usage) : null,
+      latencyMs: row.latency_ms ?? null,
     };
   }
 
   async updateSessionStatus(sessionId: string, status: SessionStatus): Promise<void> {
-    getDb().prepare('UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?').run(status, new Date().toISOString(), sessionId);
+    await updateSessionStatus(sessionId, status);
   }
 }
 

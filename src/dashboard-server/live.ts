@@ -119,9 +119,9 @@ export class LiveHub {
   }
 
   /** Build a procName -> {model, scenario, runId} map from the runs index. */
-  private procMetaMap(): Map<string, { model: string; scenario: string; runId: string }> {
+  private async procMetaMap(): Promise<Map<string, { model: string; scenario: string; runId: string }>> {
     const map = new Map<string, { model: string; scenario: string; runId: string }>();
-    for (const rec of listRuns()) {
+    for (const rec of await listRuns()) {
       for (const m of rec.perModel) {
         map.set(m.procName, { model: m.model, scenario: rec.scenario, runId: rec.runId });
       }
@@ -129,8 +129,8 @@ export class LiveHub {
     return map;
   }
 
-  private enrich(procs: Pm2Proc[]): ProcStatus[] {
-    const meta = this.procMetaMap();
+  private async enrich(procs: Pm2Proc[]): Promise<ProcStatus[]> {
+    const meta = await this.procMetaMap();
     return procs
       .filter((p) => p.name && p.name !== DASHBOARD_PROC_NAME)
       .map((p) => {
@@ -203,7 +203,7 @@ export class LiveHub {
 
   /** On subscribe, immediately send the current conversation + recent log tail. */
   private async sendRunSnapshot(ws: WebSocket, runId: string): Promise<void> {
-    const rec = getRunRecord(runId);
+    const rec = await getRunRecord(runId);
     if (!rec) return;
     for (const m of rec.perModel) {
       const key = `${runId}:${m.model}`;
@@ -233,7 +233,7 @@ export class LiveHub {
   /** Poll subscribed runs' conversation.json for newly-appended entries. */
   private async pollConversationsAsync(): Promise<void> {
     for (const runId of this.subscribedRunIds()) {
-      const rec = getRunRecord(runId);
+      const rec = await getRunRecord(runId);
       if (!rec) continue;
       for (const m of rec.perModel) {
         const key = `${runId}:${m.model}`;
@@ -266,7 +266,7 @@ export class LiveHub {
   /** Tail PM2 log files for subscribed runs (byte-offset based, cheap when idle). */
   private async pollLogsAsync(): Promise<void> {
     for (const runId of this.subscribedRunIds()) {
-      const rec = getRunRecord(runId);
+      const rec = await getRunRecord(runId);
       if (!rec) continue;
       for (const m of rec.perModel) {
         const key = `${runId}:${m.model}`;
@@ -303,7 +303,7 @@ export class LiveHub {
 
   /** Finalize runs whose workers have all stopped (also picks up CLI-started runs). */
   private async finalizeRuns(): Promise<void> {
-    const running = listRuns().filter((r) => r.status === 'running');
+    const running = (await listRuns()).filter((r) => r.status === 'running');
     for (const rec of running) {
       try {
         if (await isRunCompleteByRunId(rec.runId)) {

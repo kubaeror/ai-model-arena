@@ -1,7 +1,10 @@
-import type { Database } from 'better-sqlite3';
-import { getDb } from '../db/index.js';
+import { getDrizzleDb } from '../db/index.js';
 import { ModelsDevResponseSchema, type ModelsDevResponse } from './types.js';
 import { normalizeModelId } from './match.js';
+import {
+  providers, models, model_providers, pricing,
+  pricing_snapshots, catalog_cache_state,
+} from '../db/schema.js';
 
 export interface SyncResult {
   source: string;
@@ -35,7 +38,7 @@ function getRefreshIntervalMs(): number {
 
 export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl: getApiUrl() }): Promise<SyncResult> {
   void source;
-  const db = getDb();
+  const db = getDrizzleDb();
   try {
     const res = await fetch(opts.apiUrl);
     if (!res.ok) {
@@ -44,74 +47,83 @@ export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl:
     }
     const raw = await res.json();
     const parsed = ModelsDevResponseSchema.parse(raw) as ModelsDevResponse;
-    const count = upsertCatalog(db, parsed);
-    updateCacheState(db, 'models.dev', 'ok', undefined, count);
+    const count = await upsertCatalog(db, parsed);
+    await updateCacheState(db, 'models.dev', 'ok', undefined, count);
     return { source: 'models.dev', ok: true, count };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    updateCacheState(db, 'models.dev', 'error', msg, 0);
+    await updateCacheState(db, 'models.dev', 'error', msg, 0);
     return { source: 'models.dev', ok: false, count: 0, error: msg };
   }
 }
 
-function upsertCatalog(db: Database, data: ModelsDevResponse): number {
+async function upsertCatalog(db: any, data: ModelsDevResponse): Promise<number> {
   const now = new Date().toISOString();
   let modelCount = 0;
-  const upsertProvider = db.prepare(`
-    INSERT INTO providers (id, name, api_base, auth_scheme, env_var, is_builtin, adapter, header_name, created_at, updated_at)
-    VALUES (@id, @name, NULL, @auth_scheme, @env_var, 1, @adapter, NULL, @created_at, @updated_at)
-    ON CONFLICT(id) DO UPDATE SET name=@name, env_var=@env_var, adapter=@adapter, updated_at=@updated_at
-  `);
-  const upsertModel = db.prepare(`
-    INSERT INTO models (id, name, family, provider_id, release_date, attachment, reasoning, temperature, tool_call,
-      interleaved, status, context_limit, input_limit, output_limit, modalities, reasoning_options, source_json, last_synced_at)
-    VALUES (@id, @name, @family, @provider_id, @release_date, @attachment, @reasoning, @temperature, @tool_call,
-      @interleaved, @status, @context_limit, @input_limit, @output_limit, @modalities, @reasoning_options, @source_json, @last_synced_at)
-    ON CONFLICT(id) DO UPDATE SET
-      name=@name, family=@family, release_date=@release_date, attachment=@attachment, reasoning=@reasoning,
-      temperature=@temperature, tool_call=@tool_call, interleaved=@interleaved, status=@status,
-      context_limit=@context_limit, input_limit=@input_limit, output_limit=@output_limit,
-      modalities=@modalities, reasoning_options=@reasoning_options, source_json=@source_json, last_synced_at=@last_synced_at
-  `);
-  const upsertModelProvider = db.prepare(`
-    INSERT INTO model_providers (model_id, provider_id, api_model_id) VALUES (@model_id, @provider_id, @api_model_id)
-    ON CONFLICT(model_id, provider_id) DO UPDATE SET api_model_id=@api_model_id
-  `);
-  const upsertPricing = db.prepare(`
-    INSERT INTO pricing (model_id, input, output, cache_read, cache_write, tier_size, over_200k_input, over_200k_output, over_200k_cache_read, over_200k_cache_write, updated_at)
-    VALUES (@model_id, @input, @output, @cache_read, @cache_write, NULL, @over_200k_input, @over_200k_output, @over_200k_cache_read, @over_200k_cache_write, @updated_at)
-    ON CONFLICT(model_id, tier_size) DO UPDATE SET
-      input=@input, output=@output, cache_read=@cache_read, cache_write=@cache_write,
-      over_200k_input=@over_200k_input, over_200k_output=@over_200k_output,
-      over_200k_cache_read=@over_200k_cache_read, over_200k_cache_write=@over_200k_cache_write, updated_at=@updated_at
-  `);
 
-  const tx = db.transaction(() => {
-    for (const [providerId, provider] of Object.entries(data)) {
-      const adapter = PROVIDER_ADAPTER_MAP[providerId] ?? 'openai-compat';
-      const authScheme = providerId === 'anthropic' ? 'x-api-key' : providerId.startsWith('google') ? 'google' : providerId === 'amazon-bedrock' ? 'bedrock' : 'bearer';
-      upsertProvider.run({
-        id: providerId, name: provider.name, auth_scheme: authScheme,
-        env_var: provider.env[0] ?? null, adapter, created_at: now, updated_at: now,
-      });
-      for (const [modelId, model] of Object.entries(provider.models)) {
-        const canonicalId = normalizeModelId(modelId, providerId);
-        upsertModel.run({
-          id: canonicalId, name: model.name, family: model.family ?? null,
-          provider_id: providerId, release_date: model.release_date ?? null,
-          attachment: model.attachment ? 1 : 0, reasoning: model.reasoning ? 1 : 0,
-          temperature: model.temperature ? 1 : 0, tool_call: model.tool_call ? 1 : 0,
+  for (const [providerId, provider] of Object.entries(data)) {
+    const adapter = PROVIDER_ADAPTER_MAP[providerId] ?? 'openai-compat';
+    const authScheme = providerId === 'anthropic' ? 'x-api-key' : providerId.startsWith('google') ? 'google' : providerId === 'amazon-bedrock' ? 'bedrock' : 'bearer';
+    await db.insert(providers).values({
+      id: providerId, name: provider.name,
+      api_base: null, auth_scheme: authScheme,
+      env_var: provider.env[0] ?? null, is_builtin: 1, adapter,
+      header_name: null, created_at: now, updated_at: now,
+    }).onConflictDoUpdate({
+      target: providers.id,
+      set: { name: provider.name, env_var: provider.env[0] ?? null, adapter, updated_at: now },
+    });
+
+    for (const [modelId, model] of Object.entries(provider.models)) {
+      const canonicalId = normalizeModelId(modelId, providerId);
+      await db.insert(models).values({
+        id: canonicalId, name: model.name, family: model.family ?? null,
+        provider_id: providerId, release_date: model.release_date ?? null,
+        attachment: model.attachment ? 1 : 0, reasoning: model.reasoning ? 1 : 0,
+        temperature: model.temperature ? 1 : 0, tool_call: model.tool_call ? 1 : 0,
+        interleaved: typeof model.interleaved === 'object' ? model.interleaved.field : (model.interleaved ? 'reasoning' : null),
+        status: model.status ?? null,
+        context_limit: model.limit.context, input_limit: model.limit.input ?? null, output_limit: model.limit.output,
+        modalities: model.modalities ? JSON.stringify(model.modalities) : null,
+        reasoning_options: model.reasoning_options ? JSON.stringify(model.reasoning_options) : null,
+        source_json: JSON.stringify(model), last_synced_at: now,
+      }).onConflictDoUpdate({
+        target: models.id,
+        set: {
+          name: model.name, family: model.family ?? null,
+          release_date: model.release_date ?? null, attachment: model.attachment ? 1 : 0,
+          reasoning: model.reasoning ? 1 : 0, temperature: model.temperature ? 1 : 0,
+          tool_call: model.tool_call ? 1 : 0,
           interleaved: typeof model.interleaved === 'object' ? model.interleaved.field : (model.interleaved ? 'reasoning' : null),
-          status: model.status ?? null,
-          context_limit: model.limit.context, input_limit: model.limit.input ?? null, output_limit: model.limit.output,
+          status: model.status ?? null, context_limit: model.limit.context,
+          input_limit: model.limit.input ?? null, output_limit: model.limit.output,
           modalities: model.modalities ? JSON.stringify(model.modalities) : null,
           reasoning_options: model.reasoning_options ? JSON.stringify(model.reasoning_options) : null,
           source_json: JSON.stringify(model), last_synced_at: now,
-        });
-        upsertModelProvider.run({ model_id: canonicalId, provider_id: providerId, api_model_id: modelId });
-        const cost = model.cost ?? {};
-        upsertPricing.run({
-          model_id: canonicalId,
+        },
+      });
+
+      await db.insert(model_providers).values({
+        model_id: canonicalId, provider_id: providerId, api_model_id: modelId,
+      }).onConflictDoUpdate({
+        target: [model_providers.model_id, model_providers.provider_id],
+        set: { api_model_id: modelId },
+      });
+
+      const cost = model.cost ?? {};
+      await db.insert(pricing).values({
+        model_id: canonicalId,
+        input: cost.input ?? null, output: cost.output ?? null,
+        cache_read: cost.cache_read ?? null, cache_write: cost.cache_write ?? null,
+        tier_size: null,
+        over_200k_input: cost.context_over_200k?.input ?? null,
+        over_200k_output: cost.context_over_200k?.output ?? null,
+        over_200k_cache_read: cost.context_over_200k?.cache_read ?? null,
+        over_200k_cache_write: cost.context_over_200k?.cache_write ?? null,
+        updated_at: now,
+      }).onConflictDoUpdate({
+        target: [pricing.model_id, pricing.tier_size],
+        set: {
           input: cost.input ?? null, output: cost.output ?? null,
           cache_read: cost.cache_read ?? null, cache_write: cost.cache_write ?? null,
           over_200k_input: cost.context_over_200k?.input ?? null,
@@ -119,33 +131,25 @@ function upsertCatalog(db: Database, data: ModelsDevResponse): number {
           over_200k_cache_read: cost.context_over_200k?.cache_read ?? null,
           over_200k_cache_write: cost.context_over_200k?.cache_write ?? null,
           updated_at: now,
-        });
-        modelCount++;
-      }
+        },
+      });
+      modelCount++;
     }
-  });
-  tx();
-  
-  // Snapshot current pricing for audit trail
-  capturePricingSnapshot(db, now);
-  
+  }
+
+  await capturePricingSnapshot(db, now);
   return modelCount;
 }
 
-function capturePricingSnapshot(db: Database, version: string): void {
-  const insert = db.prepare(`
-    INSERT INTO pricing_snapshots (version, model_id, input, output, cache_read, cache_write,
-      tier_size, over_200k_input, over_200k_output, over_200k_cache_read, over_200k_cache_write, snapshot_at)
-    VALUES (@version, @model_id, @input, @output, @cache_read, @cache_write,
-      NULL, @over_200k_input, @over_200k_output, @over_200k_cache_read, @over_200k_cache_write, @snapshot_at)
-  `);
-  const rows = db.prepare('SELECT * FROM pricing').all() as Record<string, unknown>[];
+async function capturePricingSnapshot(db: any, version: string): Promise<void> {
+  const rows: any[] = await db.select().from(pricing);
   for (const r of rows) {
-    insert.run({
+    await db.insert(pricing_snapshots).values({
       version,
       model_id: r.model_id,
       input: r.input, output: r.output,
       cache_read: r.cache_read, cache_write: r.cache_write,
+      tier_size: null,
       over_200k_input: r.over_200k_input, over_200k_output: r.over_200k_output,
       over_200k_cache_read: r.over_200k_cache_read, over_200k_cache_write: r.over_200k_cache_write,
       snapshot_at: version,
@@ -153,16 +157,17 @@ function capturePricingSnapshot(db: Database, version: string): void {
   }
 }
 
-function updateCacheState(db: Database, source: string, status: string, error: string | undefined, count: number): void {
+async function updateCacheState(db: any, source: string, status: string, error: string | undefined, count: number): Promise<void> {
   const now = new Date();
   const next = new Date(now.getTime() + getRefreshIntervalMs()).toISOString();
-  db.prepare(`
-    INSERT INTO catalog_cache_state (source, last_fetch, last_status, last_error, count, next_refresh)
-    VALUES (@source, @last_fetch, @last_status, @last_error, @count, @next_refresh)
-    ON CONFLICT(source) DO UPDATE SET
-      last_fetch=@last_fetch, last_status=@last_status, last_error=@last_error, count=@count, next_refresh=@next_refresh
-  `).run({
+  await db.insert(catalog_cache_state).values({
     source, last_fetch: now.toISOString(), last_status: status,
     last_error: error ?? null, count, next_refresh: next,
+  }).onConflictDoUpdate({
+    target: catalog_cache_state.source,
+    set: {
+      last_fetch: now.toISOString(), last_status: status,
+      last_error: error ?? null, count, next_refresh: next,
+    },
   });
 }

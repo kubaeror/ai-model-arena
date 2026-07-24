@@ -1,12 +1,11 @@
 import { Router } from 'express';
-import { getDb } from '../../db/client.js';
+import { paginatedQuery } from '../../db/query.js';
 
 export function createAuditRouter(): Router {
   const router = Router();
 
   // GET /api/audit - paginated, filterable audit log
-  router.get('/', (req, res) => {
-    const db = getDb();
+  router.get('/', async (req, res) => {
     const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
     const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
     const actor = typeof req.query.actor === 'string' ? req.query.actor : undefined;
@@ -26,26 +25,23 @@ export function createAuditRouter(): Router {
     if (from) { clauses.push('"at" >= ?'); params.push(from); }
     if (to) { clauses.push('"at" <= ?'); params.push(to); }
 
-    const where = clauses.join(' AND ');
-
-    const countRow = db.prepare(`SELECT COUNT(*) AS total FROM audit_log WHERE ${where}`).get(...params) as { total: number };
-    params.push(limit, offset);
-
-    const rows = db.prepare(`
-      SELECT * FROM audit_log
-      WHERE ${where}
-      ORDER BY "at" DESC
-      LIMIT ? OFFSET ?
-    `).all(...params);
+    const { rows, total } = await paginatedQuery({
+      table: 'audit_log',
+      whereClause: clauses.join(' AND '),
+      params,
+      orderBy: '"at" DESC',
+      limit,
+      offset,
+    });
 
     // Parse JSON fields
-    const entries = (rows as Record<string, unknown>[]).map((r) => ({
+    const entries = rows.map((r: Record<string, unknown>) => ({
       ...r,
-      before: r.before ? tryParse(r.before as string) : null,
-      after: r.after ? tryParse(r.after as string) : null,
+      before: r.before ? tryParse(String(r.before)) : null,
+      after: r.after ? tryParse(String(r.after)) : null,
     }));
 
-    res.json({ entries, total: countRow.total, limit, offset });
+    res.json({ entries, total, limit, offset });
   });
 
   return router;

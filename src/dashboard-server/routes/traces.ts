@@ -12,10 +12,10 @@ import { readTraceMeta, type TraceMeta } from '../../observability/trace-meta.js
 export function createTracesRouter(): Router {
   const router = Router();
 
-  router.get('/:runId', (req, res) => {
+  router.get('/:runId', async (req, res) => {
     const runId = String(req.params.runId);
     const modelFilter = typeof req.query.model === 'string' ? String(req.query.model) : undefined;
-    const rec = getRunRecord(runId);
+    const rec = await getRunRecord(runId);
     if (!rec) {
       res.status(404).json({ error: `Run not found: ${runId}` });
       return;

@@ -24,7 +24,6 @@ spec:
         provider: openai-compat
     spec:
       terminationGracePeriodSeconds: 60
-      runtimeClassName: gvisor
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -82,12 +81,12 @@ spec:
               memory: 1Gi
           startupProbe:
             exec:
-              command: ["pgrep", "-f", "runner"]
+              command: ["test", "-f", "/tmp/runner-ready"]
             failureThreshold: 30
             periodSeconds: 2
           livenessProbe:
             exec:
-              command: ["pgrep", "-f", "runner"]
+              command: ["test", "-f", "/tmp/runner-ready"]
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:

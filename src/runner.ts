@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { outputRoot } from './paths.js';
-import { initDb, getDb } from './db/index.js';
+import { initDb } from './db/index.js';
 import { createQueue, type TaskQueue, type Task } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
@@ -55,7 +55,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const store = createSessionStore();
   const registry = new ProviderRegistry();
   loadBuiltins(registry);
-  registry.loadCustomFromDb(getDb());
+  await registry.loadCustomFromDb();
 
   let runningTask: Task | null = null;
 
@@ -179,7 +179,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         sandbox.seedFrom(templateDir);
       }
 
-      const resolved = resolveModelForRun(modelName);
+      const resolved = await resolveModelForRun(modelName);
       if (!resolved) {
         logger.error('Model not found', { model: modelName });
         await queue.nack(task.taskId, `Model not found: ${modelName}`);

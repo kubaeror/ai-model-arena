@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { computeObservabilityStats } from '../../observability/stats.js';
-import { getDb, closeDb } from '../../anomaly-detection/db.js';
+import { getDb } from '../../anomaly-detection/db.js';
 import { listRuns } from '../../orchestrator/run-index.js';
 import { readTraceIndex } from '../../observability/trace-meta.js';
 import { INTERNAL_ERROR } from '../error-sanitizer.js';
@@ -15,23 +15,23 @@ export function createObservabilityRouter(): Router {
   const router = Router();
 
   // GET /stats — avg/p95/p99 latency per model/tool, error rates, baselines.
-  router.get('/stats', (req, res) => {
+  router.get('/stats', async (req, res) => {
     const model = typeof req.query.model === 'string' ? String(req.query.model) : undefined;
     try {
-      res.json(computeObservabilityStats(model));
+      res.json(await computeObservabilityStats(model));
     } catch {
       res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
   // GET /recent-traces — latest N traces across all runs.
-  router.get('/recent-traces', (req, res) => {
+  router.get('/recent-traces', async (req, res) => {
     const limit = Math.min(
       Number(req.query.limit) || 50,
       200,
     );
     try {
-      const runs = listRuns();
+      const runs = await listRuns();
       const entries: Array<{
         runId: string;
         model: string;
@@ -65,12 +65,11 @@ export function createObservabilityRouter(): Router {
   router.get('/health', async (_req, res) => {
     let sqlite: { ok: boolean; error?: string } = { ok: false };
     try {
-      const db = getDb();
-      db.prepare('SELECT 1 AS ok').get();
+      const db = await getDb();
+      await db.run('SELECT 1 AS ok');
       sqlite = { ok: true };
     } catch {
       sqlite = { ok: false, error: INTERNAL_ERROR };
-      closeDb();
     }
 
     const healthy = sqlite.ok;

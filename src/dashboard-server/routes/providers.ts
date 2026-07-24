@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { getDb } from '../../db/client.js';
 import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { validateProviderUrl } from '../../providers/url-validator.js';
@@ -24,8 +23,8 @@ const CustomProviderInputSchema = z.object({
 
 export function createProvidersRouter(): Router {
   const router = Router();
-  router.get('/', (_req, res) => {
-    const custom = listCustomProviders(getDb()).map(r => ({ ...r, is_builtin: Boolean(r.is_builtin) }));
+  router.get('/', async (_req, res) => {
+    const custom = (await listCustomProviders()).map(r => ({ ...r, is_builtin: Boolean(r.is_builtin) }));
     res.json({ builtin: BUILTIN_PROVIDERS, custom });
   });
   router.post('/', async (req, res) => {
@@ -55,7 +54,7 @@ export function createProvidersRouter(): Router {
       }
     }
 
-    upsertCustomProvider(getDb(), parsed.data);
+    upsertCustomProvider(parsed.data);
     audit((req as AuthedRequest).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.data.id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
     res.status(201).json({
       ok: true,
@@ -69,7 +68,7 @@ export function createProvidersRouter(): Router {
       res.status(403).json({ error: 'Missing permission: providers:write' });
       return;
     }
-    deleteCustomProvider(getDb(), req.params.id);
+    deleteCustomProvider(req.params.id);
     audit((req as AuthedRequest).user?.sub ?? 'system', 'provider.delete', { type: 'provider', id: req.params.id }).catch(() => {});
     res.json({ ok: true });
   });

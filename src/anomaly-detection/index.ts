@@ -34,7 +34,7 @@ export async function analyzeRun(runId: string, externalLogger?: Logger): Promis
   }
   if (!cfg.enabled) return [];
 
-  const record = getRunRecord(runId);
+  const record = await getRunRecord(runId);
   if (!record) {
     log.debug('No run record for anomaly analysis', { runId });
     return [];
@@ -68,7 +68,7 @@ export async function analyzeRun(runId: string, externalLogger?: Logger): Promis
 
       let history: RunHistory;
       try {
-        history = buildRunHistory(model, record.scenario, cfg.slidingWindow, runId);
+        history = await buildRunHistory(model, record.scenario, cfg.slidingWindow, runId);
       } catch (err) {
         log.warn('Failed to build run history', { runId, model, error: err instanceof Error ? err.message : String(err) });
         history = { toolLatency: new Map(), tokenTotals: new Map(), costs: new Map(), toolErrorRates: new Map(), durations: new Map() };
@@ -86,7 +86,7 @@ export async function analyzeRun(runId: string, externalLogger?: Logger): Promis
 
       for (const a of anomalies) {
         try {
-          const rec = insertAnomaly(a);
+          const rec = await insertAnomaly(a);
           created.push(rec);
           log.warn('Anomaly detected', { runId, model, type: a.type, severity: a.severity, description: a.description });
           // Slack/Discord channel dispatch.
@@ -122,7 +122,7 @@ function readResultJsonSafe(resultPath: string): RunResult | null {
 }
 
 /** Convenience: anomalies already stored for a run. */
-export function anomaliesForRun(runId: string): AnomalyRecord[] {
+export async function anomaliesForRun(runId: string): Promise<AnomalyRecord[]> {
   try {
     return listAnomaliesForRun(runId);
   } catch {

@@ -6,6 +6,7 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from './schema.js';
 
 let dbInstance: DatabaseType | null = null;
+let drizzleClient: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 function migrationsFolder(): string {
   return path.resolve(import.meta.dirname, '..', '..', 'drizzle');
@@ -57,8 +58,8 @@ export function initDb(dbPath: string): DatabaseType {
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   sqlite.pragma('wal_autocheckpoint = 1000');
-  const db = drizzle(sqlite, { schema });
-  migrate(db, { migrationsFolder: migrationsFolder() });
+  drizzleClient = drizzle(sqlite, { schema });
+  migrate(drizzleClient, { migrationsFolder: migrationsFolder() });
   applyRuntimeIndices(sqlite);
   dbInstance = sqlite;
   return sqlite;
@@ -69,9 +70,19 @@ export function getDb(): DatabaseType {
   return dbInstance;
 }
 
+export function getDrizzleClient(): ReturnType<typeof drizzle<typeof schema>> {
+  if (!drizzleClient) throw new Error('DB not initialized - call initDb() first');
+  return drizzleClient;
+}
+
+export function getRawDrizzleClient(): any {
+  return getDrizzleClient();
+}
+
 export function closeDb(): void {
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
+    drizzleClient = null;
   }
 }

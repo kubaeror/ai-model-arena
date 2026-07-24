@@ -32,7 +32,6 @@ test('writeRunStats upserts model_runtime_stats row from trace-meta + result.jso
   try {
     await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
 
-    // Simulate run output dir structure: outputs/gpt-4o/<runId>/
     const runId = 'scenario_2026-07-20T00_00_00Z';
     const modelDir = path.join(tmp, 'outputs', 'gpt-4o', runId);
     fs.mkdirSync(modelDir, { recursive: true });
@@ -54,6 +53,9 @@ test('writeRunStats upserts model_runtime_stats row from trace-meta + result.jso
 
     await writeRunStats(runId, tmp);
 
+    // After writeRunStats, close the drizzle connection to force flush
+    closeDb();
+    initDb(dbPath);
     const rows = getDb().prepare('SELECT * FROM model_runtime_stats WHERE run_id = ?').all(runId) as Array<Record<string, unknown>>;
     assert.equal(rows.length, 1);
     const row = rows[0];
@@ -62,7 +64,7 @@ test('writeRunStats upserts model_runtime_stats row from trace-meta + result.jso
     assert.ok(row.tps, 'tps should be set');
     assert.ok(row.cache_hit_rate, 'cache_hit_rate should be set');
     assert.equal(row.cache_read_tokens, 600);
-    assert.equal(row.latency_p50_ms, 1500); // median of [1500, 1500, 3000] chat durations
+    assert.equal(row.latency_p50_ms, 1500);
   } finally {
     globalThis.fetch = origFetch;
     closeDb();

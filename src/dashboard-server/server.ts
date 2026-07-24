@@ -12,7 +12,7 @@ import { findProjectRoot, dbPath } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { startOtel } from '../observability/otel.js';
 import { metricsHandler } from '../observability/metrics.js';
-import { initDb, closeDb, getDb, getDriver } from '../db/index.js';
+import { initDb, closeDb, getDriver } from '../db/index.js';
 import { ensureFresh } from '../catalog/cache.js';
 import { startCatalogCron, stopCatalogCron } from '../catalog/cron.js';
 import { loadAuthConfig, requireAuth, verifyCredentials, signToken, revokeToken, setTokenCookie, clearTokenCookie, type AuthedRequest } from './auth.js';
@@ -132,7 +132,8 @@ async function start(): Promise<void> {
         await getPgPool().query('SELECT 1');
         dbOk = true;
       } else {
-        getDb().prepare('SELECT 1').get();
+        const { getDrizzleDb } = await import('../db/index.js');
+        await getDrizzleDb().run('SELECT 1');
         dbOk = true;
       }
     } catch { /* db not ready */ }
@@ -238,8 +239,9 @@ async function start(): Promise<void> {
 
   // ── User management (admin only) ──────────────────────────────────────
   app.use('/api/users', requireAuth(auth), requireRole('admin'), createUsersRouter());
-  app.get('/api/roles', requireAuth(auth), requireRole('viewer'), (_req, res) => {
-    const roles = getDb().prepare('SELECT * FROM roles ORDER BY id').all();
+  app.get('/api/roles', requireAuth(auth), requireRole('viewer'), async (_req, res) => {
+    const { listRoles } = await import('../db/query.js');
+    const roles = await listRoles();
     res.json({ roles });
   });
 

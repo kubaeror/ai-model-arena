@@ -15,7 +15,7 @@ export type WebhookEvent = 'run_completed' | 'anomaly_detected' | 'budget_exceed
 export async function dispatchWebhooks(event: WebhookEvent, payload: unknown, logger?: Logger): Promise<void> {
   let hooks;
   try {
-    hooks = webhooksForEvent(event);
+    hooks = await webhooksForEvent(event);
   } catch {
     return; // DB unavailable — fail silently, never block runs.
   }
@@ -25,7 +25,7 @@ export async function dispatchWebhooks(event: WebhookEvent, payload: unknown, lo
     hooks.map(async (h) => {
       try {
         const headers: Record<string, string> = { 'content-type': 'application/json' };
-        const secret = getWebhookSecret(h.id);
+        const secret = await getWebhookSecret(h.id);
         if (secret) {
           const sig = crypto.createHmac('sha256', secret).update(body).digest('hex');
           headers['x-arena-signature'] = `sha256=${sig}`;

@@ -31,7 +31,7 @@ import { writeResultJson, type RunResult } from './logger/result-logger.js';
 import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
-import { initDb, getDb } from './db/index.js';
+import { initDb } from './db/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
@@ -143,7 +143,7 @@ async function main(): Promise<void> {
 
   // ── Initialize SQLite catalog DB + resolve model from catalog ──────────
   initDb(dbPath());
-  const resolved = resolveModelForRun(modelName);
+  const resolved = await resolveModelForRun(modelName);
   if (!resolved) {
     logger.error('Model not found in catalog', { model: modelName });
     const msg = `Model not found in catalog: ${modelName}. Run catalog sync first.`;
@@ -249,7 +249,7 @@ async function main(): Promise<void> {
   const apiKey = resolved.envVar ? secretStore.get(resolved.envVar) : undefined;
   const registry = new ProviderRegistry();
   loadBuiltins(registry);
-  registry.loadCustomFromDb(getDb());
+  await registry.loadCustomFromDb();
   const adapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger.child('adapter') });
   const executors = buildToolExecutors();
   const maxTurns = scenario.maxTurns ?? resolved.maxTurns;
@@ -312,7 +312,7 @@ async function main(): Promise<void> {
   const finishedAt = new Date();
   
   // ── Compute cost ─────────────────────────────────────────────────────────
-  const costBreakdown = computeCost(modelName, {
+  const costBreakdown = await computeCost(modelName, {
     prompt: loopResult.tokenUsage.prompt ?? 0,
     completion: loopResult.tokenUsage.completion ?? 0,
     cached: loopResult.tokenUsage.cacheReadTokens ?? 0,

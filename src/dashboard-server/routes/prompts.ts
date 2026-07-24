@@ -1,48 +1,45 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { getDb } from '../../db/client.js';
 import { audit, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { z } from 'zod';
+import {
+  getPromptById, listPromptsWithLatestVersion, listPromptVersions,
+  insertPrompt, updatePromptMetadata, deletePromptById,
+  insertPromptVersion, getLatestPromptVersion,
+  getModelByNameOrId,
+} from '../../db/query.js';
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function sid(p: string | string[] | undefined): string {
+  return String(p ?? '');
 }
 
 export function createPromptsRouter(): Router {
   const router = Router();
 
   // GET /api/prompts - list all prompts with latest version info
-  router.get('/', (_req, res) => {
-    const db = getDb();
-    const rows = db.prepare(`
-      SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
-        pv.version AS latest_version, pv.tag AS latest_tag
-      FROM prompts p
-      LEFT JOIN prompt_versions pv ON pv.id = (
-        SELECT pv2.id FROM prompt_versions pv2
-        WHERE pv2.prompt_id = p.id
-        ORDER BY pv2.version DESC LIMIT 1
-      )
-      ORDER BY p.name ASC
-    `).all();
+  router.get('/', async (_req, res) => {
+    const rows = await listPromptsWithLatestVersion();
     res.json({ prompts: rows });
   });
 
   // GET /api/prompts/:id - single prompt with all versions
-  router.get('/:id', (req, res) => {
-    const db = getDb();
-    const prompt = db.prepare('SELECT * FROM prompts WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
+  router.get('/:id', async (req, res) => {
+    const prompt = await getPromptById(sid(req.params.id));
     if (!prompt) {
       res.status(404).json({ error: 'Prompt not found' });
       return;
     }
-    const versions = db.prepare('SELECT * FROM prompt_versions WHERE prompt_id = ? ORDER BY version DESC').all(req.params.id);
+    const versions = await listPromptVersions(sid(req.params.id));
     res.json({ prompt, versions });
   });
 
   // POST /api/prompts - create prompt + initial version
-  router.post('/', requireRole('admin'), (req, res) => {
+  router.post('/', requireRole('admin'), async (req, res) => {
     const schema = z.object({
       name: z.string().min(1).max(128),
       description: z.string().optional(),
@@ -57,28 +54,31 @@ export function createPromptsRouter(): Router {
       return;
     }
 
-    const db = getDb();
     const promptId = crypto.randomUUID();
     const timestamp = now();
     const actor = (req as AuthedRequest).user?.sub ?? 'system';
 
-    db.prepare('INSERT INTO prompts (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(
-      promptId, parsed.data.name, parsed.data.description ?? null, timestamp, timestamp,
-    );
+    await insertPrompt({
+      id: promptId, name: parsed.data.name,
+      description: parsed.data.description ?? null,
+      createdAt: timestamp, updatedAt: timestamp,
+    });
 
     const versionId = crypto.randomUUID();
-    db.prepare('INSERT INTO prompt_versions (id, prompt_id, version, system_prompt, task, config, tag, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-      versionId, promptId, 1, parsed.data.systemPrompt, parsed.data.task,
-      parsed.data.config ? JSON.stringify(parsed.data.config) : null,
-      parsed.data.tag ?? null, timestamp, actor,
-    );
+    await insertPromptVersion({
+      id: versionId, promptId, version: 1,
+      systemPrompt: parsed.data.systemPrompt, task: parsed.data.task,
+      config: parsed.data.config ? JSON.stringify(parsed.data.config) : null,
+      tag: parsed.data.tag ?? null, createdAt: timestamp, createdBy: actor,
+    });
 
     audit(actor, 'prompt.create', { type: 'prompt', id: promptId }, undefined, { name: parsed.data.name }).catch(() => {});
     res.status(201).json({ id: promptId, version: 1 });
   });
 
   // PUT /api/prompts/:id - update prompt metadata
-  router.put('/:id', requireRole('admin'), (req, res) => {
+  router.put('/:id', requireRole('admin'), async (req, res) => {
+    const promptId = sid(req.params.id);
     const schema = z.object({
       name: z.string().min(1).max(128).optional(),
       description: z.string().optional(),
@@ -89,45 +89,41 @@ export function createPromptsRouter(): Router {
       return;
     }
 
-    const db = getDb();
-    const existing = db.prepare('SELECT * FROM prompts WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
+    const existing = await getPromptById(promptId);
     if (!existing) {
       res.status(404).json({ error: 'Prompt not found' });
       return;
     }
 
     const timestamp = now();
-    if (parsed.data.name !== undefined) {
-      db.prepare('UPDATE prompts SET name = ?, updated_at = ? WHERE id = ?').run(parsed.data.name, timestamp, req.params.id);
-    }
-    if (parsed.data.description !== undefined) {
-      db.prepare('UPDATE prompts SET description = ?, updated_at = ? WHERE id = ?').run(parsed.data.description, timestamp, req.params.id);
-    }
+    await updatePromptMetadata(promptId, {
+      name: parsed.data.name,
+      description: parsed.data.description ?? null,
+      updatedAt: timestamp,
+    });
 
-    const promptId = String(req.params.id);
     audit((req as AuthedRequest).user?.sub ?? 'system', 'prompt.update', { type: 'prompt', id: promptId }, existing, parsed.data).catch(() => {});
     res.json({ ok: true });
   });
 
   // DELETE /api/prompts/:id - delete prompt + cascade versions
-  router.delete('/:id', requireRole('admin'), (req, res) => {
-    const db = getDb();
-    const existing = db.prepare('SELECT * FROM prompts WHERE id = ?').get(req.params.id);
+  router.delete('/:id', requireRole('admin'), async (req, res) => {
+    const deleteId = sid(req.params.id);
+    const existing = await getPromptById(deleteId);
     if (!existing) {
       res.status(404).json({ error: 'Prompt not found' });
       return;
     }
 
-    const deleteId = String(req.params.id);
-    db.prepare('DELETE FROM prompt_versions WHERE prompt_id = ?').run(deleteId);
-    db.prepare('DELETE FROM prompts WHERE id = ?').run(deleteId);
+    await deletePromptById(deleteId);
 
     audit((req as AuthedRequest).user?.sub ?? 'system', 'prompt.delete', { type: 'prompt', id: deleteId }).catch(() => {});
     res.json({ ok: true });
   });
 
   // POST /api/prompts/:id/versions - create new version of an existing prompt
-  router.post('/:id/versions', requireRole('admin'), (req, res) => {
+  router.post('/:id/versions', requireRole('admin'), async (req, res) => {
+    const promptId = sid(req.params.id);
     const schema = z.object({
       systemPrompt: z.string().min(1),
       task: z.string().min(1),
@@ -140,29 +136,27 @@ export function createPromptsRouter(): Router {
       return;
     }
 
-    const db = getDb();
-    const prompt = db.prepare('SELECT * FROM prompts WHERE id = ?').get(req.params.id);
+    const prompt = await getPromptById(promptId);
     if (!prompt) {
       res.status(404).json({ error: 'Prompt not found' });
       return;
     }
 
-    const maxVer = db.prepare('SELECT MAX(version) AS max_ver FROM prompt_versions WHERE prompt_id = ?').get(req.params.id) as { max_ver: number | null };
-    const nextVersion = (maxVer?.max_ver ?? 0) + 1;
+    const nextVersion = (await getLatestPromptVersion(promptId)) + 1;
     const versionId = crypto.randomUUID();
     const timestamp = now();
     const actor = (req as AuthedRequest).user?.sub ?? 'system';
 
-    db.prepare('INSERT INTO prompt_versions (id, prompt_id, version, system_prompt, task, config, tag, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-      versionId, req.params.id, nextVersion, parsed.data.systemPrompt, parsed.data.task,
-      parsed.data.config ? JSON.stringify(parsed.data.config) : null,
-      parsed.data.tag ?? null, timestamp, actor,
-    );
+    await insertPromptVersion({
+      id: versionId, promptId, version: nextVersion,
+      systemPrompt: parsed.data.systemPrompt, task: parsed.data.task,
+      config: parsed.data.config ? JSON.stringify(parsed.data.config) : null,
+      tag: parsed.data.tag ?? null, createdAt: timestamp, createdBy: actor,
+    });
 
-    const versionPromptId = String(req.params.id);
-    db.prepare('UPDATE prompts SET updated_at = ? WHERE id = ?').run(timestamp, versionPromptId);
+    await updatePromptMetadata(promptId, { updatedAt: timestamp });
 
-    audit(actor, 'prompt_version.create', { type: 'prompt', id: versionPromptId }, undefined, { version: nextVersion, tag: parsed.data.tag }).catch(() => {});
+    audit(actor, 'prompt_version.create', { type: 'prompt', id: promptId }, undefined, { version: nextVersion, tag: parsed.data.tag }).catch(() => {});
     res.status(201).json({ id: versionId, version: nextVersion });
   });
 
@@ -180,30 +174,25 @@ export function createPromptsRouter(): Router {
       return;
     }
 
-    const db = getDb();
-    const promptRow = db.prepare('SELECT * FROM prompts WHERE id = ?').get(parsed.data.promptId);
+    const promptRow = await getPromptById(parsed.data.promptId);
     if (!promptRow) {
       res.status(404).json({ error: 'Prompt not found' });
       return;
     }
 
-    const version = parsed.data.promptVersion ?? (db.prepare(
-      'SELECT version FROM prompt_versions WHERE prompt_id = ? ORDER BY version DESC LIMIT 1'
-    ).get(parsed.data.promptId) as { version: number } | undefined)?.version ?? 1;
+    const version = parsed.data.promptVersion ?? await getLatestPromptVersion(parsed.data.promptId);
 
-    // Resolve model→provider mapping
-    const { resolveModelForRun } = await import('../../db/model-resolver.js');
     const { createQueue } = await import('../../queue/index.js');
 
     const queue = createQueue();
     const tasks: { taskId: string; model: string; provider: string }[] = [];
 
     for (const model of parsed.data.models) {
-      const resolved = resolveModelForRun(model);
+      const resolved = await getModelByNameOrId(model);
       const task = {
         taskId: crypto.randomUUID(),
         sessionId: crypto.randomUUID(),
-        provider: resolved?.providerId ?? 'unknown',
+        provider: resolved?.provider_id ?? 'unknown',
         model,
         scenario: parsed.data.scenario,
         promptId: parsed.data.promptId,

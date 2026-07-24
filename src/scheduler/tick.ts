@@ -1,4 +1,4 @@
-import { getDb } from '../db/index.js';
+import { listDueSchedules, updateScheduleRun } from '../db/query.js';
 import { CronExpressionParser } from 'cron-parser';
 import { updateScheduleState, getScheduleState } from './manager.js';
 import { createLogger } from '../logger/pino-logger.js';
@@ -6,19 +6,16 @@ import { createLogger } from '../logger/pino-logger.js';
 const logger = createLogger('ai-arena:scheduler');
 
 export async function tickScheduler(): Promise<{ ticked: string[]; failures: string[] }> {
-  const db = getDb();
   const now = new Date().toISOString();
-  const rows = db.prepare(
-    "SELECT * FROM schedules WHERE enabled = 1 AND (next_run IS NULL OR next_run <= ?) ORDER BY next_run",
-  ).all(now) as Array<Record<string, unknown>>;
+  const rows = await listDueSchedules(now);
 
   const ticked: string[] = [];
   const failures: string[] = [];
 
   for (const row of rows) {
-    const scheduleId = String(row.id);
-    const next = computeNextRun(String(row.cron), new Date(now));
-    db.prepare('UPDATE schedules SET last_run = ?, next_run = ? WHERE id = ?').run(now, next, String(row.id));
+    const scheduleId = row.id;
+    const next = computeNextRun(row.cron, new Date(now));
+    await updateScheduleRun(scheduleId, now, next);
 
     // Update scheduler state for observability
     const state = getScheduleState(scheduleId) ?? { id: scheduleId, status: 'idle', consecutiveFailures: 0, totalRuns: 0, totalFailures: 0 };

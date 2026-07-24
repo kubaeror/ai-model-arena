@@ -13,11 +13,13 @@
  * Drizzle ORM queries via `getDrizzleDb()` for full Postgres compat.
  */
 
-import { initDb as initSqlite, getDb as getSqlite, closeDb as closeSqlite } from './client.js';
-import { initPostgres, closePostgres } from './postgres.js';
+import { initDb as initSqlite, getDb as getSqlite, getDrizzleClient as getSqliteDrizzle, closeDb as closeSqlite } from './client.js';
+import { initPostgres, getPgClient, closePostgres } from './postgres.js';
 import type { Database as SqliteDb } from 'better-sqlite3';
+import type { PgClient } from './postgres.js';
 
 export type DbClient = SqliteDb;
+export type DrizzleClient = ReturnType<typeof getSqliteDrizzle> | PgClient;
 
 let _driver: 'sqlite' | 'postgres' = 'sqlite';
 
@@ -49,6 +51,22 @@ export function getDb(): DbClient {
     );
   }
   return getSqlite();
+}
+
+/**
+ * Return the canonical Drizzle ORM client, regardless of which driver is active.
+ * Use this for all new Drizzle ORM code; it works with both SQLite and Postgres.
+ *
+ * Returns a loosely-typed client because SQLite and Postgres Drizzle clients
+ * have incompatible TypeScript generics (union of two disjoint signatures),
+ * but the same runtime API. Consumers should cast to `any` or use the typed
+ * query helpers in `db/query.ts`.
+ */
+export function getDrizzleDb(): any {
+  if (_driver === 'postgres') {
+    return getPgClient();
+  }
+  return getSqliteDrizzle();
 }
 
 export function getDriver(): 'sqlite' | 'postgres' {

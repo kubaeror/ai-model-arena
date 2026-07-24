@@ -50,8 +50,8 @@ function percentile(sorted: number[], p: number): number {
   return sorted[Math.max(0, idx)]!;
 }
 
-export function computeObservabilityStats(modelFilter?: string): ObservabilityStats {
-  const idx = loadRunIndex();
+export async function computeObservabilityStats(modelFilter?: string): Promise<ObservabilityStats> {
+  const idx = await loadRunIndex();
   const latencyBy = new Map<string, number[]>(); // `${model}|${tool}` -> durations
   const modelRuns = new Map<string, number>();
   const modelErrors = new Map<string, number>();
@@ -105,7 +105,7 @@ export function computeObservabilityStats(modelFilter?: string): ObservabilitySt
   latency.sort((a, b) => b.count - a.count);
 
   let anomalyCounts: Array<{ model: string; total: number; unresolved: number }> = [];
-  try { anomalyCounts = anomalyCountsByModel(); } catch { /* DB unavailable */ }
+  try { anomalyCounts = await anomalyCountsByModel(); } catch { /* DB unavailable */ }
   const models: ModelStat[] = [...modelRuns.entries()].map(([model, runs]) => {
     const ac = anomalyCounts.find((a) => a.model === model);
     return {

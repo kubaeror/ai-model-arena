@@ -12,49 +12,49 @@ function freshDb() {
   return () => fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-test('isStale returns true when no cache_state row exists', () => {
+test('isStale returns true when no cache_state row exists', async () => {
   const cleanup = freshDb();
   try {
-    assert.equal(isStale(getDb(), 'models.dev'), true);
+    assert.equal(await isStale('models.dev'), true);
   } finally {
     closeDb();
     cleanup();
   }
 });
 
-test('isStale returns false when next_refresh is in the future', () => {
+test('isStale returns false when next_refresh is in the future', async () => {
   const cleanup = freshDb();
   try {
     const now = new Date();
     const future = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
     getDb().prepare('INSERT INTO catalog_cache_state (source, last_fetch, last_status, next_refresh) VALUES (?, ?, ?, ?)').run('models.dev', now.toISOString(), 'ok', future);
-    assert.equal(isStale(getDb(), 'models.dev'), false);
+    assert.equal(await isStale('models.dev'), false);
   } finally {
     closeDb();
     cleanup();
   }
 });
 
-test('isStale returns true when next_refresh is in the past', () => {
+test('isStale returns true when next_refresh is in the past', async () => {
   const cleanup = freshDb();
   try {
     const now = new Date();
     const past = new Date(now.getTime() - 1000).toISOString();
     getDb().prepare('INSERT INTO catalog_cache_state (source, last_fetch, last_status, next_refresh) VALUES (?, ?, ?, ?)').run('models.dev', now.toISOString(), 'ok', past);
-    assert.equal(isStale(getDb(), 'models.dev'), true);
+    assert.equal(await isStale('models.dev'), true);
   } finally {
     closeDb();
     cleanup();
   }
 });
 
-test('getCacheStates returns all cache rows', () => {
+test('getCacheStates returns all cache rows', async () => {
   const cleanup = freshDb();
   try {
     const now = new Date().toISOString();
     getDb().prepare('INSERT INTO catalog_cache_state (source, last_fetch, last_status, next_refresh) VALUES (?, ?, ?, ?)').run('models.dev', now, 'ok', now);
     getDb().prepare('INSERT INTO catalog_cache_state (source, last_fetch, last_status, next_refresh) VALUES (?, ?, ?, ?)').run('modelbench', now, 'ok', now);
-    const states = getCacheStates(getDb());
+    const states = await getCacheStates();
     assert.equal(states.length, 2);
     assert.ok(states.some(s => s.source === 'models.dev'));
     assert.ok(states.some(s => s.source === 'modelbench'));

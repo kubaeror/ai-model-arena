@@ -1,12 +1,11 @@
 import { Router } from 'express';
-import { getDb } from '../../db/client.js';
+import { paginatedQuery } from '../../db/query.js';
 
 export function createFilesRouter(): Router {
   const router = Router();
 
   // GET /api/files - paginated, filterable file listing
-  router.get('/', (req, res) => {
-    const db = getDb();
+  router.get('/', async (req, res) => {
     const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
     const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
     const model = typeof req.query.model === 'string' ? req.query.model : undefined;
@@ -22,19 +21,16 @@ export function createFilesRouter(): Router {
     if (promptId) { clauses.push('prompt_id = ?'); params.push(promptId); }
     if (tool) { clauses.push('produced_by_tool = ?'); params.push(tool); }
 
-    const where = clauses.join(' AND ');
+    const { rows, total } = await paginatedQuery({
+      table: 'files',
+      whereClause: clauses.join(' AND '),
+      params,
+      orderBy: 'produced_at DESC',
+      limit,
+      offset,
+    });
 
-    const countRow = db.prepare(`SELECT COUNT(*) AS total FROM files WHERE ${where}`).get(...params) as { total: number };
-    params.push(limit, offset);
-
-    const rows = db.prepare(`
-      SELECT * FROM files
-      WHERE ${where}
-      ORDER BY produced_at DESC
-      LIMIT ? OFFSET ?
-    `).all(...params);
-
-    res.json({ files: rows, total: countRow.total, limit, offset });
+    res.json({ files: rows, total, limit, offset });
   });
 
   return router;

@@ -66,18 +66,6 @@ patches:
                   - name: scheduler
                     imagePullPolicy: Never
   - target:
-      kind: Deployment
-      labelSelector: app=runner
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: runner
-      spec:
-        template:
-          spec:
-            runtimeClassName: ""
-  - target:
       kind: PersistentVolumeClaim
       name: outputs
     patch: |-

@@ -20,17 +20,10 @@ function parseBool(v: unknown): boolean | undefined {
   return undefined;
 }
 
-/**
- * Anomalies API:
- *  GET  /api/v1/anomalies          — list with filters
- *  GET  /api/v1/anomalies/:id      — full detail incl. related run + span data
- *  PATCH /api/v1/anomalies/:id     — mark resolved / false positive
- */
 export function createAnomaliesRouter(): Router {
   const router = Router();
 
-  // GET / — list anomalies with filters.
-  router.get('/', (req, res) => {
+  router.get('/', async (req, res) => {
     const q: AnomalyQuery = {
       model: typeof req.query.model === 'string' ? String(req.query.model) : undefined,
       type: typeof req.query.type === 'string' ? (String(req.query.type) as AnomalyType) : undefined,
@@ -42,27 +35,26 @@ export function createAnomaliesRouter(): Router {
       offset: req.query.offset ? Number(req.query.offset) : undefined,
     };
     try {
-      res.json({ anomalies: listAnomalies(q) });
+      res.json({ anomalies: await listAnomalies(q) });
     } catch {
       res.status(500).json({ error: INTERNAL_ERROR });
     }
   });
 
-  // GET /:id — full anomaly detail + related run + relevant spans.
-  router.get('/:id', (req, res) => {
+  router.get('/:id', async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
       res.status(400).json({ error: 'Invalid anomaly id' });
       return;
     }
-    const anomaly = getAnomaly(id);
+    const anomaly = await getAnomaly(id);
     if (!anomaly) {
       res.status(404).json({ error: `Anomaly ${id} not found` });
       return;
     }
     let run = null;
     let trace = null;
-    const rec = getRunRecord(anomaly.run_id);
+    const rec = await getRunRecord(anomaly.run_id);
     if (rec) {
       const pm = rec.perModel.find((m) => m.model === anomaly.model);
       run = {
@@ -75,7 +67,6 @@ export function createAnomaliesRouter(): Router {
       if (pm) {
         const meta = readTraceMeta(pm.outputDir);
         if (meta) {
-          // Surface only the spans relevant to the anomaly type, if identifiable.
           trace = {
             traceId: meta.traceId,
             spanCount: meta.spanCount,
@@ -88,8 +79,7 @@ export function createAnomaliesRouter(): Router {
     res.json({ anomaly, run, trace });
   });
 
-  // PATCH /:id — mark resolved / false positive.
-  router.patch('/:id', (req, res) => {
+  router.patch('/:id', async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
       res.status(400).json({ error: 'Invalid anomaly id' });
@@ -101,7 +91,7 @@ export function createAnomaliesRouter(): Router {
       res.status(400).json({ error: 'resolved_as must be "resolved" or "false_positive"' });
       return;
     }
-    const updated = resolveAnomaly(id, resolvedAs as 'resolved' | 'false_positive');
+    const updated = await resolveAnomaly(id, resolvedAs as 'resolved' | 'false_positive');
     if (!updated) {
       res.status(404).json({ error: `Anomaly ${id} not found` });
       return;

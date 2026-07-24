@@ -78,7 +78,7 @@ export function createRegressionRouter(): Router {
       baselineDir,
       config.thresholds,
       async (mdl, scenario) => {
-        const runs = listRuns().filter(
+        const runs = (await listRuns()).filter(
           (r) => r.scenario === scenario && r.models.includes(mdl) && r.status === 'completed',
         );
         if (runs.length === 0) return null;

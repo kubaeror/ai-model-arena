@@ -1,5 +1,5 @@
-import type { ProviderRow, ModelRow } from './schema.js';
-import { getDb } from './index.js';
+import type { ProviderRow } from './schema.js';
+import { getModelByNameOrId } from './query.js';
 
 /**
  * A model resolved from the SQLite catalog, ready to be used by a worker run.
@@ -29,16 +29,8 @@ export const DEFAULT_TEMPERATURE = 0.2;
  * details needed to spawn a worker. Returns null if the model is not found in
  * the catalog.
  */
-export function resolveModelForRun(friendlyName: string): ResolvedModel | null {
-  const db = getDb();
-  const row = db.prepare(`
-    SELECT m.*, mp.api_model_id, p.env_var, p.adapter as provider_adapter
-    FROM models m
-    JOIN model_providers mp ON mp.model_id = m.id
-    JOIN providers p ON p.id = m.provider_id
-    WHERE m.name = ? OR m.id = ?
-    LIMIT 1
-  `).get(friendlyName, friendlyName) as (ModelRow & { api_model_id: string; env_var: string | null; provider_adapter: string }) | undefined;
+export async function resolveModelForRun(friendlyName: string): Promise<ResolvedModel | null> {
+  const row = await getModelByNameOrId(friendlyName);
   if (!row) return null;
   return {
     canonicalId: row.id,

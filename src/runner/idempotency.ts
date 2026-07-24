@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { getDb } from '../db/index.js';
+import { getRunById } from '../db/query.js';
+import { getMaxTurnForSession } from '../db/query.js';
 
 export function configHash(config: Record<string, unknown>): string {
   return crypto.createHash('sha256')
@@ -18,14 +19,11 @@ export function computeTaskId(opts: {
   return crypto.createHash('sha256').update(input).digest('hex');
 }
 
-export function isTaskCompleted(taskId: string): boolean {
-  const db = getDb();
-  const row = db.prepare('SELECT status FROM runs WHERE run_id = ?').get(taskId) as { status: string } | undefined;
+export async function isTaskCompleted(taskId: string): Promise<boolean> {
+  const row = await getRunById(taskId);
   return row?.status === 'completed';
 }
 
-export function resumeFromTurn(sessionId: string): number {
-  const db = getDb();
-  const row = db.prepare('SELECT MAX(turn) as maxTurn FROM messages WHERE session_id = ?').get(sessionId) as { maxTurn: number | null } | undefined;
-  return row?.maxTurn ?? -1;
+export async function resumeFromTurn(sessionId: string): Promise<number> {
+  return getMaxTurnForSession(sessionId);
 }
