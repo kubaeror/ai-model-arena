@@ -69,7 +69,7 @@
     "@typescript-eslint/parser": "^8.64.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "c8": "^12.0.0",
-    "concurrently": "^10.0.3",
+    "concurrently": "^10.0.4",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.7.0",
     "tsx": "^4.19.2",
