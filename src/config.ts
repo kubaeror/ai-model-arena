@@ -25,6 +25,14 @@ export const ScenarioConfigSchema = z.object({
   shellPolicy: z.enum(['strict', 'permissive']).default('strict'),
   maxShellOutputBytes: z.number().int().positive().default(524288), // 512 KB
   webAccess: z.boolean().default(false),
+  executionProfile: z.enum([
+    'read-only-analysis',
+    'code-generation',
+    'test-runner',
+    'networked-research',
+    'artifact-validation',
+    'restricted-production-support',
+  ]).default('read-only-analysis'),
 });
 export type ScenarioConfig = z.output<typeof ScenarioConfigSchema>;
 

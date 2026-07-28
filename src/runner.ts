@@ -12,6 +12,7 @@ import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { Sandbox } from './sandbox/sandbox.js';
 import { generateManifest, writeManifest } from './sandbox/artifact-manifest.js';
+import { getProfile, getAllowedTools } from './profiles/definitions.js';
 import { runAgentLoop } from './agent-loop/loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
@@ -164,13 +165,18 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         startedAt: new Date().toISOString(),
       }, { disableFile: true });
 
+      const profile = getProfile(scenario.executionProfile ?? 'read-only-analysis');
+      const allowedTools = new Set(getAllowedTools(profile));
+
       const toolCtx: ToolExecutionContext = {
         sandboxDir,
         logger: logger.child('tools'),
         shellTimeoutMs: scenario.shellTimeoutMs,
         maxShellOutputBytes: scenario.maxShellOutputBytes,
         shellPolicy: scenario.shellPolicy,
-        webAccess: scenario.webAccess,
+        webAccess: scenario.webAccess && profile.webAccess,
+        executionProfile: profile.name,
+        allowedTools,
       };
 
       const sandbox = new Sandbox(sandboxDir);
@@ -220,7 +226,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             executors,
             systemPrompt: scenario.systemPrompt,
             task: scenario.task,
-            maxTurns: (task!.config.maxTurns as number) ?? scenario.maxTurns ?? 20,
+            maxTurns: Math.min(
+              (task!.config.maxTurns as number) ?? scenario.maxTurns ?? profile.maxTurns,
+              profile.maxTurns,
+            ),
             toolCtx,
             conv,
             logger: logger.child('loop'),

@@ -32,6 +32,7 @@ import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { generateManifest, writeManifest } from './sandbox/artifact-manifest.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
+import { getProfile, getAllowedTools } from './profiles/definitions.js';
 import { initDb } from './db/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
@@ -180,13 +181,18 @@ async function main(): Promise<void> {
     startedAt: startedAt.toISOString(),
   }, { dbSink: store, sessionId: session.id, disableFile: true });
 
+  const profile = getProfile(scenario.executionProfile ?? 'read-only-analysis');
+  const allowedTools = new Set(getAllowedTools(profile));
+
   const toolCtx: ToolExecutionContext = {
     sandboxDir,
     logger: logger.child('tools'),
     shellTimeoutMs: scenario.shellTimeoutMs,
     maxShellOutputBytes: scenario.maxShellOutputBytes,
     shellPolicy: scenario.shellPolicy,
-    webAccess: scenario.webAccess,
+    webAccess: scenario.webAccess && profile.webAccess,
+    executionProfile: profile.name,
+    allowedTools,
   };
 
   const sandbox = new Sandbox(sandboxDir);
@@ -253,7 +259,10 @@ async function main(): Promise<void> {
   await registry.loadCustomFromDb();
   const adapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger.child('adapter') });
   const executors = buildToolExecutors();
-  const maxTurns = scenario.maxTurns ?? resolved.maxTurns;
+  const maxTurns = Math.min(
+    scenario.maxTurns ?? resolved.maxTurns ?? profile.maxTurns,
+    profile.maxTurns,
+  );
 
   // Wire subagent support: strip recursive tools so subagents can't spawn sub-sub-agents
   const subagentToolNames = new Set(['task', 'todo_read', 'todo_write']);

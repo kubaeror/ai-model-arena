@@ -377,21 +377,42 @@ export const taskComplete: ToolExecutor = async (args) => {
   return { content: `Task marked as complete. ${summary}`.trim(), isError: false };
 };
 
+function wrapWithProfile(executor: ToolExecutor, toolName: string): ToolExecutor {
+  return async (args, ctx) => {
+    // Only enforce if a profile is explicitly set (backward compatible)
+    if (ctx.allowedTools && ctx.allowedTools.size > 0 && !ctx.allowedTools.has(toolName)) {
+      return {
+        content: `Error: tool "${toolName}" is not allowed by execution profile "${ctx.executionProfile ?? 'unknown'}". Allowed tools: ${[...ctx.allowedTools].sort().join(', ')}`,
+        isError: true,
+      };
+    }
+    if (toolName === 'web_fetch' || toolName === 'web_search') {
+      if (!ctx.webAccess) {
+        return {
+          content: `Error: ${toolName} requires webAccess to be enabled in the scenario configuration.`,
+          isError: true,
+        };
+      }
+    }
+    return executor(args, ctx);
+  };
+}
+
 /** Build the { name -> executor } map. The agent loop passes a fresh ctx per call. */
 export function buildToolExecutors(): ToolExecutorMap {
   return {
-    read_file: readFile,
-    write_file: writeFile,
-    edit_file: editFile,
-    list_files: listFiles,
-    glob: globFiles,
-    run_shell_command: runShellCommand,
-    search_code: searchCode,
-    web_fetch: webFetch,
-    web_search: webSearch,
-    todo_read: todoRead,
-    todo_write: todoWrite,
-    task,
-    task_complete: taskComplete,
+    read_file: wrapWithProfile(readFile, 'read_file'),
+    write_file: wrapWithProfile(writeFile, 'write_file'),
+    edit_file: wrapWithProfile(editFile, 'edit_file'),
+    list_files: wrapWithProfile(listFiles, 'list_files'),
+    glob: wrapWithProfile(globFiles, 'glob'),
+    run_shell_command: wrapWithProfile(runShellCommand, 'run_shell_command'),
+    search_code: wrapWithProfile(searchCode, 'search_code'),
+    web_fetch: wrapWithProfile(webFetch, 'web_fetch'),
+    web_search: wrapWithProfile(webSearch, 'web_search'),
+    todo_read: wrapWithProfile(todoRead, 'todo_read'),
+    todo_write: wrapWithProfile(todoWrite, 'todo_write'),
+    task: wrapWithProfile(task, 'task'),
+    task_complete: wrapWithProfile(taskComplete, 'task_complete'),
   };
 }

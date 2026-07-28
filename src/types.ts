@@ -81,6 +81,10 @@ export interface ToolExecutionContext {
   webAccess?: boolean;
   /** Subagent configuration — set by worker/runner for the `task` tool. */
   subagent?: SubagentConfig;
+  /** Execution profile name for this run. Enforced at tool level. */
+  executionProfile?: string;
+  /** Set of tool names allowed by the current execution profile. */
+  allowedTools?: Set<string>;
 }
 
 export interface SubagentConfig {
