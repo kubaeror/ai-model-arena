@@ -71,6 +71,8 @@ export interface RunStartOptions {
   forceBudget?: boolean;
   timeoutMs?: number;
   createdBy?: string;
+  promptId?: string;
+  promptVersion?: number;
 }
 
 export interface PerModelStatus {
@@ -273,6 +275,8 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     const task: Task = {
       taskId: `${runId}-${m.model}`,
       sessionId: `${runId}-${m.model}`,
+      promptId: opts.promptId,
+      promptVersion: opts.promptVersion ?? 1,
       provider: resolved?.providerId ?? 'unknown',
       model: m.model,
       scenario: spec.scenario,
