@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../lib/cn';
 
@@ -10,6 +11,13 @@ const badgeVariants = cva(
         status: '',
         provider: '',
         reasoning: '',
+      },
+      color: {
+        green: 'text-accent border border-accent',
+        red: 'text-danger border border-danger',
+        yellow: 'text-warn border border-warn',
+        blue: 'text-info border border-info',
+        slate: 'text-fg-1 border border-border',
       },
     },
     defaultVariants: { variant: 'tier' },
@@ -33,18 +41,22 @@ function statusClass(value: string): string {
 
 export interface BadgeProps
   extends VariantProps<typeof badgeVariants> {
-  value: string;
+  children?: ReactNode;
+  value?: string;
   className?: string;
 }
 
-export function Badge({ variant = 'tier', value, className }: BadgeProps) {
-  const colorClass = variant === 'tier' ? tierClass(value)
-    : variant === 'status' ? statusClass(value)
+export function Badge({ variant = 'tier', color, value, children, className }: BadgeProps) {
+  const display = value ?? (typeof children === 'string' ? children : '');
+  const colorClass = color != null
+    ? (badgeVariants({ color }) ?? '')
+    : variant === 'tier' ? tierClass(display)
+    : variant === 'status' ? statusClass(display)
     : variant === 'provider' ? 'text-info border border-info'
     : 'text-accent border border-accent';
   return (
-    <span className={cn(badgeVariants({ variant }), colorClass, className)}>
-      {value}
+    <span className={cn(badgeVariants({ variant, color }), colorClass, className)}>
+      {children ?? value}
     </span>
   );
 }

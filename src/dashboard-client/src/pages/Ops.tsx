@@ -72,9 +72,9 @@ export function Ops() {
         } />
         <PanelBody>
           <div className="flex items-center gap-2">
-            <Badge variant="status" value={killswitch.data?.active ? 'ACTIVE — runners blocked' : 'INACTIVE'} className={killswitch.data?.active ? 'text-red-500' : ''} />
+            <Badge variant="status" value={killswitch.data?.active ? 'ACTIVE — runners blocked' : 'INACTIVE'} className={killswitch.data?.active ? 'text-danger' : ''} />
             {(activateKs.error || deactivateKs.error) && (
-              <span className="text-red-500 text-12">{(activateKs.error ?? deactivateKs.error as Error).message}</span>
+              <span className="text-danger text-12">{(activateKs.error ?? deactivateKs.error as Error).message}</span>
             )}
           </div>
         </PanelBody>

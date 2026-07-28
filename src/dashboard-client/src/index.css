@@ -16,6 +16,12 @@
   --color-danger: var(--danger);
   --color-info: var(--info);
 
+  --color-muted: var(--fg-1);
+  --color-card: var(--bg-1);
+  --color-primary: var(--accent);
+  --color-foreground: var(--fg-0);
+  --color-background: var(--bg-0);
+
   --font-family-display: var(--font-display);
   --font-family-body: var(--font-body);
   --font-family-mono: var(--font-mono);
@@ -109,4 +115,20 @@ p, li, dd, blockquote {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.nice-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.nice-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.nice-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.nice-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
 }

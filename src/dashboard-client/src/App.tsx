@@ -1,8 +1,9 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { LiveProvider } from './hooks/useLive';
 import { SettingsProvider } from './providers/SettingsProvider';
+import { ToastProvider } from './components/ui/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Nav } from './components/Nav';
 import { Home } from './pages/Home';
@@ -26,6 +27,7 @@ import { CostLeaderboard } from './pages/CostLeaderboard';
 import { Budget } from './pages/Budget';
 import { Schedules } from './pages/Schedules';
 import { Regression } from './pages/Regression';
+import { NotFound } from './pages/NotFound';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -40,9 +42,10 @@ function Shell() {
       ) : (
         <LiveProvider>
           <SettingsProvider>
+            <ToastProvider>
             <a href="#main-content" className="sr-only focus:not-sr-only">Skip to main content</a>
             <Nav />
-            <main id="main-content" className="mx-auto max-w-1600 px-6 py-6">
+            <main id="main-content" className="mx-auto max-w-1600 px-3 md:px-6 py-4 md:py-6">
               <ErrorBoundary>
               <Routes>
                 <Route path="/" element={<Home />} />
@@ -65,10 +68,11 @@ function Shell() {
                 <Route path="/schedules" element={<Schedules />} />
                 <Route path="/regression" element={<Regression />} />
                 <Route path="/settings" element={<Settings />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<NotFound />} />
               </Routes>
               </ErrorBoundary>
             </main>
+            </ToastProvider>
           </SettingsProvider>
         </LiveProvider>
       )}

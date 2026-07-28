@@ -52,13 +52,13 @@ export function Regression() {
               {runMut.isPending ? 'Running...' : 'Run'}
             </Button>
           </div>
-          {runMut.error && <p className="text-red-500 text-sm mt-3">{(runMut.error as Error).message}</p>}
+          {runMut.error && <p className="text-danger text-sm mt-3">{(runMut.error as Error).message}</p>}
         </PanelBody>
       </Panel>
 
       {result && (
         <Panel>
-          <PanelHeader title={`Suite: ${result.suite}`} actions={<Badge variant="status" value={result.passed ? 'PASSED' : 'FAILED'} className={result.passed ? 'text-green-500' : 'text-red-500'} />} />
+          <PanelHeader title={`Suite: ${result.suite}`} actions={<Badge variant="status" value={result.passed ? 'PASSED' : 'FAILED'} className={result.passed ? 'text-accent' : 'text-danger'} />} />
           <PanelBody>
             <div className="text-12 text-fg-1 mb-3">
               Run: <code>{result.runId}</code> · Models: {result.model} · {new Date(result.timestamp).toLocaleString()}
@@ -78,7 +78,7 @@ export function Regression() {
                   <tr key={`${sr.scenario}-${i}`} className="border-b border-border/50">
                     <td className="py-2 px-2 font-mono text-12">{sr.scenario}</td>
                     <td className="py-2 px-2">
-                      <Badge variant="status" value={sr.success ? 'PASS' : 'FAIL'} className={sr.success ? 'text-green-500' : 'text-red-500'} />
+                      <Badge variant="status" value={sr.success ? 'PASS' : 'FAIL'} className={sr.success ? 'text-accent' : 'text-danger'} />
                     </td>
                     <td className="text-right py-2 px-2">{(sr.current.durationMs / 1000).toFixed(1)}s</td>
                     <td className="text-right py-2 px-2">{sr.current.turnsUsed}</td>
@@ -86,13 +86,13 @@ export function Regression() {
                       {!sr.regression ? <span className="text-12 text-fg-1">no baseline</span> : !sr.regression.passed ? (
                         <div className="flex flex-col gap-1">
                           {sr.regression.regressions.map((r, j) => (
-                            <span key={j} className="text-11 text-red-500">
+                            <span key={j} className="text-11 text-danger">
                               {r.metric}: {r.baseline.toFixed(2)} → {r.current.toFixed(2)} (Δ{r.change.toFixed(2)})
                             </span>
                           ))}
                         </div>
                       ) : (
-                        <span className="text-12 text-green-500">no regressions</span>
+                        <span className="text-12 text-accent">no regressions</span>
                       )}
                     </td>
                   </tr>

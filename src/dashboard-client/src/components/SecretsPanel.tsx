@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { Panel } from './ui/Panel';
+import { Input } from './ui/Input';
 
 interface SecretEntry {
   envVar: string;
@@ -91,108 +93,110 @@ export function SecretsPanel() {
     onError: (err: Error) => setError(err.message),
   });
 
-  if (isLoading) return <div className="p-4 text-gray-400">Loading secrets...</div>;
+  if (isLoading) return <div className="p-4 font-mono text-14 text-fg-1">Loading secrets...</div>;
 
   const secrets = data?.secrets ?? [];
   const platform = data?.platform ?? 'bare-metal';
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-white">API Keys</h2>
+        <h2 className="font-display text-20 font-600">API Keys</h2>
         {platform === 'kubernetes' && (
-          <span className="text-xs bg-blue-900 text-blue-300 px-2 py-1 rounded">
+          <span className="font-mono text-12 text-info border border-info rounded-inner px-2 py-1">
             Kubernetes — changes sync to cluster Secret
           </span>
         )}
       </div>
 
       {error && (
-        <div className="bg-red-900/30 border border-red-700 text-red-300 px-4 py-2 rounded text-sm">
+        <div className="border border-danger text-danger font-mono text-12 px-4 py-2 rounded-inner flex items-center gap-2 bg-danger/5">
           {error}
-          <button className="ml-2 underline" onClick={() => setError(null)}>Dismiss</button>
+          <button className="underline ml-auto" onClick={() => setError(null)}>Dismiss</button>
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-700 text-left text-gray-400">
-              <th className="py-2 pr-4">Provider</th>
-              <th className="py-2 pr-4">Environ Variable</th>
-              <th className="py-2 pr-4">Status</th>
-              <th className="py-2 pr-4">Value</th>
-              <th className="py-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {secrets.map((s) => (
-              <tr key={s.envVar} className="border-b border-gray-800">
-                <td className="py-2 pr-4 text-gray-200">{providerLabel(s.envVar)}</td>
-                <td className="py-2 pr-4 font-mono text-xs text-gray-400">{s.envVar}</td>
-                <td className="py-2 pr-4">
-                  {s.status === 'set' ? (
-                    <span className="text-green-400">✓ Set</span>
-                  ) : (
-                    <span className="text-yellow-400">✗ Missing</span>
-                  )}
-                </td>
-                <td className="py-2 pr-4 font-mono text-xs text-gray-500">
-                  {s.maskedValue ?? '—'}
-                </td>
-                <td className="py-2 space-x-2">
-                  {editEnvVar === s.envVar ? (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="password"
-                        className="bg-gray-800 border border-gray-600 rounded px-2 py-1 text-sm text-white w-40"
-                        placeholder="Enter key..."
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        autoFocus
-                      />
-                      <button
-                        className="text-blue-400 hover:text-blue-300 text-xs"
-                        onClick={() => setMutation.mutate({ envVar: s.envVar, value: editValue })}
-                        disabled={setMutation.isPending}
-                      >
-                        {setMutation.isPending ? 'Saving...' : 'Save'}
-                      </button>
-                      <button
-                        className="text-gray-400 hover:text-gray-300 text-xs"
-                        onClick={() => { setEditEnvVar(null); setEditValue(''); }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <button
-                        className="text-blue-400 hover:text-blue-300 text-xs"
-                        onClick={() => { setEditEnvVar(s.envVar); setEditValue(''); }}
-                      >
-                        {s.status === 'set' ? 'Edit' : 'Set'}
-                      </button>
-                      {s.status === 'set' && (
-                        <button
-                          className="text-red-400 hover:text-red-300 text-xs"
-                          onClick={() => {
-                            if (confirm(`Remove ${s.envVar} key?`)) {
-                              deleteMutation.mutate(s.envVar);
-                            }
-                          }}
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </>
-                  )}
-                </td>
+      <Panel>
+        <div className="overflow-x-auto">
+          <table className="w-full font-mono text-14">
+            <thead>
+              <tr className="border-b border-border text-left text-fg-1 text-12 uppercase">
+                <th className="py-2 pr-4">Provider</th>
+                <th className="py-2 pr-4">Environ Variable</th>
+                <th className="py-2 pr-4">Status</th>
+                <th className="py-2 pr-4">Value</th>
+                <th className="py-2">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {secrets.map((s) => (
+                <tr key={s.envVar} className="border-b border-border/50">
+                  <td className="py-2 pr-4 text-fg-0">{providerLabel(s.envVar)}</td>
+                  <td className="py-2 pr-4 font-mono text-12 text-fg-1">{s.envVar}</td>
+                  <td className="py-2 pr-4">
+                    {s.status === 'set' ? (
+                      <span className="text-accent">✓ Set</span>
+                    ) : (
+                      <span className="text-warn">✗ Missing</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 font-mono text-12 text-fg-1">
+                    {s.maskedValue ?? '—'}
+                  </td>
+                  <td className="py-2">
+                    {editEnvVar === s.envVar ? (
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="password"
+                          placeholder="Enter key..."
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          autoFocus
+                          className="w-40"
+                        />
+                        <button
+                          className="font-mono text-12 text-info hover:text-fg-0"
+                          onClick={() => setMutation.mutate({ envVar: s.envVar, value: editValue })}
+                          disabled={setMutation.isPending}
+                        >
+                          {setMutation.isPending ? 'Saving...' : 'Save'}
+                        </button>
+                        <button
+                          className="font-mono text-12 text-fg-1 hover:text-fg-0"
+                          onClick={() => { setEditEnvVar(null); setEditValue(''); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="font-mono text-12 text-info hover:text-fg-0"
+                          onClick={() => { setEditEnvVar(s.envVar); setEditValue(''); }}
+                        >
+                          {s.status === 'set' ? 'Edit' : 'Set'}
+                        </button>
+                        {s.status === 'set' && (
+                          <button
+                            className="font-mono text-12 text-danger hover:text-fg-0"
+                            onClick={() => {
+                              if (confirm(`Remove ${s.envVar} key?`)) {
+                                deleteMutation.mutate(s.envVar);
+                              }
+                            }}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
     </div>
   );
 }

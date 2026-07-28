@@ -60,7 +60,7 @@ export function Schedules() {
     { key: 'scenario', header: 'Scenario', sortable: true },
     { key: 'models', header: 'Models', render: r => <span className="font-mono text-12">{r.models.join(', ')}</span> },
     { key: 'cron', header: 'Cron', render: r => <code className="text-12">{r.cron}</code>, sortable: true },
-    { key: 'enabled', header: 'Status', render: r => r.enabled ? <Badge variant="status" value="enabled" className="text-green-500" /> : <Badge variant="status" value="disabled" className="text-fg-1" /> },
+    { key: 'enabled', header: 'Status', render: r => r.enabled ? <Badge variant="status" value="enabled" className="text-accent" /> : <Badge variant="status" value="disabled" className="text-fg-1" /> },
     { key: 'state', header: 'State', render: r => r.state ? <span className="text-12">{r.state.status}{r.state.totalRuns > 0 ? ` (${r.state.totalRuns} runs)` : ''}</span> : '—' },
     {
       key: 'actions', header: 'Actions', render: r => (
@@ -70,7 +70,7 @@ export function Schedules() {
   ];
 
   if (isLoading) return <div className="flex justify-center py-12"><Spinner /></div>;
-  if (error) return <div className="text-red-500 py-4">Error: {(error as Error).message}</div>;
+  if (error) return <div className="text-danger py-4">Error: {(error as Error).message}</div>;
 
   return (
     <div className="flex flex-col gap-6">
@@ -87,7 +87,7 @@ export function Schedules() {
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create Schedule">
         <div className="flex flex-col gap-4">
-          {formError && <p className="text-red-500 text-sm">{formError}</p>}
+          {formError && <p className="text-danger text-sm">{formError}</p>}
 
           <label className="flex flex-col gap-1">
             <span className="text-12 text-fg-1">Scenario</span>

@@ -126,7 +126,7 @@ export function Queues() {
                     <td className="px-2 py-1">{t.id ?? t.taskId ?? '-'}</td>
                     <td className="px-2 py-1">{t.model ?? '-'}</td>
                     <td className="px-2 py-1">{t.scenario ?? '-'}</td>
-                    <td className="px-2 py-1 max-w-[200px] truncate text-red-500">{t.error ?? '-'}</td>
+                    <td className="px-2 py-1 max-w-[200px] truncate text-danger">{t.error ?? '-'}</td>
                     <td className="px-2 py-1">
                       <Button
                         variant="ghost"

@@ -2,7 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useLive } from '../hooks/useLive.js';
 import { listRuns } from '../lib/api.js';
-import { Card, Badge, Spinner } from '../components/ui.js';
+import { Panel } from '../components/ui/Panel';
+import { Badge } from '../components/ui/Badge';
+import { Spinner } from '../components/ui/Spinner';
 import type { ProcStatus } from '../lib/types.js';
 
 function statusColor(status: string): 'green' | 'red' | 'yellow' | 'slate' {
@@ -27,22 +29,22 @@ function fmtMem(bytes?: number): string {
 
 function ModelCard({ p }: { p: ProcStatus }) {
   return (
-    <Card className="p-1">
+    <Panel className="p-1">
       <div className="flex items-center justify-between">
         <div className="font-medium">{p.model ?? p.name}</div>
         <Badge color={statusColor(p.status)}>{p.status}</Badge>
       </div>
-      <div className="mt-2 text-xs text-muted space-y-0.5">
-        <div>scenario: <span className="text-foreground">{p.scenario ?? '—'}</span></div>
-        <div>cpu: <span className="text-foreground">{p.cpu ?? 0}%</span> · mem: <span className="text-foreground">{fmtMem(p.memory)}</span></div>
-        <div>uptime: <span className="text-foreground">{fmtUptime(p.uptime)}</span> · restarts: <span className="text-foreground">{p.restarts ?? 0}</span></div>
+      <div className="mt-2 text-xs text-fg-1 space-y-0.5">
+        <div>scenario: <span className="text-fg-0">{p.scenario ?? '—'}</span></div>
+        <div>cpu: <span className="text-fg-0">{p.cpu ?? 0}%</span> · mem: <span className="text-fg-0">{fmtMem(p.memory)}</span></div>
+        <div>uptime: <span className="text-fg-0">{fmtUptime(p.uptime)}</span> · restarts: <span className="text-fg-0">{p.restarts ?? 0}</span></div>
         {p.runId && (
           <div>
             run: <Link className="text-primary hover:underline" to={`/runs/${p.runId}`}>{p.runId}</Link>
           </div>
         )}
       </div>
-    </Card>
+    </Panel>
   );
 }
 
@@ -58,9 +60,9 @@ export function Dashboard() {
       </div>
 
       <section>
-        <h2 className="text-sm font-medium text-muted mb-2">Processes ({processes.length})</h2>
+        <h2 className="text-sm font-medium text-fg-1 mb-2">Processes ({processes.length})</h2>
         {processes.length === 0 ? (
-          <Card className="p-6 text-center text-muted text-sm">No worker processes. Launch a run from the “Run” page.</Card>
+          <Panel className="p-6 text-center text-fg-1 text-sm">No worker processes. Launch a run from the “Run” page.</Panel>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {processes.map((p) => (
@@ -71,24 +73,24 @@ export function Dashboard() {
       </section>
 
       <section>
-        <h2 className="text-sm font-medium text-muted mb-2">Recent runs</h2>
-        <Card className="divide-y divide-border">
+        <h2 className="text-sm font-medium text-fg-1 mb-2">Recent runs</h2>
+        <Panel className="divide-y divide-border">
           {runsQuery.isLoading ? (
-            <div className="p-1 flex items-center gap-2 text-muted text-sm"><Spinner /> Loading runs…</div>
+            <div className="p-1 flex items-center gap-2 text-fg-1 text-sm"><Spinner /> Loading runs…</div>
           ) : runsQuery.data && runsQuery.data.length ? (
             runsQuery.data.map((r) => (
-              <Link key={r.runId} to={`/runs/${r.runId}`} className="flex items-center justify-between p-3 hover:bg-muted/10">
+              <Link key={r.runId} to={`/runs/${r.runId}`} className="flex items-center justify-between p-3 hover:bg-bg-2">
                 <div>
-                  <div className="font-medium text-sm">{r.scenario} <span className="text-muted">· {r.runId}</span></div>
-                  <div className="text-xs text-muted">{r.models.join(', ')} · {new Date(r.startedAt).toLocaleString()}</div>
+                  <div className="font-medium text-sm">{r.scenario} <span className="text-fg-1">· {r.runId}</span></div>
+                  <div className="text-xs text-fg-1">{r.models.join(', ')} · {new Date(r.startedAt).toLocaleString()}</div>
                 </div>
                 <Badge color={r.status === 'completed' ? 'slate' : r.status === 'running' ? 'green' : r.status === 'errored' ? 'red' : 'yellow'}>{r.status}</Badge>
               </Link>
             ))
           ) : (
-            <div className="p-1 text-muted text-sm">No runs yet.</div>
+            <div className="p-1 text-fg-1 text-sm">No runs yet.</div>
           )}
-        </Card>
+        </Panel>
       </section>
     </div>
   );

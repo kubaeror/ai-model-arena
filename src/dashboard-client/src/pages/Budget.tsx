@@ -33,7 +33,7 @@ export function Budget() {
   });
 
   if (isLoading) return <div className="flex justify-center py-12"><Spinner /></div>;
-  if (error) return <div className="text-red-500 py-4">Error loading budget: {(error as Error).message}</div>;
+  if (error) return <div className="text-danger py-4">Error loading budget: {(error as Error).message}</div>;
   if (!data) return <EmptyState title="No budget data" />;
 
   const dailyPct = pct(data.global.daily.spent, data.global.daily.limit);

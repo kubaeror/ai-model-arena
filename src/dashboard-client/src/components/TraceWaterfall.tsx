@@ -7,8 +7,8 @@ import type { SpanMeta, TraceTree } from '../lib/types.js';
  * chat = blue, execute_tool = orange, error = red, root = slate.
  */
 function spanColor(span: SpanMeta): string {
-  if (span.status === 'error') return 'bg-red-500';
-  if (span.type === 'chat') return 'bg-blue-500';
+  if (span.status === 'error') return 'bg-danger';
+  if (span.type === 'chat') return 'bg-info';
   if (span.type === 'execute_tool') return 'bg-orange-500';
   if (span.type === 'root') return 'bg-slate-400';
   return 'bg-slate-300';
@@ -31,20 +31,20 @@ export function TraceWaterfall({ trace }: { trace: TraceTree | undefined }) {
   }, [trace]);
 
   if (!trace) {
-    return <div className="p-1 text-muted text-sm">No trace data available for this run.</div>;
+    return <div className="p-1 text-fg-1 text-sm">No trace data available for this run.</div>;
   }
   if (trace.traceId == null) {
-    return <div className="p-1 text-muted text-sm">Tracing was disabled for this run.</div>;
+    return <div className="p-1 text-fg-1 text-sm">Tracing was disabled for this run.</div>;
   }
   if (!spans.length) {
-    return <div className="p-1 text-muted text-sm">No spans recorded.</div>;
+    return <div className="p-1 text-fg-1 text-sm">No spans recorded.</div>;
   }
 
   const total = trace.totalDurationMs || Math.max(...spans.map((s) => s.offset + (s.durationMs ?? 0))) || 1;
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-3 text-xs text-muted">
+      <div className="flex items-center gap-3 text-xs text-fg-1">
         <span>trace <code className="text-foreground">{trace.traceId}</code></span>
         <span>· {trace.spanCount} spans</span>
         <span>· {trace.errorCount} errors</span>
@@ -56,7 +56,7 @@ export function TraceWaterfall({ trace }: { trace: TraceTree | undefined }) {
           const widthPct = total > 0 ? Math.max(0.5, (dur / total) * 100) : 1;
           return (
             <div key={s.spanId} className="flex items-center gap-2 text-xs">
-              <div className="w-40 shrink-0 truncate text-muted" title={label(s)}>{label(s)}</div>
+              <div className="w-40 shrink-0 truncate text-fg-1" title={label(s)}>{label(s)}</div>
               <div className="relative flex-1 h-1 bg-muted/10 rounded">
                 <div
                   className={`absolute h-1 rounded ${spanColor(s)}`}
@@ -64,7 +64,7 @@ export function TraceWaterfall({ trace }: { trace: TraceTree | undefined }) {
                   title={`${label(s)} · ${dur}ms · ${s.status}`}
                 />
               </div>
-              <div className="w-20 shrink-0 text-right text-muted">{dur}ms</div>
+              <div className="w-20 shrink-0 text-right text-fg-1">{dur}ms</div>
             </div>
           );
         })}

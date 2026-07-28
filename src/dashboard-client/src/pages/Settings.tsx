@@ -70,7 +70,7 @@ function ProvidersPanel() {
   });
 
   if (isLoading) return <Spinner />;
-  if (error) return <div className="text-red-500">{(error as Error).message}</div>;
+  if (error) return <div className="text-danger">{(error as Error).message}</div>;
 
   const builtin = data?.builtin ?? [];
   const custom = data?.custom ?? [];
@@ -124,8 +124,8 @@ function ProvidersPanel() {
                     <td className="px-2 py-2 text-fg-1">{c.api_base ?? c.apiBase ?? '-'}</td>
                     <td className="px-2 py-2">{c.auth_scheme ?? '-'}</td>
                     <td className="px-2 py-2">
-                      {c.health?.reachable === true ? <Badge variant="status" value="reachable" className="text-green-500" /> :
-                       c.health?.reachable === false ? <Badge variant="status" value="unreachable" className="text-red-500" /> :
+                      {c.health?.reachable === true ? <Badge variant="status" value="reachable" className="text-accent" /> :
+                       c.health?.reachable === false ? <Badge variant="status" value="unreachable" className="text-danger" /> :
                        <span className="text-fg-1">—</span>}
                     </td>
                     <td className="px-2 py-2">
@@ -141,7 +141,7 @@ function ProvidersPanel() {
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create Provider">
         <div className="flex flex-col gap-4">
-          {formError && <p className="text-red-500 text-sm">{formError}</p>}
+          {formError && <p className="text-danger text-sm">{formError}</p>}
           <label className="flex flex-col gap-1">
             <span className="text-12 text-fg-1">ID (lowercase kebab-case)</span>
             <input type="text" value={form.id} onChange={e => setForm(f => ({ ...f, id: e.target.value }))} className="rounded-inner border border-border bg-bg-0 px-3 py-2 text-14 text-fg-0" />

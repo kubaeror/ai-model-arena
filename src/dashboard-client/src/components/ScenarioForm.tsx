@@ -3,7 +3,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import type { ScenarioConfig, StarterFile } from '../lib/types.js';
 import { createScenario, updateScenario } from '../lib/api.js';
-import { Button, Card, Field, Input, Textarea, Badge } from './ui.js';
+import { Button } from './ui/Button';
+import { Panel } from './ui/Panel';
+import { Field } from './ui/Field';
+import { Input } from './ui/Input';
+import { Textarea } from './ui/Textarea';
+import { Badge } from './ui/Badge';
 import { CodeEditor } from './CodeEditor.js';
 
 interface Props {
@@ -56,7 +61,7 @@ export function ScenarioForm({ initial, onSaved, onCancel }: Props) {
   };
 
   return (
-    <Card className="p-5 max-w-4xl space-y-1">
+    <Panel className="p-5 max-w-4xl flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">{initial ? 'Edit scenario' : 'New scenario'}</h2>
         {initial && <Badge>{sc?.name}</Badge>}
@@ -82,9 +87,9 @@ export function ScenarioForm({ initial, onSaved, onCancel }: Props) {
       <div className="border-t border-border pt-1">
         <div className="flex items-center justify-between mb-2">
           <div className="text-sm font-medium">Starter files (seeded into each sandbox)</div>
-          <Button size="sm" variant="outline" onClick={() => setFiles((f) => [...f, { ...EMPTY_FILE }])}><Plus size={14} /> Add file</Button>
+          <Button size="sm" variant="ghost" onClick={() => setFiles((f) => [...f, { ...EMPTY_FILE }])}><Plus size={14} /> Add file</Button>
         </div>
-        {files.length === 0 && <div className="text-muted text-xs">No starter files — the agent starts in an empty workspace.</div>}
+        {files.length === 0 && <div className="text-fg-1 text-xs">No starter files — the agent starts in an empty workspace.</div>}
         <div className="space-y-1">
           {files.map((f, i) => (
             <div key={i} className="space-y-1">
@@ -98,13 +103,13 @@ export function ScenarioForm({ initial, onSaved, onCancel }: Props) {
         </div>
       </div>
 
-      {mutation.isError && <div className="text-red-400 text-sm">{(mutation.error as Error)?.message}</div>}
+      {mutation.isError && <div className="font-mono text-12 text-danger">{(mutation.error as Error)?.message}</div>}
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="ghost" onClick={onCancel}>Cancel</Button>
         <Button onClick={() => mutation.mutate()} disabled={mutation.isPending || !name || !systemPrompt || !task}>
           {mutation.isPending ? 'Saving…' : initial ? 'Save changes' : 'Create scenario'}
         </Button>
       </div>
-    </Card>
+    </Panel>
   );
 }

@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAnomalies, resolveAnomaly } from '../lib/api.js';
 import type { AnomalyRecord, AnomalySeverity } from '../lib/types.js';
-import { Badge, Card, Spinner } from '../components/ui.js';
+import { Panel } from '../components/ui/Panel';
+import { Badge } from '../components/ui/Badge';
+import { Spinner } from '../components/ui/Spinner';
 
 const SEVERITY_COLOR: Record<AnomalySeverity, 'red' | 'yellow' | 'slate'> = {
   critical: 'red',
@@ -41,39 +43,39 @@ export function Anomalies() {
     <div className="p-6 space-y-1">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Anomalies</h1>
-        <span className="text-xs text-muted">{anomalies.length} shown</span>
+        <span className="text-xs text-fg-1">{anomalies.length} shown</span>
       </div>
 
-      <Card className="p-3 flex flex-wrap gap-2 items-center text-xs">
+      <Panel className="p-3 flex flex-wrap gap-2 items-center text-xs">
         <input
-          className="px-2 py-1 bg-card border border-border rounded w-40"
+          className="px-2 py-1 bg-bg-1 border border-border rounded w-40"
           placeholder="filter model"
           value={model}
           onChange={(e) => setModel(e.target.value)}
         />
-        <select className="px-2 py-1 bg-card border border-border rounded" value={type} onChange={(e) => setType(e.target.value)}>
+        <select className="px-2 py-1 bg-bg-1 border border-border rounded" value={type} onChange={(e) => setType(e.target.value)}>
           <option value="">all types</option>
           {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
-        <select className="px-2 py-1 bg-card border border-border rounded" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+        <select className="px-2 py-1 bg-bg-1 border border-border rounded" value={severity} onChange={(e) => setSeverity(e.target.value)}>
           <option value="">all severities</option>
           {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select className="px-2 py-1 bg-card border border-border rounded" value={resolved} onChange={(e) => setResolved(e.target.value)}>
+        <select className="px-2 py-1 bg-bg-1 border border-border rounded" value={resolved} onChange={(e) => setResolved(e.target.value)}>
           <option value="">any state</option>
           <option value="false">unresolved</option>
           <option value="true">resolved</option>
         </select>
-      </Card>
+      </Panel>
 
-      <Card className="overflow-auto nice-scroll">
+      <Panel className="overflow-auto nice-scroll">
         {query.isLoading ? (
-          <div className="p-1 flex gap-2 items-center text-muted text-sm"><Spinner /> Loading…</div>
+          <div className="p-1 flex gap-2 items-center text-fg-1 text-sm"><Spinner /> Loading…</div>
         ) : anomalies.length === 0 ? (
-          <div className="p-6 text-center text-muted text-sm">No anomalies match these filters.</div>
+          <div className="p-6 text-center text-fg-1 text-sm">No anomalies match these filters.</div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="text-xs text-muted border-b border-border">
+            <thead className="text-xs text-fg-1 border-b border-border">
               <tr>
                 <th className="text-left px-3 py-2">Severity</th>
                 <th className="text-left px-3 py-2">Type</th>
@@ -87,21 +89,21 @@ export function Anomalies() {
             </thead>
             <tbody>
               {anomalies.map((a: AnomalyRecord) => (
-                <tr key={a.id} className="border-b border-border/50 hover:bg-muted/5">
+                <tr key={a.id} className="border-b border-border/50 hover:bg-bg/5">
                   <td className="px-3 py-2"><Badge color={SEVERITY_COLOR[a.severity]}>{a.severity}</Badge></td>
                   <td className="px-3 py-2 font-mono text-xs">{a.type}</td>
                   <td className="px-3 py-2">{a.model}</td>
-                  <td className="px-3 py-2 text-xs text-muted truncate max-w-[12rem]"><a className="hover:underline" href={`#/runs/${a.run_id}`}>{a.run_id}</a></td>
+                  <td className="px-3 py-2 text-xs text-fg-1 truncate max-w-[12rem]"><a className="hover:underline" href={`#/runs/${a.run_id}`}>{a.run_id}</a></td>
                   <td className="px-3 py-2 text-xs max-w-md">{a.description}</td>
-                  <td className="px-3 py-2 text-xs text-muted">{new Date(a.detected_at).toLocaleString()}</td>
+                  <td className="px-3 py-2 text-xs text-fg-1">{new Date(a.detected_at).toLocaleString()}</td>
                   <td className="px-3 py-2">
                     {a.resolved ? <Badge color="green">{a.resolved_as ?? 'resolved'}</Badge> : <Badge color="red">open</Badge>}
                   </td>
                   <td className="px-3 py-2 text-right">
                     {!a.resolved && (
                       <div className="flex gap-1 justify-end">
-                        <button className="text-xs px-2 py-1 rounded border border-border hover:bg-muted/10" onClick={async () => { await resolveAnomaly(a.id, 'resolved'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>Resolve</button>
-                        <button className="text-xs px-2 py-1 rounded border border-border hover:bg-muted/10" onClick={async () => { await resolveAnomaly(a.id, 'false_positive'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>False positive</button>
+                        <button className="text-xs px-2 py-1 rounded border border-border hover:bg-bg-2" onClick={async () => { await resolveAnomaly(a.id, 'resolved'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>Resolve</button>
+                        <button className="text-xs px-2 py-1 rounded border border-border hover:bg-bg-2" onClick={async () => { await resolveAnomaly(a.id, 'false_positive'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>False positive</button>
                       </div>
                     )}
                   </td>
@@ -110,7 +112,7 @@ export function Anomalies() {
             </tbody>
           </table>
         )}
-      </Card>
+      </Panel>
     </div>
   );
 }
