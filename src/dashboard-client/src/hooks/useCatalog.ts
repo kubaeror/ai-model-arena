@@ -118,7 +118,7 @@ export function useBenchmarks(filters: BenchmarkFilters = {}) {
       if (filters.name) params.set('name', filters.name);
       if (filters.source) params.set('source', filters.source);
       if (filters.model) params.set('model', filters.model);
-      const res = await apiFetchJson<{ data: BenchmarkRow[] }>(`/api/benchmarks?${params.toString()}`);
+      const res = await apiFetchJson<{ data: BenchmarkRow[] }>(`/api/catalog/benchmarks?${params.toString()}`);
       return res.data;
     },
     refetchInterval: 300_000,

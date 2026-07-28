@@ -800,7 +800,7 @@ export async function queryTpsLeaderboard(): Promise<any[]> {
     FROM models m
     LEFT JOIN model_runtime_stats r ON r.model_id = m.id
     GROUP BY m.id
-    HAVING run_count > 0
+    HAVING COUNT(r.run_id) > 0
     ORDER BY avg_tps DESC
   `));
 }
