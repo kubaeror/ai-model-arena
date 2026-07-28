@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
 import { Tabs } from '../components/ui/Tabs';
@@ -39,9 +40,14 @@ export function ModelDetail() {
   ];
 
   return (
+    <PageShell
+      title={model.name}
+      description={`${model.provider_id} · context ${model.context_limit?.toLocaleString() ?? '-'}`}
+      breadcrumbs={[{ label: 'Catalog', to: '/catalog' }, { label: model.name }]}
+      loading={isLoading}
+    >
     <div className="flex flex-col gap-4">
       <header className="flex flex-wrap items-center gap-4">
-        <h1 className="font-display text-44 font-700">{model.name}</h1>
         <Badge variant="provider" value={model.provider_id} />
         {model.status && <Badge variant="status" value={model.status} />}
         {model.reasoning && <Badge variant="reasoning" value="reason" />}
@@ -132,5 +138,6 @@ export function ModelDetail() {
         </div>
       )}
     </div>
+    </PageShell>
   );
 }

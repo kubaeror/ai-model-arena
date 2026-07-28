@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { cva, type VariantProps } from 'class-variance-authority';
+import { cva } from 'class-variance-authority';
 import { cn } from '../../lib/cn';
 
 const badgeVariants = cva(
@@ -7,55 +7,53 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        tier: '',
-        status: '',
-        provider: '',
-        reasoning: '',
-      },
-      color: {
-        green: 'text-accent border border-accent',
-        red: 'text-danger border border-danger',
-        yellow: 'text-warn border border-warn',
-        blue: 'text-info border border-info',
-        slate: 'text-fg-1 border border-border',
+        tier: 'text-accent border border-accent',
+        status: 'text-fg-1 border border-border',
+        provider: 'text-info border border-info',
+        reasoning: 'text-accent border border-accent',
+        success: 'text-accent border border-accent',
+        failure: 'text-danger border border-danger',
+        neutral: 'text-fg-1 border border-border',
       },
     },
-    defaultVariants: { variant: 'tier' },
+    defaultVariants: { variant: 'neutral' },
   },
 );
 
-function tierClass(value: string): string {
-  if (value === 'S+') return 'text-accent border border-accent';
-  if (value === 'S') return 'text-accent border border-accent';
-  if (value.startsWith('A')) return 'text-info border border-info';
-  if (value.startsWith('B') || value.startsWith('C')) return 'text-fg-1 border border-border';
-  return 'text-fg-1 border border-border';
+type BadgeVariant = 'tier' | 'status' | 'provider' | 'reasoning' | 'success' | 'failure' | 'neutral';
+
+function variantFromValue(variant: BadgeVariant, value: string): BadgeVariant {
+  if (variant === 'tier') {
+    if (value === 'S+' || value === 'S' || value === 'PASS') return 'tier';
+    if (value.startsWith('A') || value === 'pass') return 'provider';
+    if (value.startsWith('B') || value.startsWith('C')) return 'neutral';
+    if (value === 'FAIL' || value === 'fail' || value === 'errored') return 'failure';
+    return 'neutral';
+  }
+  if (variant === 'status') {
+    if (value === 'deprecated' || value === 'error') return 'failure';
+    if (value === 'beta') return 'tier';
+    if (value === 'alpha') return 'neutral';
+    if (value === 'reachable' || value === 'running') return 'success';
+    if (value === 'unreachable') return 'failure';
+    if (value === 'INACTIVE' || value === 'idle') return 'neutral';
+    return 'neutral';
+  }
+  return variant;
 }
 
-function statusClass(value: string): string {
-  if (value === 'deprecated') return 'text-danger border border-danger';
-  if (value === 'beta') return 'text-warn border border-warn';
-  if (value === 'alpha') return 'text-fg-1 border border-border';
-  return 'text-fg-1 border border-border';
-}
-
-export interface BadgeProps
-  extends VariantProps<typeof badgeVariants> {
+export interface BadgeProps {
   children?: ReactNode;
   value?: string;
+  variant?: BadgeVariant;
   className?: string;
 }
 
-export function Badge({ variant = 'tier', color, value, children, className }: BadgeProps) {
+export function Badge({ variant = 'neutral', value, children, className }: BadgeProps) {
   const display = value ?? (typeof children === 'string' ? children : '');
-  const colorClass = color != null
-    ? (badgeVariants({ color }) ?? '')
-    : variant === 'tier' ? tierClass(display)
-    : variant === 'status' ? statusClass(display)
-    : variant === 'provider' ? 'text-info border border-info'
-    : 'text-accent border border-accent';
+  const resolved = variantFromValue(variant, display);
   return (
-    <span className={cn(badgeVariants({ variant, color }), colorClass, className)}>
+    <span className={cn(badgeVariants({ variant: resolved }), className)}>
       {children ?? value}
     </span>
   );

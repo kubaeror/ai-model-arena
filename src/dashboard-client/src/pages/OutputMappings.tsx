@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -24,8 +25,12 @@ export function OutputMappings() {
   });
 
   return (
+    <PageShell
+      title="Output Mappings"
+      description="Global output location mapping for run results"
+      loading={isLoading}
+    >
     <div className="flex flex-col gap-4">
-      <h1 className="font-display text-28 font-600">Output Mappings</h1>
       <Panel>
         <PanelHeader title="Global Output Location Mapping" />
         <PanelBody>
@@ -53,5 +58,6 @@ export function OutputMappings() {
         </PanelBody>
       </Panel>
     </div>
+    </PageShell>
   );
 }

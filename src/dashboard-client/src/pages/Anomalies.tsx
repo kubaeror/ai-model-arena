@@ -2,15 +2,17 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAnomalies, resolveAnomaly } from '../lib/api.js';
 import type { AnomalyRecord, AnomalySeverity } from '../lib/types.js';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
-import { Spinner } from '../components/ui/Spinner';
+import { Select } from '../components/ui/Select';
+import { Button } from '../components/ui/Button';
 
-const SEVERITY_COLOR: Record<AnomalySeverity, 'red' | 'yellow' | 'slate'> = {
-  critical: 'red',
-  high: 'red',
-  medium: 'yellow',
-  low: 'slate',
+const SEVERITY_COLOR_MAP: Record<AnomalySeverity, 'failure' | 'reasoning' | 'neutral'> = {
+  critical: 'failure',
+  high: 'failure',
+  medium: 'reasoning',
+  low: 'neutral',
 };
 
 const TYPES = ['latency', 'loop', 'token_spike', 'cost_spike', 'error_rate', 'silent_failure'];
@@ -40,70 +42,85 @@ export function Anomalies() {
   const anomalies = query.data ?? [];
 
   return (
-    <div className="p-6 space-y-1">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Anomalies</h1>
-        <span className="text-xs text-fg-1">{anomalies.length} shown</span>
-      </div>
-
-      <Panel className="p-3 flex flex-wrap gap-2 items-center text-xs">
-        <input
-          className="px-2 py-1 bg-bg-1 border border-border rounded w-40"
-          placeholder="filter model"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
+    <PageShell
+      title="Anomalies"
+      description={`${anomalies.length} shown — auto-detected every 5 minutes`}
+      loading={query.isLoading}
+    >
+      <Panel className="p-3 flex flex-wrap gap-2 items-center">
+        <Select
+          label="Type"
+          value={type}
+          onChange={setType}
+          options={[{ value: '', label: 'All types' }, ...TYPES.map(t => ({ value: t, label: t }))]}
         />
-        <select className="px-2 py-1 bg-bg-1 border border-border rounded" value={type} onChange={(e) => setType(e.target.value)}>
-          <option value="">all types</option>
-          {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <select className="px-2 py-1 bg-bg-1 border border-border rounded" value={severity} onChange={(e) => setSeverity(e.target.value)}>
-          <option value="">all severities</option>
-          {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="px-2 py-1 bg-bg-1 border border-border rounded" value={resolved} onChange={(e) => setResolved(e.target.value)}>
-          <option value="">any state</option>
-          <option value="false">unresolved</option>
-          <option value="true">resolved</option>
-        </select>
+        <Select
+          label="Severity"
+          value={severity}
+          onChange={setSeverity}
+          options={[{ value: '', label: 'All severities' }, ...SEVERITIES.map(s => ({ value: s, label: s }))]}
+        />
+        <Select
+          label="State"
+          value={resolved}
+          onChange={setResolved}
+          options={[
+            { value: '', label: 'Any state' },
+            { value: 'false', label: 'Unresolved' },
+            { value: 'true', label: 'Resolved' },
+          ]}
+        />
+        <label className="flex flex-col gap-1 mt-2 w-40">
+          <span className="font-body text-12 text-fg-1 uppercase">Model</span>
+          <input
+            className="h-40 px-3 rounded-inner border border-border bg-bg-2 font-mono text-14 text-fg-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            placeholder="filter model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+          />
+        </label>
       </Panel>
 
       <Panel className="overflow-auto nice-scroll">
-        {query.isLoading ? (
-          <div className="p-1 flex gap-2 items-center text-fg-1 text-sm"><Spinner /> Loading…</div>
-        ) : anomalies.length === 0 ? (
-          <div className="p-6 text-center text-fg-1 text-sm">No anomalies match these filters.</div>
+        {anomalies.length === 0 ? (
+          <div className="p-6 text-center">
+            <p className="font-display text-20 text-fg-1">No anomalies match these filters.</p>
+          </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-xs text-fg-1 border-b border-border">
+          <table className="w-full text-14">
+            <thead className="font-mono text-12 uppercase text-fg-1 border-b border-border">
               <tr>
-                <th className="text-left px-3 py-2">Severity</th>
-                <th className="text-left px-3 py-2">Type</th>
-                <th className="text-left px-3 py-2">Model</th>
-                <th className="text-left px-3 py-2">Run</th>
-                <th className="text-left px-3 py-2">Description</th>
-                <th className="text-left px-3 py-2">Detected</th>
-                <th className="text-left px-3 py-2">State</th>
-                <th className="px-3 py-2"></th>
+                <th className="text-left px-3 py-2 font-500">Severity</th>
+                <th className="text-left px-3 py-2 font-500">Type</th>
+                <th className="text-left px-3 py-2 font-500">Model</th>
+                <th className="text-left px-3 py-2 font-500">Run</th>
+                <th className="text-left px-3 py-2 font-500">Description</th>
+                <th className="text-left px-3 py-2 font-500">Detected</th>
+                <th className="text-left px-3 py-2 font-500">State</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
               {anomalies.map((a: AnomalyRecord) => (
-                <tr key={a.id} className="border-b border-border/50 hover:bg-bg/5">
-                  <td className="px-3 py-2"><Badge color={SEVERITY_COLOR[a.severity]}>{a.severity}</Badge></td>
-                  <td className="px-3 py-2 font-mono text-xs">{a.type}</td>
-                  <td className="px-3 py-2">{a.model}</td>
-                  <td className="px-3 py-2 text-xs text-fg-1 truncate max-w-[12rem]"><a className="hover:underline" href={`#/runs/${a.run_id}`}>{a.run_id}</a></td>
-                  <td className="px-3 py-2 text-xs max-w-md">{a.description}</td>
-                  <td className="px-3 py-2 text-xs text-fg-1">{new Date(a.detected_at).toLocaleString()}</td>
+                <tr key={a.id} className="border-b border-border/50 hover:bg-bg-2">
                   <td className="px-3 py-2">
-                    {a.resolved ? <Badge color="green">{a.resolved_as ?? 'resolved'}</Badge> : <Badge color="red">open</Badge>}
+                    <Badge variant={SEVERITY_COLOR_MAP[a.severity]}>{a.severity}</Badge>
+                  </td>
+                  <td className="px-3 py-2 font-mono text-12">{a.type}</td>
+                  <td className="px-3 py-2 text-14">{a.model}</td>
+                  <td className="px-3 py-2 text-12 text-fg-1 truncate max-w-[12rem]">
+                    <a className="hover:underline text-accent" href={`#/runs/${a.run_id}`}>{a.run_id}</a>
+                  </td>
+                  <td className="px-3 py-2 text-12 max-w-md">{a.description}</td>
+                  <td className="px-3 py-2 text-12 text-fg-1">{new Date(a.detected_at).toLocaleString()}</td>
+                  <td className="px-3 py-2">
+                    {a.resolved ? <Badge variant="success">{a.resolved_as ?? 'resolved'}</Badge> : <Badge variant="failure">open</Badge>}
                   </td>
                   <td className="px-3 py-2 text-right">
                     {!a.resolved && (
                       <div className="flex gap-1 justify-end">
-                        <button className="text-xs px-2 py-1 rounded border border-border hover:bg-bg-2" onClick={async () => { await resolveAnomaly(a.id, 'resolved'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>Resolve</button>
-                        <button className="text-xs px-2 py-1 rounded border border-border hover:bg-bg-2" onClick={async () => { await resolveAnomaly(a.id, 'false_positive'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>False positive</button>
+                        <Button variant="ghost" size="sm" onClick={async () => { await resolveAnomaly(a.id, 'resolved'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>Resolve</Button>
+                        <Button variant="ghost" size="sm" onClick={async () => { await resolveAnomaly(a.id, 'false_positive'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>False positive</Button>
                       </div>
                     )}
                   </td>
@@ -113,6 +130,6 @@ export function Anomalies() {
           </table>
         )}
       </Panel>
-    </div>
+    </PageShell>
   );
 }

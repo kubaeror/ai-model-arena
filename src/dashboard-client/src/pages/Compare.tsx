@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel } from '../components/ui/Panel';
 import { Select } from '../components/ui/Select';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -45,8 +46,11 @@ export function Compare() {
     .filter((m): m is CatalogModel => !!m);
 
   return (
+    <PageShell
+      title="Compare"
+      description="Side-by-side model comparison with pricing and benchmarks"
+    >
     <div className="flex flex-col gap-4">
-      <h1 className="font-display text-28 font-600">Compare</h1>
       <div className="grid grid-cols-4 gap-3">
         {selected.map((id, i) => (
           <Select
@@ -61,11 +65,12 @@ export function Compare() {
         {selectedModels.length < 2 ? (
           <EmptyState title="Pick 2-4 models to compare" description="Select models from the dropdowns above." />
         ) : (
-          <div className={`grid gap-4 grid-cols-${selectedModels.length}`}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {selectedModels.map(m => <ModelColumn key={m.id} model={m} benchmarks={benchmarks} />)}
           </div>
         )}
       </Panel>
     </div>
+    </PageShell>
   );
 }

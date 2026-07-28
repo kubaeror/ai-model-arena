@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { DataTable } from '../components/ui/DataTable';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -73,9 +74,12 @@ export function Schedules() {
   if (error) return <div className="text-danger py-4">Error: {(error as Error).message}</div>;
 
   return (
+    <PageShell
+      title="Schedules"
+      description="Cron-based recurring benchmark runs"
+      loading={isLoading}
+    >
     <div className="flex flex-col gap-6">
-      <h1 className="font-display text-44 font-700">Schedules</h1>
-
       <Panel>
         <PanelHeader title="Scheduled Jobs" actions={<Button variant="primary" size="sm" onClick={() => setShowCreate(true)}>New Schedule</Button>} />
         <PanelBody>
@@ -129,5 +133,6 @@ export function Schedules() {
         </div>
       </Modal>
     </div>
+    </PageShell>
   );
 }

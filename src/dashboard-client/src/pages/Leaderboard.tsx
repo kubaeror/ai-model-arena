@@ -1,8 +1,8 @@
 import { useState } from 'react';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
-import { Spinner } from '../components/ui/Spinner';
 import { ErrorState } from '../components/ui/ErrorState';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useCacheLeaderboard, type LeaderboardEntry } from '../hooks/useCache';
@@ -42,23 +42,25 @@ export function Leaderboard() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h1 className="font-display text-28 font-600">Leaderboard</h1>
+    <PageShell
+      title="Leaderboard"
+      description="Models ranked by intelligence, coding, and arena performance"
+      actions={
         <div className="flex gap-2">
           <Button variant="ghost" size="sm" onClick={() => setOnlyWithArena(v => !v)}>
             {onlyWithArena ? '✓ ' : ''}Arena data only
           </Button>
           <Button variant="ghost" size="sm" onClick={exportCsv}>Export CSV</Button>
         </div>
-      </div>
+      }
+      loading={isLoading}
+    >
       <Panel>
-        {isLoading ? <div className="flex justify-center py-12"><Spinner /></div>
-        : error ? <ErrorState message="Failed to load leaderboard" onRetry={() => refetch()} />
+        {error ? <ErrorState message="Failed to load leaderboard" onRetry={() => refetch()} />
         : filtered.length === 0 ? <EmptyState title="No models" />
         : <DataTable columns={COLUMNS} data={filtered} getRowId={m => m.id} />}
         <div className="pt-2 text-right font-mono text-12 text-fg-1">{filtered.length} models</div>
       </Panel>
-    </div>
+    </PageShell>
   );
 }

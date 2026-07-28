@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Spinner } from '../components/ui/Spinner';
 import { Button } from '../components/ui/Button';
@@ -26,9 +27,12 @@ export function Regression() {
   if (suites.isLoading) return <div className="flex justify-center py-12"><Spinner /></div>;
 
   return (
+    <PageShell
+      title="Regression"
+      description="Run regression suites to detect performance regressions"
+      loading={suites.isLoading}
+    >
     <div className="flex flex-col gap-6">
-      <h1 className="font-display text-44 font-700">Regression</h1>
-
       <Panel>
         <PanelHeader title="Run Regression Suite" />
         <PanelBody>
@@ -103,5 +107,6 @@ export function Regression() {
         </Panel>
       )}
     </div>
+    </PageShell>
   );
 }

@@ -22,14 +22,43 @@
   --color-foreground: var(--fg-0);
   --color-background: var(--bg-0);
 
-  --font-family-display: var(--font-display);
-  --font-family-body: var(--font-body);
-  --font-family-mono: var(--font-mono);
+  --font-display: 'JetBrains Mono', monospace;
+  --font-body: 'Inter Tight', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --text-11: 0.6875rem;
+  --text-11--line-height: 1rem;
+  --text-12: 0.75rem;
+  --text-12--line-height: 1rem;
+  --text-14: 0.875rem;
+  --text-14--line-height: 1.25rem;
+  --text-16: 1rem;
+  --text-16--line-height: 1.5rem;
+  --text-20: 1.25rem;
+  --text-20--line-height: 1.75rem;
+  --text-28: 1.75rem;
+  --text-28--line-height: 2.25rem;
+  --text-44: 2.75rem;
+  --text-44--line-height: 1.1;
+  --text-72: 4.5rem;
+  --text-72--line-height: 1;
+
+  --font-weight-400: 400;
+  --font-weight-500: 500;
+  --font-weight-600: 600;
+  --font-weight-700: 700;
 
   --radius-panel: 8px;
   --radius-inner: 4px;
 
   --ease-out-quart: cubic-bezier(0.23, 1, 0.32, 1);
+
+  --spacing-80: 5rem;
+  --spacing-120: 7.5rem;
+  --spacing-160: 10rem;
+  --spacing-200: 12.5rem;
+  --spacing-600: 37.5rem;
+  --spacing-1600: 100rem;
 }
 
 :root {
@@ -43,12 +72,6 @@
   --warn: #FFB454;
   --danger: #FF5C5C;
   --info: #5CA8FF;
-  --radius-panel: 8px;
-  --radius-inner: 4px;
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --font-display: 'JetBrains Mono', monospace;
-  --font-body: 'Inter Tight', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
 }
 
 :root[data-theme='light'] {
@@ -78,7 +101,6 @@ body {
 }
 
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-display);
   text-wrap: balance;
   font-variant-numeric: tabular-nums;
 }
@@ -103,6 +125,15 @@ p, li, dd, blockquote {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 120ms ease-out both;
 }
 
 .sr-only {

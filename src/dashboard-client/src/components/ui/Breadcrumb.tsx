@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
-interface BreadcrumbItem {
+export interface BreadcrumbItem {
   label: string;
   to?: string;
 }

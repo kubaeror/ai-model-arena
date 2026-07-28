@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -72,8 +73,12 @@ export function Queues() {
   }
 
   return (
+    <PageShell
+      title="Queues"
+      description="Redis Streams task queues with dead-letter queue inspection"
+      loading={isLoading}
+    >
     <div className="flex flex-col gap-4">
-      <h1 className="font-display text-28 font-600">Queues</h1>
       <Panel>
         <PanelHeader title="Task Queues" />
         <PanelBody>
@@ -145,5 +150,6 @@ export function Queues() {
         </div>
       </Modal>
     </div>
+    </PageShell>
   );
 }

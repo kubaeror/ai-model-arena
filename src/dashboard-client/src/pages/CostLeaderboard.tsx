@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { getCostLeaderboard } from '../lib/api.js';
 import type { CostLeaderboardEntry } from '../lib/api.js';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { Spinner } from '../components/ui/Spinner';
 import { ErrorState } from '../components/ui/ErrorState';
 import { EmptyState } from '../components/ui/EmptyState';
 
@@ -26,18 +26,17 @@ export function CostLeaderboard() {
   });
 
   return (
-    <div className="flex flex-col gap-4">
-      <h1 className="font-display text-28 font-600">Cost Leaderboard</h1>
-      <p className="font-body text-14 text-fg-1">
-        Models ranked by cost per successful task. Lower is better.
-      </p>
+    <PageShell
+      title="Cost Leaderboard"
+      description="Models ranked by cost per successful task. Lower is better."
+      loading={isLoading}
+    >
       <Panel>
-        {isLoading ? <div className="flex justify-center py-12"><Spinner /></div>
-        : error ? <ErrorState message="Failed to load cost data" onRetry={() => refetch()} />
+        {error ? <ErrorState message="Failed to load cost data" onRetry={() => refetch()} />
         : !data || data.length === 0 ? <EmptyState title="No cost data" />
         : <DataTable columns={COLUMNS} data={data} getRowId={m => m.model} />}
         <div className="pt-2 text-right font-mono text-12 text-fg-1">{(data ?? []).length} models</div>
       </Panel>
-    </div>
+    </PageShell>
   );
 }

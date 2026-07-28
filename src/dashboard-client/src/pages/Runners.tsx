@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -30,8 +31,12 @@ export function Runners() {
   }
 
   return (
+    <PageShell
+      title="Runners"
+      description="Kubernetes runner deployments and pod status"
+      loading={isLoading}
+    >
     <div className="flex flex-col gap-4">
-      <h1 className="font-display text-28 font-600">Runners</h1>
 
       <Panel>
         <PanelHeader title="Runner Deployments" />
@@ -105,5 +110,6 @@ export function Runners() {
         </div>
       </Modal>
     </div>
+    </PageShell>
   );
 }

@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useRunLive } from '../hooks/useLive.js';
 import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, getRunDiff, stopRun, restartRun, getTrace } from '../lib/api.js';
+import { PageShell } from '../components/ui/PageShell';
 import { Button } from '../components/ui/Button';
 import { Panel } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
@@ -50,22 +51,22 @@ export function RunDetail() {
   const statusTier = live.online ? 'S' : run?.status === 'errored' ? 'C' : 'A';
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="font-display text-28 font-600">{run?.scenario ?? 'Run'}</h1>
-          <div className="font-mono text-12 text-fg-1">{runId} · {run?.startedAt ? new Date(run.startedAt).toLocaleString() : ''}</div>
-        </div>
+    <PageShell
+      title={run?.scenario ?? 'Run'}
+      description={`${runId} · ${run?.startedAt ? new Date(run.startedAt).toLocaleString() : ''}`}
+      breadcrumbs={[{ label: 'Home', to: '/' }, { label: run?.scenario ?? runId }]}
+      actions={
         <div className="flex items-center gap-2">
-          <Badge variant={statusTier === 'S' ? 'tier' : 'tier'} value={statusLabel} />
+          <Badge variant={statusTier === 'S' ? 'tier' : 'neutral'} value={statusLabel} />
           <Button variant="ghost" size="sm" onClick={() => stopRun(runId)} disabled={!live.online}>Stop</Button>
           <Button variant="ghost" size="sm" onClick={() => restartRun(runId)}>Restart</Button>
           <a href={`/api/export/runs/${encodeURIComponent(runId)}/csv`} download={`${runId}-conversation.csv`}>
             <Button variant="ghost" size="sm">Export CSV</Button>
           </a>
         </div>
-      </div>
-
+      }
+    >
+    <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
         <span className="font-body text-12 text-fg-1">Model:</span>
         <Select
@@ -76,9 +77,9 @@ export function RunDetail() {
         />
         {activeEntry && (
           <div className="flex flex-wrap items-center gap-2 font-mono text-12 text-fg-1">
-            <Badge variant="tier" value={activeEntry.status} />
-            {activeEntry.success === true && <Badge variant="tier" value="PASS" />}
-            {activeEntry.success === false && <Badge variant="tier" value="FAIL" />}
+            <Badge variant="status" value={activeEntry.status} />
+            {activeEntry.success === true && <Badge variant="success" value="PASS" />}
+            {activeEntry.success === false && <Badge variant="failure" value="FAIL" />}
             {activeEntry.turnsUsed != null && <span>turns {activeEntry.turnsUsed}</span>}
             {activeEntry.totalToolCalls != null && <span>· tools {activeEntry.totalToolCalls}</span>}
             {activeEntry.stopReason && <span>· {activeEntry.stopReason}</span>}
@@ -98,6 +99,7 @@ export function RunDetail() {
       {tab === 'trace' && <TracePanel runId={runId} model={activeModel} />}
       {tab === 'diff' && <DiffPanel runId={runId} model={activeModel} />}
     </div>
+    </PageShell>
   );
 }
 
@@ -199,5 +201,5 @@ function DiffPanel({ runId, model }: { runId: string; model: string }) {
         {diff || '(no diff available)'}
       </pre>
     </Panel>
-  );
+    );
 }

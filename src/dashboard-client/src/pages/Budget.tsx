@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { StatTile } from '../components/ui/StatTile';
 import { DataTable } from '../components/ui/DataTable';
@@ -56,8 +57,12 @@ export function Budget() {
   })).sort((a, b) => b.monthlySpent - a.monthlySpent);
 
   return (
+    <PageShell
+      title="Budget"
+      description="Monitor spending across all models daily and monthly"
+      loading={isLoading}
+    >
     <div className="flex flex-col gap-6">
-      <h1 className="font-display text-44 font-700">Budget</h1>
 
       <div className="grid grid-cols-4 gap-4">
         <StatTile
@@ -119,5 +124,6 @@ export function Budget() {
         </PanelBody>
       </Panel>
     </div>
+    </PageShell>
   );
 }

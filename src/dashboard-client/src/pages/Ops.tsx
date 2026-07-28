@@ -1,3 +1,4 @@
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -31,8 +32,8 @@ export function Ops() {
   });
 
   return (
+    <PageShell title="Ops Console">
     <div className="flex flex-col gap-4">
-      <h1 className="font-display text-28 font-600">Ops Console</h1>
 
       <Panel>
         <PanelHeader title="PM2 Processes" />
@@ -104,5 +105,6 @@ export function Ops() {
         {!cacheStats && !isLoading && <Panel><EmptyState title="No cache data" /></Panel>}
       </div>
     </div>
+    </PageShell>
   );
 }

@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
@@ -45,8 +46,12 @@ export function Catalog() {
   ];
 
   return (
+    <PageShell
+      title="Catalog"
+      description="Browse all tracked models across providers"
+      loading={isLoading}
+    >
     <div className="flex flex-col gap-4">
-      <h1 className="font-display text-28 font-600">Catalog</h1>
       <Panel>
         <div className="flex flex-wrap items-center gap-3 pb-4 border-b border-border">
           <Select
@@ -97,5 +102,6 @@ export function Catalog() {
         <div className="pt-2 text-right font-mono text-12 text-fg-1">{filtered.length} models</div>
       </Panel>
     </div>
+    </PageShell>
   );
 }

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { Suspense } from 'react';
 import { Scenarios } from '../../src/pages/Scenarios';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
@@ -21,17 +22,27 @@ vi.mock('../../src/lib/api', async () => {
 
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}><MemoryRouter>{ui}</MemoryRouter></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <Suspense fallback={<div>Loading...</div>}>{ui}</Suspense>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
 }
 
 describe('Scenarios', () => {
-  it('renders the scenarios heading', () => {
+  it('renders the scenarios heading', async () => {
     renderWithProviders(<Scenarios />);
-    expect(screen.getByText(/Scenarios/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/Scenarios/i)).toBeInTheDocument();
+    });
   });
 
-  it('renders the add scenario button', () => {
+  it('renders the add scenario button', async () => {
     renderWithProviders(<Scenarios />);
-    expect(screen.getByRole('button', { name: /New scenario/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /New scenario/i })).toBeInTheDocument();
+    });
   });
 });

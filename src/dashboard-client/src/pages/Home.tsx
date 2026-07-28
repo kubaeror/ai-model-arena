@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { StatTile } from '../components/ui/StatTile';
 import { MetricBar } from '../components/ui/MetricBar';
@@ -45,16 +46,18 @@ export function Home() {
   const recentRuns = (runtime ?? []).slice(0, 5);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h1 className="font-display text-44 font-700">Mission Control</h1>
+    <PageShell
+      title="Mission Control"
+      actions={
         <div className="flex gap-2">
           <a href={getExportCsvUrl()} download="arena-export.csv" className="no-underline">
             <Button variant="ghost" size="sm">Export CSV</Button>
           </a>
           <Button onClick={() => setLauncherOpen(true)}>+ Run</Button>
         </div>
-      </div>
+      }
+    >
+    <div className="flex flex-col gap-6">
 
       <div className="grid grid-cols-3 gap-4">
         <StatTile value={activeRuns} label="Active runs" />
@@ -123,5 +126,6 @@ export function Home() {
 
       <Launcher open={launcherOpen} onClose={() => setLauncherOpen(false)} />
     </div>
+    </PageShell>
   );
 }
