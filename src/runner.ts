@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { outputRoot } from './paths.js';
 import { initDb } from './db/index.js';
+import { transitionTaskState } from './db/query.js';
 import { createQueue, type TaskQueue, type Task } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
@@ -48,6 +49,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const ac = new AbortController();
   const signal = opts.signal ?? ac.signal;
   const logger = createLogger('ai-arena:runner');
+  const runnerId = process.env.REDIS_CONSUMER_NAME ?? `runner-${process.pid}`;
 
   initDb(path.join(outputRoot(), 'arena.db'));
 
@@ -141,6 +143,11 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       logger.info('Task dequeued', { taskId: task.taskId, model: task.model, scenario: task.scenario });
 
+      // Transition task to 'claimed' state (persisted in DB)
+      transitionTaskState(runId, task.model, 'claimed', runnerId).catch(e =>
+        logger.warn('Failed to write claimed state', { error: String(e) }),
+      );
+
       let session = await store.loadSession(task.sessionId);
       if (!session) {
         session = await store.createSession({ model: task.model });
@@ -217,6 +224,11 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       let loopResult;
       let maxFallbackHops = 3;
 
+      // Transition to 'running'
+      transitionTaskState(runId, task.model, 'running', runnerId).catch(e =>
+        logger.warn('Failed to write running state', { error: String(e) }),
+      );
+
       while (maxFallbackHops >= 0) {
         const breaker = CircuitBreaker.for(currentProvider, currentModel);
         try {
@@ -282,7 +294,11 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       const result = loopResult!;
 
-      // Generate artifact manifest with checksums for quarantine
+      // Transition to completed/failed based on result
+      const finalStatus = result.errors.length > 0 ? 'failed' : 'completed';
+      transitionTaskState(runId, task.model, finalStatus, runnerId).catch(e =>
+        logger.warn('Failed to write final state', { error: String(e) }),
+      );
       try {
         const manifest = generateManifest(sandboxDir, modelRunId, modelName);
         writeManifest(manifest, runOutputDir, logger);
@@ -297,7 +313,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Task failed', { taskId: task?.taskId, error: msg });
-      if (task) await queue.nack(task._redisId ?? task.taskId, msg);
+      if (task) {
+        transitionTaskState(task.config.modelRunId as string ?? task.sessionId, task.model, 'failed', runnerId).catch(() => {});
+        await queue.nack(task._redisId ?? task.taskId, msg);
+      }
     } finally {
       runningTask = null;
     }

@@ -170,6 +170,8 @@ export async function upsertRunModel(data: {
   reportPath?: string; logFile?: string; status: string;
   success?: number | null; turnsUsed?: number | null; totalToolCalls?: number | null;
   stopReason?: string | null; durationMs?: number | null;
+  claimedAt?: string | null; startedAt?: string | null; completedAt?: string | null;
+  runnerId?: string | null;
 }): Promise<void> {
   const db = getDrizzleDb();
   await db.insert(run_models).values({
@@ -178,12 +180,58 @@ export async function upsertRunModel(data: {
     sandbox_dir: data.sandboxDir ?? null, result_path: data.resultPath ?? null,
     conversation_path: data.conversationPath ?? null, report_path: data.reportPath ?? null,
     log_file: data.logFile ?? null, status: data.status,
+    claimed_at: data.claimedAt ?? null, started_at: data.startedAt ?? null,
+    completed_at: data.completedAt ?? null, runner_id: data.runnerId ?? null,
     success: data.success, turns_used: data.turnsUsed, total_tool_calls: data.totalToolCalls,
     stop_reason: data.stopReason ?? null, duration_ms: data.durationMs,
   }).onConflictDoUpdate({
     target: [run_models.run_id, run_models.model],
-    set: { status: data.status, success: data.success, turns_used: data.turnsUsed, total_tool_calls: data.totalToolCalls, stop_reason: data.stopReason ?? null, duration_ms: data.durationMs },
+    set: {
+      status: data.status,
+      claimed_at: data.claimedAt ?? null,
+      started_at: data.startedAt ?? null,
+      completed_at: data.completedAt ?? null,
+      runner_id: data.runnerId ?? null,
+      success: data.success, turns_used: data.turnsUsed, total_tool_calls: data.totalToolCalls,
+      stop_reason: data.stopReason ?? null, duration_ms: data.durationMs,
+    },
   });
+}
+
+/**
+ * Update the status + timestamp columns for a task in the run_models table.
+ * Used for state machine transitions: pending → claimed → running → completed/failed/dead.
+ */
+export async function transitionTaskState(
+  runId: string,
+  model: string,
+  newStatus: string,
+  runnerId?: string,
+): Promise<void> {
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  const updates: Record<string, any> = { status: newStatus };
+
+  switch (newStatus) {
+    case 'claimed':
+      updates.claimed_at = now;
+      if (runnerId) updates.runner_id = runnerId;
+      break;
+    case 'running':
+      updates.started_at = now;
+      break;
+    case 'completed':
+    case 'failed':
+    case 'dead':
+      updates.completed_at = now;
+      break;
+  }
+
+  // Use raw SQL for cross-driver compatibility with update + where clause
+  await db.run(
+    `UPDATE run_models SET ${Object.keys(updates).map(k => `${k} = ?`).join(', ')} WHERE run_id = ? AND model = ?`,
+    ...Object.values(updates), runId, model,
+  );
 }
 
 // ── Cost Ledger ───────────────────────────────────────────────────────────
