@@ -106,7 +106,7 @@ async function start(): Promise<void> {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         fontSrc: ["'self'", 'https://fonts.gstatic.com'],
         connectSrc: ["'self'", 'ws:', 'wss:'],
@@ -146,7 +146,7 @@ async function start(): Promise<void> {
     });
   });
 
-  // ── Prometheus metrics (public, unauthenticated) ─────────────────────────
+  // ── Prometheus metrics (requires auth) ────────────────────────────────────
   const metricsLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 120,
@@ -154,12 +154,19 @@ async function start(): Promise<void> {
     standardHeaders: true,
     legacyHeaders: false,
   });
-  app.get('/metrics', metricsLimiter, async (_req, res) => {
-    try {
-      await metricsHandler(_req, res);
-    } catch (err) {
-      res.status(500).send('metrics error');
+  const metricsToken = process.env.METRICS_TOKEN;
+  app.get('/metrics', metricsLimiter, (req: AuthedRequest, res) => {
+    if (metricsToken) {
+      const authHeader = req.headers.authorization ?? '';
+      const match = /^Bearer\s+(.+)$/i.exec(authHeader);
+      if (!match || match[1] !== metricsToken) {
+        res.status(401).json({ error: 'Authentication required' });
+        return;
+      }
     }
+    metricsHandler(req, res).catch(() => {
+      res.status(500).send('metrics error');
+    });
   });
 
   // ── Global rate limiter ──────────────────────────────────────────────────
