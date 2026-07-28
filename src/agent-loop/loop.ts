@@ -10,6 +10,7 @@ import type { ModelAdapter } from '../providers/adapters/base.js';
 import type { ConversationLogger } from '../logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../tools/schema.js';
 import { detectInjection, scanToolResult } from '../security/prompt-injection.js';
+import { startAgentSpan, startToolSpan, endSpan, setSpanAttributes } from '../observability/instrumentation-helpers.js';
 
 export interface AgentLoopOptions {
   adapter: ModelAdapter;
@@ -53,6 +54,11 @@ function truncate(s: string, max = MAX_TOOL_RESULT_CHARS): string {
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopResult> {
   const { adapter, tools, executors, systemPrompt, task, maxTurns, toolCtx, conv, logger, onTurnComplete, onBudgetCheck } = opts;
 
+  const loopSpan = startAgentSpan('agent-loop', {
+    max_turns: maxTurns,
+    tool_count: tools.length,
+  });
+
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: task },
@@ -94,6 +100,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Model API call failed', { turn, error: msg });
+      setSpanAttributes(loopSpan, {
+        stop_reason: 'api_error',
+        turns_used: turn,
+        error: msg,
+      });
+      endSpan(loopSpan, err instanceof Error ? err : new Error(msg));
       errors.push(`Turn ${turn}: model API error: ${msg}`);
       conv.append({ type: 'error', turn, content: `Model API error: ${msg}` });
       stopReason = 'api_error';
@@ -139,11 +151,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
         errors.push(`Turn ${turn}: unknown tool "${tc.name}"`);
       } else {
         try {
+          const toolSpan = startToolSpan(tc.name);
           const res = await executor(tc.arguments, toolCtx);
+          endSpan(toolSpan);
           content = res.content;
           isError = res.isError;
           if (isError) errors.push(`Turn ${turn}: tool "${tc.name}" reported an error`);
         } catch (err) {
+          const toolSpan = startToolSpan(tc.name);
+          endSpan(toolSpan, err instanceof Error ? err : new Error(String(err)));
           content = `Error executing "${tc.name}": ${err instanceof Error ? err.message : String(err)}`;
           isError = true;
           errors.push(`Turn ${turn}: tool "${tc.name}" threw: ${content}`);
@@ -201,6 +217,16 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     stopReason = 'max_turns';
     logger.warn('Agent stopped: max_turns reached', { turnsUsed, maxTurns });
   }
+
+  setSpanAttributes(loopSpan, {
+    stop_reason: stopReason,
+    turns_used: turnsUsed,
+    total_tool_calls: totalToolCalls,
+    'gen_ai.usage.input_tokens': usage.prompt ?? 0,
+    'gen_ai.usage.output_tokens': usage.completion ?? 0,
+    'gen_ai.usage.total_tokens': usage.total ?? 0,
+  });
+  endSpan(loopSpan);
 
   const toolsCalled = [...toolCounts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
   conv.flush();
