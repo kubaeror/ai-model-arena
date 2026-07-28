@@ -113,33 +113,45 @@ export interface AuthedRequest extends Request {
   clientIp?: string;
 }
 
+const COOKIE_BASE = 'arena_token';
+function cookieName(): string {
+  return process.env.NODE_ENV === 'production' ? `__Host-${COOKIE_BASE}` : COOKIE_BASE;
+}
+
 function extractToken(req: Request): string | null {
   // 1. Authorization: Bearer <token> header (standard)
   const h = req.headers.authorization ?? '';
   const m = /^Bearer\s+(.+)$/i.exec(h);
   if (m?.[1]) return m[1];
-  // 2. httpOnly cookie 'arena_token' (production — XSS-resistant)
+  // 2. httpOnly cookie (production — XSS-resistant)
   const cookies = req.headers.cookie ?? '';
-  const cm = /(?:^|;\s*)arena_token=([^;]+)/.exec(cookies);
-  if (cm?.[1]) return cm[1];
+  // Try __Host- prefixed first, then plain
+  for (const name of [cookieName(), COOKIE_BASE]) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const cm = new RegExp('(?:^|;\\s*)' + escaped + '=([^;]+)').exec(cookies);
+    if (cm?.[1]) return cm[1];
+  }
   return null;
 }
 
-/** Set the JWT as an httpOnly, SameSite cookie (production best practice). */
+/** Set the JWT as an httpOnly, SameSite=strict cookie. Uses __Host- prefix in production. */
 export function setTokenCookie(res: Response, token: string, cfg: AuthConfig): void {
   const maxAge = parseExpiresInToSeconds(cfg.expiresIn);
-  res.cookie('arena_token', token, {
+  const isProd = process.env.NODE_ENV === 'production';
+  res.cookie(cookieName(), token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    secure: isProd,
+    sameSite: 'strict',
     maxAge: maxAge * 1000,
     path: '/',
   });
 }
 
-/** Clear the auth cookie. */
+/** Clear the auth cookie (clears both prefixed and plain variants). */
 export function clearTokenCookie(res: Response): void {
-  res.clearCookie('arena_token', { path: '/' });
+  const opts = { path: '/' };
+  res.clearCookie(cookieName(), opts);
+  res.clearCookie(COOKIE_BASE, opts);
 }
 
 function parseExpiresInToSeconds(expiresIn: string): number {
