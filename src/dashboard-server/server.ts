@@ -115,7 +115,7 @@ async function start(): Promise<void> {
     },
     crossOriginEmbedderPolicy: false,
   }));
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '1mb' }));
 
   // ── Health check (rate-limited, public) ──────────────────────────────────
   const healthLimiter = rateLimit({

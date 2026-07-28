@@ -2,30 +2,57 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "AllowBedrockConverseInAllowedRegions",
+      "Sid": "AllowBedrockInvokeInAllowedRegions",
       "Effect": "Allow",
       "Action": [
         "bedrock:InvokeModel",
         "bedrock:InvokeModelWithResponseStream",
         "bedrock:Converse",
-        "bedrock:ConverseStream",
-        "bedrock:ListFoundationModels",
-        "bedrock:GetFoundationModel"
+        "bedrock:ConverseStream"
       ],
       "Resource": [
-        "arn:aws:bedrock:us-east-1::foundation-model/*",
-        "arn:aws:bedrock:us-west-2::foundation-model/*",
-        "arn:aws:bedrock:us-east-1:*",
-        "arn:aws:bedrock:us-west-2:*"
+        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-*",
+        "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-*",
+        "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-*",
+        "arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-*",
+        "arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-*",
+        "arn:aws:bedrock:ap-southeast-1::foundation-model/anthropic.claude-*",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-*",
+        "arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-*",
+        "arn:aws:bedrock:us-east-1::foundation-model/meta.llama*",
+        "arn:aws:bedrock:us-west-2::foundation-model/meta.llama*",
+        "arn:aws:bedrock:us-east-1::foundation-model/mistral.mistral*",
+        "arn:aws:bedrock:us-west-2::foundation-model/mistral.mistral*",
+        "arn:aws:bedrock:us-east-1::foundation-model/cohere.command*",
+        "arn:aws:bedrock:us-west-2::foundation-model/cohere.command*",
+        "arn:aws:bedrock:us-east-1::foundation-model/ai21.jamba*",
+        "arn:aws:bedrock:us-west-2::foundation-model/ai21.jamba*"
       ],
       "Condition": {
         "StringEqualsIfExists": {
-          "aws:RequestedRegion": ["us-east-1", "us-west-2"]
+          "aws:RequestedRegion": [
+            "us-east-1",
+            "us-west-2",
+            "eu-west-1",
+            "eu-west-3",
+            "ap-northeast-1",
+            "ap-southeast-1"
+          ]
         }
       }
     },
     {
-      "Sid": "DenyBedrockProvisioningAndDeletion",
+      "Sid": "AllowBedrockModelDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ListFoundationModels",
+        "bedrock:GetFoundationModel",
+        "bedrock:GetFoundationModelAvailability"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyBedrockProvisioningAndMutation",
       "Effect": "Deny",
       "Action": [
         "bedrock:Create*",
@@ -40,7 +67,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "DenyOtherBedrockRegions",
+      "Sid": "DenyInvokeInUnapprovedRegions",
       "Effect": "Deny",
       "Action": [
         "bedrock:InvokeModel",
@@ -51,20 +78,22 @@
       "Resource": "*",
       "Condition": {
         "StringNotEqualsIfExists": {
-          "aws:RequestedRegion": ["us-east-1", "us-west-2"]
+          "aws:RequestedRegion": [
+            "us-east-1",
+            "us-west-2",
+            "eu-west-1",
+            "eu-west-3",
+            "ap-northeast-1",
+            "ap-southeast-1"
+          ]
         }
       }
     },
     {
-      "Sid": "DenyAllOtherAWSServices",
-      "Effect": "Deny",
-      "NotAction": [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream",
-        "bedrock:Converse",
-        "bedrock:ConverseStream",
-        "bedrock:ListFoundationModels",
-        "bedrock:GetFoundationModel"
+      "Sid": "AllowSTSforIdentityValidation",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity"
       ],
       "Resource": "*"
     }
