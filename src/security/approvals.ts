@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import { getDrizzleDb } from '../db/index.js';
-import { sql, eq, and } from 'drizzle-orm';
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 

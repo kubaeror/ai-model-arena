@@ -4,7 +4,6 @@ import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { validateProviderUrl } from '../../providers/url-validator.js';
 import { probeOpenAICompatEndpoint } from '../../providers/capability-probe.js';
 import { audit } from '../../auth/rbac.js';
-import { createApproval, type ApprovalStatus } from '../../security/approvals.js';
 import type { AuthedRequest } from '../auth.js';
 import type { ApiKeyRequest } from '../auth-api-types.js';
 import { z } from 'zod';
