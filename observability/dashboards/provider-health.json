@@ -1,0 +1,29 @@
+{
+  "title": "AI Arena – Provider Health",
+  "uid": "arena-providers",
+  "panels": [
+    {
+      "title": "Provider Reachability",
+      "type": "stat",
+      "targets": [{ "expr": "arena_provider_reachable" }]
+    },
+    {
+      "title": "Provider Latency (P50/P95)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.5, arena_provider_latency_ms)", "legendFormat": "P50" },
+        { "expr": "histogram_quantile(0.95, arena_provider_latency_ms)", "legendFormat": "P95" }
+      ]
+    },
+    {
+      "title": "Error Rate by Provider",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(arena_provider_errors_total[5m])" }]
+    },
+    {
+      "title": "Rate Limit Hits",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(arena_rate_limit_hits_total[5m])" }]
+    }
+  ]
+}

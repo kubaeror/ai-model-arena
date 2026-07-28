@@ -1,0 +1,35 @@
+{
+  "title": "AI Arena – Queue & Workers",
+  "uid": "arena-queue",
+  "panels": [
+    {
+      "title": "Queue Depth by Provider",
+      "type": "timeseries",
+      "targets": [{ "expr": "arena_queue_depth" }]
+    },
+    {
+      "title": "Active Runners",
+      "type": "stat",
+      "targets": [{ "expr": "count(kube_pod_info{namespace=\"ai-arena\",pod=~\"runner-.*\",pod_phase=\"Running\"})" }]
+    },
+    {
+      "title": "DLQ Size",
+      "type": "stat",
+      "targets": [{ "expr": "arena_dlq_depth" }]
+    },
+    {
+      "title": "Task State Transitions (claimed/running/completed)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(arena_tasks_claimed_total[5m])", "legendFormat": "claimed" },
+        { "expr": "rate(arena_tasks_completed_total[5m])", "legendFormat": "completed" },
+        { "expr": "rate(arena_tasks_failed_total[5m])", "legendFormat": "failed" }
+      ]
+    },
+    {
+      "title": "Circuit Breaker Status",
+      "type": "state-timeline",
+      "targets": [{ "expr": "arena_circuit_state" }]
+    }
+  ]
+}

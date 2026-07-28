@@ -1,0 +1,38 @@
+{
+  "title": "AI Arena – Cost & Budget",
+  "uid": "arena-cost",
+  "panels": [
+    {
+      "title": "Daily Spend by Model",
+      "type": "timeseries",
+      "targets": [{ "expr": "arena_daily_spend_usd" }]
+    },
+    {
+      "title": "Monthly Spend vs Budget",
+      "type": "bargauge",
+      "targets": [
+        { "expr": "arena_monthly_spend_usd", "legendFormat": "spent" },
+        { "expr": "arena_budget_limit_usd", "legendFormat": "limit" }
+      ]
+    },
+    {
+      "title": "Cost per Run",
+      "type": "histogram",
+      "targets": [{ "expr": "arena_run_cost_usd" }]
+    },
+    {
+      "title": "Forecasted Monthly Cost",
+      "type": "stat",
+      "targets": [{ "expr": "arena_forecast_monthly_usd" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } }
+    },
+    {
+      "title": "Token Throughput (input/output)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(arena_tokens_input_total[5m])", "legendFormat": "input" },
+        { "expr": "rate(arena_tokens_output_total[5m])", "legendFormat": "output" }
+      ]
+    }
+  ]
+}
