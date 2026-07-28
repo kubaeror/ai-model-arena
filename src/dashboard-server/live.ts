@@ -3,30 +3,21 @@ import type { Server } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import { promises as fsp } from 'node:fs';
 import {
-  listArenaProcesses,
   listRuns,
   getRunRecord,
   isRunCompleteByRunId,
   finalizeRunByRunId,
 } from '../orchestrator/orchestrator.js';
-import * as pm2h from '../orchestrator/pm2-helpers.js';
-import { isOnline, DASHBOARD_PROC_NAME } from '../orchestrator/pm2-helpers.js';
 import { verifyToken, type AuthConfig } from './auth.js';
 import { createLogger } from '../logger/pino-logger.js';
 
-export interface ProcStatus {
-  name: string;
-  model?: string;
-  scenario?: string;
-  runId?: string;
+export interface RunStatus {
+  runId: string;
+  scenario: string;
+  models: Array<{ model: string; status: string }>;
   status: string;
-  pid: number | null;
-  cpu?: number;
-  memory?: number;
-  uptime?: number;
-  restarts?: number;
-  exitCode: number | null;
-  online: boolean;
+  startedAt: string;
+  finishedAt?: string;
 }
 
 interface ClientInfo {
@@ -37,38 +28,18 @@ interface ClientInfo {
 
 /**
  * WebSocket gateway. Broadcasts real-time events to connected dashboard clients:
- *  - process_status (every 2s, from pm2.list, enriched with run/model from index)
+ *  - run_status (every 2s, from the runs DB index)
  *  - conversation_update (per subscribed run, new conversation.json entries)
- *  - log_line (per subscribed run, new PM2 log tail)
  *  - run_completed (when a watched run finishes)
  *
- * Workers are stateless; all state is read from outputs/ + the runs index. The
- * PM2 bus is not required for conversation state — we watch the filesystem.
+ * State is read from outputs/ + the runs index. No PM2 dependency.
  */
-interface Pm2Proc {
-  name?: string;
-  pid?: number | null;
-  monit?: { cpu?: number; memory?: number };
-  pm2_env?: {
-    status?: string;
-    cpu?: number;
-    memory?: number;
-    uptime?: number;
-    restarts?: number;
-    exitCode?: number | null;
-    pm_uptime?: number;
-    unstable_restarts?: number;
-    exit_code?: number | null;
-  };
-}
-
 export class LiveHub {
   private wss: WebSocketServer;
   private subs = new Map<WebSocket, Set<string>>();
   private clients = new Map<WebSocket, { sub: string; role: string }>();
   private convSeen = new Map<string, number>();
   private convMtime = new Map<string, number>();
-  private logSize = new Map<string, number>();
   private logger = createLogger('ai-arena:live');
   private timers: NodeJS.Timeout[] = [];
   private pollTimer: NodeJS.Timeout | null = null;
@@ -79,15 +50,11 @@ export class LiveHub {
       path: '/ws',
       verifyClient: (info: ClientInfo, cb) => {
         const result = this.verifyUser(info, auth);
-        // Store user on the request for retrieval in onConnection
         (info.req as IncomingMessage & { _wsUser?: { sub: string; role: string } })._wsUser = result ?? undefined;
         cb(result !== null);
       },
     });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
-    void pm2h.pm2ConnectPersistent().catch((e) =>
-      this.logger.warn('PM2 persistent connect failed', { error: String(e) }),
-    );
     this.start();
   }
 
@@ -118,43 +85,18 @@ export class LiveHub {
     }
   }
 
-  /** Build a procName -> {model, scenario, runId} map from the runs index. */
-  private async procMetaMap(): Promise<Map<string, { model: string; scenario: string; runId: string }>> {
-    const map = new Map<string, { model: string; scenario: string; runId: string }>();
-    for (const rec of await listRuns()) {
-      for (const m of rec.perModel) {
-        map.set(m.procName, { model: m.model, scenario: rec.scenario, runId: rec.runId });
-      }
-    }
-    return map;
-  }
-
-  private async enrich(procs: Pm2Proc[]): Promise<ProcStatus[]> {
-    const meta = await this.procMetaMap();
-    return procs
-      .filter((p) => p.name && p.name !== DASHBOARD_PROC_NAME)
-      .map((p) => {
-        const m = meta.get(p.name ?? '');
-        return {
-          name: p.name ?? '?',
-          model: m?.model,
-          scenario: m?.scenario,
-          runId: m?.runId,
-          status: p.pm2_env?.status ?? '?',
-          pid: p.pid ?? null,
-          cpu: p.monit?.cpu,
-          memory: p.monit?.memory,
-          uptime: p.pm2_env?.pm_uptime,
-          restarts: p.pm2_env?.unstable_restarts,
-          exitCode: p.pm2_env?.exit_code ?? null,
-          online: isOnline(p),
-        };
-      });
-  }
-
-  private async getProcessStatus(): Promise<ProcStatus[]> {
+  private async getRunStatusList(): Promise<RunStatus[]> {
     try {
-      return this.enrich((await listArenaProcesses()) as Pm2Proc[]);
+      const runs = await listRuns();
+      const recent = runs.filter(r => r.status !== 'completed' || r.finishedAt == null);
+      return recent.map(r => ({
+        runId: r.runId,
+        scenario: r.scenario,
+        models: r.perModel.map(m => ({ model: m.model, status: m.status })),
+        status: r.status,
+        startedAt: r.startedAt,
+        finishedAt: r.finishedAt ?? undefined,
+      }));
     } catch {
       return [];
     }
@@ -164,9 +106,9 @@ export class LiveHub {
     const user = (req as IncomingMessage & { _wsUser?: { sub: string; role: string } })._wsUser ?? { sub: 'anonymous', role: 'viewer' };
     this.clients.set(ws, user);
     this.subs.set(ws, new Set());
-    void this.getProcessStatus()
-      .then((processes) => this.send(ws, { type: 'process_status', processes }))
-      .catch((err) => this.logger.warn('Failed to get process status on connect', { error: String(err) }));
+    void this.getRunStatusList()
+      .then((statuses) => this.send(ws, { type: 'run_status', runs: statuses }))
+      .catch((err) => this.logger.warn('Failed to get run status on connect', { error: String(err) }));
     ws.on('message', (data) => this.onMessage(ws, data));
     ws.on('close', () => { this.subs.delete(ws); this.clients.delete(ws); });
     ws.on('error', () => { this.subs.delete(ws); this.clients.delete(ws); });
@@ -180,7 +122,6 @@ export class LiveHub {
       return;
     }
     if (msg.type === 'subscribe' && typeof msg.runId === 'string') {
-      // Role check: any authenticated user can subscribe to runs
       this.subs.get(ws)?.add(msg.runId);
       void this.sendRunSnapshot(ws, msg.runId);
     } else if (msg.type === 'unsubscribe' && typeof msg.runId === 'string') {
@@ -201,7 +142,6 @@ export class LiveHub {
     }
   }
 
-  /** On subscribe, immediately send the current conversation + recent log tail. */
   private async sendRunSnapshot(ws: WebSocket, runId: string): Promise<void> {
     const rec = await getRunRecord(runId);
     if (!rec) return;
@@ -216,21 +156,10 @@ export class LiveHub {
           this.convMtime.set(key, stat.mtimeMs);
           this.send(ws, { type: 'conversation_snapshot', runId, model: m.model, conversation: conv });
         }
-      } catch {
-        /* ignore */
-      }
-      try {
-        const logStat = await fsp.stat(m.logFile).catch(() => null);
-        const content = logStat ? await fsp.readFile(m.logFile, 'utf8') : '';
-        this.logSize.set(key, Buffer.byteLength(content));
-        this.send(ws, { type: 'log_line', runId, model: m.model, lines: content.split(/\r?\n/).slice(-200) });
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
     }
   }
 
-  /** Poll subscribed runs' conversation.json for newly-appended entries. */
   private async pollConversationsAsync(): Promise<void> {
     for (const runId of this.subscribedRunIds()) {
       const rec = await getRunRecord(runId);
@@ -263,45 +192,6 @@ export class LiveHub {
     }
   }
 
-  /** Tail PM2 log files for subscribed runs (byte-offset based, cheap when idle). */
-  private async pollLogsAsync(): Promise<void> {
-    for (const runId of this.subscribedRunIds()) {
-      const rec = await getRunRecord(runId);
-      if (!rec) continue;
-      for (const m of rec.perModel) {
-        const key = `${runId}:${m.model}`;
-        let size: number;
-        try {
-          size = (await fsp.stat(m.logFile)).size;
-        } catch {
-          continue;
-        }
-        const last = this.logSize.get(key) ?? 0;
-        if (size < last) {
-          this.logSize.set(key, size);
-          continue;
-        }
-        if (size === last) continue;
-        const fh = await fsp.open(m.logFile, 'r');
-        try {
-          const len = size - last;
-          const buf = Buffer.alloc(len);
-          await fh.read(buf, 0, len, last);
-          this.logSize.set(key, size);
-          const text = buf.toString('utf8');
-          let lines = text.split(/\r?\n/);
-          if (lines.length && lines[lines.length - 1] === '') lines = lines.slice(0, -1);
-          if (lines.length) this.broadcastToSubscribers(runId, { type: 'log_line', runId, model: m.model, lines });
-        } catch {
-          /* ignore */
-        } finally {
-          await fh.close();
-        }
-      }
-    }
-  }
-
-  /** Finalize runs whose workers have all stopped (also picks up CLI-started runs). */
   private async finalizeRuns(): Promise<void> {
     const running = (await listRuns()).filter((r) => r.status === 'running');
     for (const rec of running) {
@@ -309,46 +199,39 @@ export class LiveHub {
         if (await isRunCompleteByRunId(rec.runId)) {
           await finalizeRunByRunId(rec.runId, this.logger);
           this.broadcastToSubscribers(rec.runId, { type: 'run_completed', runId: rec.runId });
-          // Clean up per-run tracking maps to prevent memory leaks
           for (const [key] of this.convSeen) {
             if (key.startsWith(rec.runId)) {
               this.convSeen.delete(key);
               this.convMtime.delete(key);
-              this.logSize.delete(key);
             }
           }
         }
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
     }
   }
 
-  private async broadcastProcessStatus(): Promise<void> {
-    const processes = await this.getProcessStatus();
-    this.broadcast({ type: 'process_status', processes });
+  private async broadcastRunStatus(): Promise<void> {
+    const runs = await this.getRunStatusList();
+    if (runs.length > 0) {
+      this.broadcast({ type: 'run_status', runs });
+    }
   }
 
   private schedulePoll(): void {
     this.pollTimer = setTimeout(() => {
-      void Promise.all([
-        this.pollConversationsAsync().catch((e) =>
-          this.logger.warn('pollConversations error', { error: String(e) }),
-        ),
-        this.pollLogsAsync().catch((e) =>
-          this.logger.warn('pollLogs error', { error: String(e) }),
-        ),
-      ]).finally(() => {
+      void this.pollConversationsAsync().catch((e) =>
+        this.logger.warn('pollConversations error', { error: String(e) }),
+      ).finally(() => {
         if (this.pollTimer !== null) this.schedulePoll();
       });
     }, 1000);
   }
 
   start(): void {
-    this.timers.push(setInterval(() => { void this.broadcastProcessStatus(); }, 2000));
+    this.timers.push(setInterval(() => { void this.broadcastRunStatus(); }, 2000));
     this.schedulePoll();
     this.timers.push(setInterval(() => { void this.finalizeRuns(); }, 3000));
-    void this.broadcastProcessStatus();
+    void this.broadcastRunStatus();
   }
 
   close(): void {
@@ -359,7 +242,5 @@ export class LiveHub {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     this.wss.close();
-    void pm2h.pm2DisconnectPersistent().catch(() => undefined);
   }
 }
-
