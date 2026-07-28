@@ -6,7 +6,9 @@ on:
 permissions:
   contents: write
   packages: write
-  id-token: write  # needed for cosign keyless signing via OIDC
+  id-token: write
+  actions: read
+  attestations: write
 
 jobs:
   build-and-deploy:
@@ -26,14 +28,26 @@ jobs:
       - run: npm run build
       - name: Build Docker image
         run: docker build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
-      - name: Generate SBOM
-        run: npm ls --all --json --production 2>/dev/null > npm-sbom.json || true
+      - name: Generate SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@422cb34a0f8b599678c41b21163ea6088cedb6de # v0.17.9
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom-${{ github.sha }}.cdx.json
+      - name: Generate SLSA provenance
+        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+        with:
+          image: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          digest: ${{ needs.build-and-deploy.steps.digest.outputs.digest }}
+          registry-username: ${{ github.actor }}
+        env:
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload SBOM
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: sbom-${{ github.sha }}
-          path: npm-sbom.json
-          retention-days: 30
+          path: sbom-${{ github.sha }}.cdx.json
+          retention-days: 90
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
