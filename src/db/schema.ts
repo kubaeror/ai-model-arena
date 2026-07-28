@@ -20,6 +20,22 @@ export const providers = sqliteTable('providers', {
   updated_at: text('updated_at').notNull(),
 });
 
+export const provider_versions = sqliteTable('provider_versions', {
+  id: text('id').primaryKey(),
+  provider_id: text('provider_id').notNull().references(() => providers.id),
+  version: integer('version').notNull(),
+  name: text('name').notNull(),
+  api_base: text('api_base'),
+  auth_scheme: text('auth_scheme').notNull(),
+  env_var: text('env_var'),
+  adapter: text('adapter').notNull(),
+  header_name: text('header_name'),
+  created_by: text('created_by').notNull(),
+  created_at: text('created_at').notNull(),
+}, (table) => [
+  index('idx_provider_versions_provider').on(table.provider_id),
+]);
+
 export const models = sqliteTable('models', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
@@ -437,6 +453,7 @@ export interface CatalogCacheStateRow {
 import type { InferSelectModel } from 'drizzle-orm';
 
 export type DbProvider = InferSelectModel<typeof providers>;
+export type DbProviderVersion = InferSelectModel<typeof provider_versions>;
 export type DbModel = InferSelectModel<typeof models>;
 export type DbModelProvider = InferSelectModel<typeof model_providers>;
 export type DbPricing = InferSelectModel<typeof pricing>;
