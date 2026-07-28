@@ -1,0 +1,76 @@
+groups:
+  - name: ai-arena
+    rules:
+      - alert: ArenaQueueDepthHigh
+        expr: arena_queue_depth{namespace="ai-arena"} > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue depth > 100 for {{ $labels.provider }}"
+          description: "Queue depth is {{ $value }}. Check runner health and scale up if needed."
+          runbook_url: "https://github.com/kubaeror/ai-model-arena/wiki/runbooks#queue-depth-high"
+
+      - alert: ArenaDLQGrowing
+        expr: arena_dlq_depth{namespace="ai-arena"} > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dead-letter queue has {{ $value }} entries for {{ $labels.provider }}"
+          description: "Tasks are failing repeatedly. Inspect dead-letter queue and fix root cause."
+          runbook_url: "https://github.com/kubaeror/ai-model-arena/wiki/runbooks#dlq-growing"
+
+      - alert: ArenaCircuitOpen
+        expr: arena_circuit_state{namespace="ai-arena"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker open for {{ $labels.provider }} / {{ $labels.model }}"
+          description: "Provider is failing. Check provider status page. Fallback routing should be active."
+
+      - alert: ArenaBudgetEightyPercent
+        expr: arena_budget_percent{namespace="ai-arena"} > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Budget > 80% consumed for {{ $labels.model }}"
+          description: "Spent ${{ $value | humanize }} / limit. Notify budget owner."
+
+      - alert: ArenaBudgetExhausted
+        expr: arena_budget_percent{namespace="ai-arena"} >= 100
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Budget exhausted for {{ $labels.model }}"
+          description: "All jobs for {{ $labels.model }} must be halted. Review and adjust budget."
+
+      - alert: ArenaRunnerCrashLoop
+        expr: rate(kube_pod_container_status_restarts_total{namespace="ai-arena",pod=~"runner-.*"}[5m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Runner {{ $labels.pod }} is crash-looping"
+          description: "Runner has restarted {{ $value }} times in 5 minutes. Check logs and rollback deployment if needed."
+
+      - alert: ArenaApiErrorRate
+        expr: rate(arena_api_errors_total{namespace="ai-arena"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API error rate > 5%"
+          description: "Error rate is {{ $value | humanizePercentage }}. Check dashboard logs."
+
+      - alert: ArenaCredentialExpiry
+        expr: arena_credential_days_until_expiry{namespace="ai-arena"} < 7
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Credential for {{ $labels.provider }} expires in {{ $value }} days"
+          description: "Rotate credentials before expiry to prevent auth failures."
