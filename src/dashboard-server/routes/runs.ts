@@ -116,6 +116,11 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/conversation
   router.get('/:runId/models/:model/conversation', async (req, res) => {
+    const rec = await getRunRecord(req.params.runId as string);
+    if (!rec) { res.status(404).json({ error: 'Run not found' }); return; }
+    if (rec.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
+      res.status(403).json({ error: 'forbidden: not the run owner' }); return;
+    }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -131,6 +136,10 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/report
   router.get('/:runId/models/:model/report', async (req, res) => {
+    const rec = await getRunRecord(req.params.runId as string);
+    if (rec?.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
+      res.status(403).json({ error: 'forbidden: not the run owner' }); return;
+    }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -141,6 +150,10 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/files — list sandbox files
   router.get('/:runId/models/:model/files', async (req, res) => {
+    const rec = await getRunRecord(req.params.runId as string);
+    if (rec?.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
+      res.status(403).json({ error: 'forbidden: not the run owner' }); return;
+    }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
