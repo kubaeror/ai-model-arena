@@ -11,6 +11,7 @@ import { loadScenario, resolveScenarioPath } from './config.js';
 import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { Sandbox } from './sandbox/sandbox.js';
+import { generateManifest, writeManifest } from './sandbox/artifact-manifest.js';
 import { runAgentLoop } from './agent-loop/loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
@@ -271,6 +272,15 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
 
       const result = loopResult!;
+
+      // Generate artifact manifest with checksums for quarantine
+      try {
+        const manifest = generateManifest(sandboxDir, modelRunId, modelName);
+        writeManifest(manifest, runOutputDir, logger);
+      } catch (manifestErr) {
+        logger.warn('Failed to generate artifact manifest (non-fatal)',
+          { error: manifestErr instanceof Error ? manifestErr.message : String(manifestErr) });
+      }
 
       logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed });
       await store.updateSessionStatus(session.id, result.errors.length > 0 ? 'errored' : 'completed');

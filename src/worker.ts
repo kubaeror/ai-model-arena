@@ -30,6 +30,7 @@ import { writeReport } from './logger/report-logger.js';
 import { writeResultJson, type RunResult } from './logger/result-logger.js';
 import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
+import { generateManifest, writeManifest } from './sandbox/artifact-manifest.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { initDb } from './db/index.js';
 import { createSessionStore } from './session/store.js';
@@ -324,6 +325,16 @@ async function main(): Promise<void> {
   const diff = await sandboxGit.generateDiff();
   if (diff) {
     await writeDiffPatch(outputDir, diff, logger);
+  }
+
+  // ── Generate artifact manifest ───────────────────────────────────────────
+  try {
+    const manifest = generateManifest(sandboxDir, runId, modelName);
+    writeManifest(manifest, outputDir, logger);
+  } catch (manifestErr) {
+    logger.warn('Failed to generate artifact manifest (non-fatal)', {
+      error: manifestErr instanceof Error ? manifestErr.message : String(manifestErr),
+    });
   }
   
   const result: RunResult = {
