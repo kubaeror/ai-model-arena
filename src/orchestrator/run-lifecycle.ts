@@ -8,7 +8,7 @@ import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
-import { loadBudgetConfig, checkBudget, addSpend } from '../cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, addSpend, reserveBudget, releaseReservation, getPricing } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
@@ -219,11 +219,28 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);
   
   // Check budget for each model before starting
+  const reservations: Array<{ model: string; estimated: number }> = [];
   for (const modelName of opts.models) {
     const budgetCheck = checkBudget(modelName, root, opts.forceBudget ?? false, logger);
     if (!budgetCheck.allowed) {
       throw new Error(budgetCheck.reason ?? `Budget exceeded for ${modelName}`);
     }
+
+    // Estimate cost: assume maxTurns tokens × worst-case pricing
+    const resolved = await resolveModelForRun(modelName);
+    const maxTurns = resolved?.maxTurns ?? 20;
+    const estTokensPerTurn = 8000; // conservative estimate
+    const pricingData = await getPricing(modelName);
+    const inputPrice = pricingData?.input ?? 0;
+    const outputPrice = pricingData?.output ?? 0;
+    const estimatedCost = maxTurns * estTokensPerTurn * (inputPrice + outputPrice) / 1_000_000;
+
+    const reservation = reserveBudget(modelName, estimatedCost, root, logger);
+    if (!reservation.ok) {
+      throw new Error(reservation.reason ?? `Budget reservation failed for ${modelName}`);
+    }
+    reservations.push({ model: modelName, estimated: estimatedCost });
+
     if (budgetCheck.percentUsed >= 80) {
       logger.warn(`Budget threshold approach for ${modelName}`, { 
         spent: budgetCheck.spentUsd, 
@@ -369,6 +386,14 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
       : { ...base, status: 'errored' };
   });
   await patchIndexAfterFinalize(spec.runId, mdPath, jsonPath, perModel);
+
+  // Release budget reservations with actual costs
+  for (const entry of entries) {
+    const actualCost = entry.result?.costUsd ?? 0;
+    const estimatedCost = actualCost > 0 ? actualCost * 2 : 1; // rough estimate
+    releaseReservation(entry.model, estimatedCost, actualCost, spec.root!, logger);
+  }
+
   logger.info('Comparison written', { md: mdPath, json: jsonPath });
   // Record spend for budget tracking
   for (const entry of entries) {

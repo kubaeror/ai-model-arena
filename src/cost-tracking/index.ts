@@ -5,7 +5,9 @@ export {
   checkBudget, 
   addSpend, 
   saveBudgetState, 
-  getBudgetStatus, 
+  getBudgetStatus,
+  reserveBudget,
+  releaseReservation,
   resetBudgetCache 
 } from './budget.js';
 

@@ -101,6 +101,102 @@ export function addSpend(modelName: string, usd: number, rootDir: string, logger
   return spendQueue;
 }
 
+let pendingReservations = new Map<string, number>();
+
+/**
+ * Reserve an estimated cost before dispatching a job.
+ * Returns {ok: true} if the reservation is within budget limits, {ok: false} otherwise.
+ * The reservation is tracked in memory and must be released via releaseReservation().
+ */
+export function reserveBudget(
+  modelName: string,
+  estimatedCostUsd: number,
+  rootDir: string,
+  logger?: Logger,
+): { ok: boolean; reason?: string } {
+  if (!budgetConfig) return { ok: true };
+
+  const state = loadBudgetState(budgetConfig, rootDir, logger);
+  const modelLimits = budgetConfig.models?.[modelName];
+  const globalLimits = budgetConfig.global;
+  const thresholds = budgetConfig.thresholds ?? { warn: 80, block: 100 };
+
+  const spentDaily = getSpendToday(state, modelName);
+  const spentMonthly = getSpendMonth(state, modelName);
+  const limitDaily = modelLimits?.daily ?? globalLimits?.daily;
+  const limitMonthly = modelLimits?.monthly ?? globalLimits?.monthly;
+
+  // Include all pending reservations in the projected spend
+  const reservationKey = `res:${modelName}:d`;
+  const totalReserved = (pendingReservations.get(reservationKey) ?? 0);
+
+  if (limitDaily !== null && limitDaily !== undefined) {
+    const projectedDaily = spentDaily + totalReserved + estimatedCostUsd;
+    const percentDaily = (projectedDaily / limitDaily) * 100;
+    if (percentDaily > thresholds.block) {
+      return {
+        ok: false,
+        reason: `Budget reservation blocked for ${modelName}: projected daily spend $${projectedDaily.toFixed(2)} exceeds limit $${limitDaily} (${percentDaily.toFixed(0)}%)`,
+      };
+    }
+  }
+  if (limitMonthly !== null && limitMonthly !== undefined) {
+    const projectedMonthly = spentMonthly + totalReserved + estimatedCostUsd;
+    const percentMonthly = (projectedMonthly / limitMonthly) * 100;
+    if (percentMonthly > thresholds.block) {
+      return {
+        ok: false,
+        reason: `Budget reservation blocked for ${modelName}: projected monthly spend $${projectedMonthly.toFixed(2)} exceeds limit $${limitMonthly} (${percentMonthly.toFixed(0)}%)`,
+      };
+    }
+  }
+
+  // Reserve the estimated cost
+  pendingReservations.set(reservationKey, totalReserved + estimatedCostUsd);
+  logger?.debug('Budget reserved', {
+    model: modelName,
+    estimatedCost: estimatedCostUsd,
+    totalReserved: totalReserved + estimatedCostUsd,
+    dailySpent: spentDaily,
+    monthlySpent: spentMonthly,
+  });
+
+  return { ok: true };
+}
+
+/**
+ * Release a budget reservation and add the actual spend.
+ * Must be called after job completion (success or failure).
+ */
+export function releaseReservation(
+  modelName: string,
+  estimatedCostUsd: number,
+  actualCostUsd: number,
+  rootDir: string,
+  logger?: Logger,
+): void {
+  const reservationKey = `res:${modelName}:d`;
+  const current = pendingReservations.get(reservationKey) ?? 0;
+  const released = Math.max(0, current - estimatedCostUsd);
+  if (released > 0) {
+    pendingReservations.set(reservationKey, released);
+  } else {
+    pendingReservations.delete(reservationKey);
+  }
+
+  if (actualCostUsd > 0) {
+    // Fire-and-forget — addSpend is serialized
+    void addSpend(modelName, actualCostUsd, rootDir, logger);
+  }
+
+  logger?.debug('Budget reservation released', {
+    model: modelName,
+    estimatedCost: estimatedCostUsd,
+    actualCost: actualCostUsd,
+    remainingReserved: released,
+  });
+}
+
 function getSpendToday(state: BudgetState, modelName?: string): number {
   const dayKey = DAY_KEY();
   if (modelName) {
