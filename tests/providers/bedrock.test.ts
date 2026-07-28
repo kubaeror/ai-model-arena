@@ -16,11 +16,13 @@ function stubLogger() {
 test('BedrockAdapter constructs in native SigV4 mode without gateway', () => {
   delete process.env.AWS_BEDROCK_GATEWAY_URL;
   delete process.env.AWS_BEDROCK_GATEWAY_KEY;
+  process.env.AWS_BEDROCK_REGION = 'us-east-1';
   const adapter = new BedrockAdapter(bedrockDescriptor, 'anthropic.claude-3-sonnet-20240229-v1:0', { logger: stubLogger() });
   assert.ok(adapter);
   assert.equal(adapter.supportsStreaming(), true);
   assert.equal(adapter.supportsReasoning(), false);
   assert.equal(adapter.supportsPromptCaching(), false);
+  delete process.env.AWS_BEDROCK_REGION;
 });
 
 test('BedrockAdapter throws in gateway mode without key', () => {
@@ -34,12 +36,14 @@ test('BedrockAdapter throws in gateway mode without key', () => {
 });
 
 test('BedrockAdapter constructs in gateway mode with URL and key', () => {
+  process.env.AWS_BEDROCK_REGION = 'eu-west-1';
   process.env.AWS_BEDROCK_GATEWAY_URL = 'https://gateway.example.com';
   process.env.AWS_BEDROCK_GATEWAY_KEY = 'test-key';
   const adapter = new BedrockAdapter(bedrockDescriptor, 'claude-3', { logger: stubLogger() });
   assert.ok(adapter);
   delete process.env.AWS_BEDROCK_GATEWAY_URL;
   delete process.env.AWS_BEDROCK_GATEWAY_KEY;
+  delete process.env.AWS_BEDROCK_REGION;
 });
 
 test('BedrockAdapter constructs with opts.baseUrl and apiKey', () => {
