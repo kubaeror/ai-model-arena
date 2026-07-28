@@ -21,7 +21,7 @@ spec:
               type: RuntimeDefault
           initContainers:
             - name: db-migrate
-              image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+              image: ghcr.io/kubaeror/ai-model-arena-runner:PLACEHOLDER
               command: ["node", "dist/scripts/db-migrate.js"]
               envFrom:
                 - configMapRef:
@@ -42,7 +42,7 @@ spec:
                   memory: 256Mi
           containers:
             - name: scheduler
-              image: ghcr.io/kubaeror/ai-model-arena-runner:latest
+              image: ghcr.io/kubaeror/ai-model-arena-runner:PLACEHOLDER
               command: ["node", "dist/scripts/scheduler-tick.js"]
               securityContext:
                 allowPrivilegeEscalation: false
