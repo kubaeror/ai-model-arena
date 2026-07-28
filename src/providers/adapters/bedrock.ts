@@ -25,9 +25,15 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
   private modelId: string;
   private region: string;
   private client: InstanceType<typeof BedrockRuntimeClient> | null = null;
+  private clientCreatedAt = 0;
   private gatewayUrl?: string;
   private gatewayKey?: string;
   private useGateway: boolean;
+
+  // Recreate client every 55 minutes to ensure fresh STS credentials
+  // (AWS SDK credential chain handles refresh internally, but edge cases
+  // like clock skew or revoked credentials require a fresh client).
+  private static CLIENT_MAX_AGE_MS = 55 * 60 * 1000;
 
   constructor(_descriptor: ProviderDescriptor, modelId: string, opts: CreateAdapterOpts) {
     super(opts.logger);
@@ -36,11 +42,15 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
     this.gatewayKey = opts.apiKey ?? process.env.AWS_BEDROCK_GATEWAY_KEY;
     this.useGateway = !!this.gatewayUrl;
 
-    // Resolve region: env var > Bedrock descriptor envVar > default us-east-1
+    // Resolve region: env var > AWS_REGION > AWS_DEFAULT_REGION
+    // No hardcoded fallback — require explicit configuration
     this.region = process.env.AWS_BEDROCK_REGION ||
-      (process.env.AWS_REGION) ||
-      (process.env.AWS_DEFAULT_REGION) ||
-      'us-east-1';
+      process.env.AWS_REGION ||
+      process.env.AWS_DEFAULT_REGION ||
+      '';
+    if (!this.region && !this.useGateway) {
+      throw new Error('BedrockAdapter requires AWS_BEDROCK_REGION, AWS_REGION, or AWS_DEFAULT_REGION to be set');
+    }
 
     if (!this.useGateway) {
       // Will be initialized lazily on first call (allows IRSA token to be fresh)
@@ -58,12 +68,21 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
   supportsPromptCaching(): boolean { return false; }
 
   private async getClient(): Promise<InstanceType<typeof BedrockRuntimeClient>> {
-    if (this.client) return this.client;
+    const now = Date.now();
+    if (this.client && (now - this.clientCreatedAt) < BedrockAdapter.CLIENT_MAX_AGE_MS) {
+      return this.client;
+    }
+    if (this.client) {
+      this.logger?.info('BedrockAdapter: recreating client (max age exceeded)', {
+        ageMs: now - this.clientCreatedAt,
+      });
+    }
     await loadAwsSdk();
     this.client = new BedrockRuntimeClient({
       region: this.region,
       maxAttempts: 3,
     });
+    this.clientCreatedAt = now;
     return this.client;
   }
 
