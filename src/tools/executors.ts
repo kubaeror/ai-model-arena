@@ -5,6 +5,7 @@ import { z } from 'zod/v4';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
 import { wrapFileContent } from '../security/prompt-injection.js';
+import { sanitizeSecrets } from '../security/shell-secrets.js';
 import { globToRegex } from './glob-matcher.js';
 import { webFetch, webSearch } from './web.js';
 import { todoRead, todoWrite } from './todo.js';
@@ -126,6 +127,13 @@ function formatShell(stdout: string, stderr: string, code: number | string | nul
   if (stderr) out += `stderr:\n${stderr}\n`;
   if (code !== null && code !== undefined) out += `(exit code: ${code})\n`;
   if (out.length > maxBytes) out = out.slice(0, maxBytes) + `\n…[truncated at ${maxBytes} bytes]`;
+
+  // Sanitize potential secrets in output before returning to agent
+  const { sanitized, findings } = sanitizeSecrets(out);
+  if (findings.length > 0) {
+    return `(note: ${findings.length} potential secret pattern(s) redacted: ${findings.join(', ')})\n${sanitized}`.trimEnd();
+  }
+
   return out.trimEnd();
 }
 
