@@ -16,7 +16,7 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [provider-keys]
-    verbs: [get, create, patch]
+    verbs: [create, patch]
   - apiGroups: [apps]
     resources: [deployments]
     verbs: [get, list, patch]

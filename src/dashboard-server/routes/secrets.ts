@@ -62,6 +62,12 @@ export function createSecretsRouter(): Router {
           res.json({ platform: 'kubernetes', secrets: [] });
           return;
         }
+        if (e?.response?.statusCode === 403) {
+          // Dashboard SA no longer has secret read access — use env-based fallback
+          const entries = secretStore.list();
+          res.json({ platform: 'kubernetes', secrets: entries, note: 'Secret listing uses env-based fallback (dashboard SA lacks read access)' });
+          return;
+        }
         res.status(500).json({ error: INTERNAL_ERROR });
         return;
       }
