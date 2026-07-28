@@ -9,7 +9,7 @@ resources:
 
 images:
   - name: ghcr.io/kubaeror/ai-model-arena-runner
-    newTag: latest
+    newTag: 2a66f3c
 
 patches:
   - target:
