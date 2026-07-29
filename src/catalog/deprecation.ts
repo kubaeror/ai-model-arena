@@ -1,5 +1,4 @@
 import { getDrizzleDb } from '../db/index.js';
-import type { DbModel } from '../db/schema.js';
 import type { Logger } from '../types.js';
 
 export type ModelLifecycle = 'active' | 'deprecated' | 'sunset' | 'end_of_life';
