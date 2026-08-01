@@ -16,6 +16,7 @@ import { safeResolve } from '../../sandbox/sandbox.js';
 import { readDiffPatch } from '../../sandbox/git.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
+import type { Response } from 'express';
 
 async function findEntry(runId: string, model: string): Promise<RunIndexModelEntry | undefined> {
   return (await getRunRecord(runId))?.perModel.find((m) => m.model === model);
@@ -41,6 +42,33 @@ async function checkRunOwnership(req: AuthedRequest, runId: string): Promise<{ o
   const allowed = isAdmin || (ownerIsPresent && req.user?.sub === rec.createdBy);
   if (!allowed) return { ok: false, status: 403 };
   return { ok: true };
+}
+
+/**
+ * I3: shared ownership gate. Runs `checkRunOwnership` and, on denial,
+ * sends the 404/403 response and returns `false`; on success returns `true`
+ * so the handler can proceed. Collapses the 9 repeated
+ * `if (!owner.ok) { res.status(...).json(...); return; }` blocks into one
+ * call site, so the ownership contract lives in exactly one place.
+ *
+ * @param req     - the authed request (carries the user identity).
+ * @param res     - the express response (used to send the denial).
+ * @param runId   - the runId path param.
+ * @param notFoundMsg - optional override for the 404 message (stop/restart use lowercase 'run not found').
+ * @returns `true` if the handler may proceed, `false` if the response was already sent.
+ */
+async function allowIfRunOwner(
+  req: AuthedRequest,
+  res: Response,
+  runId: string,
+  notFoundMsg: string = 'Run not found',
+): Promise<boolean> {
+  const owner = await checkRunOwnership(req, runId);
+  if (owner.ok) return true;
+  res.status(owner.status).json({
+    error: owner.status === 404 ? notFoundMsg : 'forbidden: not the run owner',
+  });
+  return false;
 }
 
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache']);
@@ -117,11 +145,7 @@ export function createRunsRouter(): Router {
     // resultPath, conversationPath, reportPath, logFile). Restrict it to the
     // run owner or admin to avoid leaking the on-disk layout of another
     // tenant's run.
-    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-    if (!owner.ok) {
-      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
-      return;
-    }
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const rec = await getRunRecord(req.params.runId as string);
     if (!rec) {
       res.status(404).json({ error: 'Run not found' });
@@ -146,11 +170,7 @@ export function createRunsRouter(): Router {
   router.get('/:runId/models/:model/conversation', async (req, res) => {
     // Default-deny ownership check (H2): runs with no createdBy are only
     // accessible to admins.
-    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-    if (!owner.ok) {
-      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
-      return;
-    }
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -166,11 +186,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/report
   router.get('/:runId/models/:model/report', async (req, res) => {
-    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-    if (!owner.ok) {
-      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
-      return;
-    }
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -181,11 +197,7 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/files — list sandbox files
   router.get('/:runId/models/:model/files', async (req, res) => {
-    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-    if (!owner.ok) {
-      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
-      return;
-    }
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -203,11 +215,7 @@ export function createRunsRouter(): Router {
     // Ownership check (H3): without this, any authenticated viewer could read
     // any run's sandbox files by runId — sandbox files frequently contain
     // secrets, prompts, and model-generated credentials.
-    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-    if (!owner.ok) {
-      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
-      return;
-    }
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -235,11 +243,7 @@ export function createRunsRouter(): Router {
     // Ownership check (H3): PM2 logs can leak environment variables, build
     // output, and model-generated credentials. Without this check any
     // authenticated viewer could read any run's logs by runId.
-    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-    if (!owner.ok) {
-      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
-      return;
-    }
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -251,11 +255,7 @@ export function createRunsRouter(): Router {
   // POST /api/runs/:runId/stop
   router.post('/:runId/stop', requireRole('editor'), async (req, res) => {
     try {
-      const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-      if (!owner.ok) {
-        res.status(owner.status).json({ error: owner.status === 404 ? 'run not found' : 'forbidden: not the run owner' });
-        return;
-      }
+      if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string, 'run not found'))) return;
       await stopRun(req.params.runId as string);
       auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'run.stop', { type: 'run', id: req.params.runId as string });
       res.json({ runId: req.params.runId as string, action: 'stop' });
@@ -267,11 +267,7 @@ export function createRunsRouter(): Router {
   // POST /api/runs/:runId/restart
   router.post('/:runId/restart', requireRole('editor'), async (req, res) => {
     try {
-      const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-      if (!owner.ok) {
-        res.status(owner.status).json({ error: owner.status === 404 ? 'run not found' : 'forbidden: not the run owner' });
-        return;
-      }
+      if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string, 'run not found'))) return;
       await restartRun(req.params.runId as string);
       auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'run.restart', { type: 'run', id: req.params.runId as string });
       res.json({ runId: req.params.runId as string, action: 'restart' });
@@ -285,11 +281,7 @@ export function createRunsRouter(): Router {
     // Ownership check (H3): diffs expose generated source code; restrict to
     // the run owner or an admin, matching the conversation/report/files-list
     // endpoints above.
-    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
-    if (!owner.ok) {
-      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
-      return;
-    }
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });

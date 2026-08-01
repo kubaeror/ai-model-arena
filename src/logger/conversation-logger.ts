@@ -2,6 +2,9 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Role, ToolCall, TokenUsage } from '../types.js';
+import { createLogger } from './pino-logger.js';
+
+const logger = createLogger('ai-arena:conversation-logger');
 
 export type ConversationEntryType =
   | 'system'
@@ -102,8 +105,7 @@ export class ConversationLogger {
         // failure so dropped conversation messages are observable (previously
         // this was `.catch(() => {})` which hid all failures).
         const detail = err instanceof Error ? { message: err.message } : { error: String(err) };
-        // eslint-disable-next-line no-console
-        console.error('conversation-logger: appendMessage failed', { sessionId: this.sessionId, ...detail });
+        logger.error('conversation-logger: appendMessage failed', { sessionId: this.sessionId, ...detail });
       });
     }
 

@@ -71,8 +71,16 @@ export async function audit(
       after: after ? JSON.stringify(after) : null,
       at: new Date().toISOString(),
     });
-  } catch {
+  } catch (err) {
+    // I6: previously `audit()` silently incremented a counter and returned —
+    // operators had no log signal that audit records were being dropped. The
+    // only logging lived in `auditSafe()`'s outer `.catch`, which never
+    // fired because `audit()` swallows internally. Log the failure HERE so
+    // dropped audit records are observable regardless of the call site
+    // (auditSafe fire-and-forget, awaited audit(), or a future caller).
     auditFailureCount++;
+    const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+    logger.error('audit: failed to persist audit entry', { actor, action, entity, ...detail });
     // Increment Prometheus counter if available (non-fatal if prom-client is not loaded)
     try {
       const { auditFailures } = await import('../observability/metrics.js');

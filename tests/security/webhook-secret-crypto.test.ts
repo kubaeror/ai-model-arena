@@ -72,10 +72,22 @@ test('decryptWebhookSecret rejects tampered ciphertext (GCM auth tag)', () => {
   assert.throws(() => decryptWebhookSecret(tampered), /unsupported|auth|decrypt/i);
 });
 
-test('decryptWebhookSecret rejects a truncated ciphertext', () => {
-  // Too short to contain iv + authTag.
+test('decryptWebhookSecret treats a too-short v1: value as legacy plaintext (I5)', () => {
+  // I5 — prefix-collision robustness: a v1:-prefixed value too short to be a
+  // real ciphertext (iv+authTag = 28 bytes minimum) is treated as legacy
+  // plaintext rather than throwing, so a row whose secret happens to start
+  // with "v1:" doesn't break webhook delivery.
   const short = 'v1:' + Buffer.from('abc').toString('base64');
-  assert.throws(() => decryptWebhookSecret(short), /too short/i);
+  const recovered = decryptWebhookSecret(short);
+  assert.equal(recovered, short, 'too-short v1: value returned as legacy plaintext');
+});
+
+test('decryptWebhookSecret treats a non-base64 v1: value as legacy plaintext (I5)', () => {
+  // A v1:-prefixed value whose body is not clean base64 can't be a real
+  // ciphertext — fall back to legacy plaintext instead of throwing.
+  const weird = 'v1:not-base64-at-all!!';
+  const recovered = decryptWebhookSecret(weird);
+  assert.equal(recovered, weird, 'non-base64 v1: value returned as legacy plaintext');
 });
 
 test('encrypt/decrypt works with a hex env key', () => {

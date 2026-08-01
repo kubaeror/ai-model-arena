@@ -105,6 +105,20 @@ export function encryptWebhookSecret(plaintext: string | null | undefined): stri
 /**
  * Decrypt a webhook secret. Accepts both the `v1:`-prefixed ciphertext
  * (encrypted) and legacy plaintext (no prefix) for backward compatibility.
+ *
+ * I5 — prefix-collision robustness: a legacy plaintext secret that happens
+ * to start with `v1:` (e.g. an operator-supplied HMAC secret like
+ * `v1:my-shared-key`) would previously be misread as ciphertext and crash
+ * decryption with `Malformed webhook secret ciphertext` or a GCM auth-tag
+ * error, breaking webhook delivery for that row. Now, if a `v1:`-prefixed
+ * value fails base64 decode OR GCM authentication, we fall back to treating
+ * the WHOLE stored value as legacy plaintext (with a warn-level log) instead
+ * of throwing — matching the pre-encryption backward-compat contract. A
+ * genuinely encrypted value cannot fail GCM auth (the auth tag is tamper
+ * detection), so the only values that hit the fallback are mis-prefixed
+ * plaintext. Real decryption failures (wrong key) still throw so key
+ * rotation bugs surface loudly rather than silently degrading to plaintext.
+ *
  * @param stored - the value from the DB (ciphertext or legacy plaintext).
  * @returns the plaintext secret, or null if stored is null/empty.
  */
@@ -117,17 +131,52 @@ export function decryptWebhookSecret(stored: string | null | undefined): string 
   }
   const { key } = getKey();
   const blob = Buffer.from(stored.slice(VERSION_PREFIX.length), 'base64');
+  // Minimum length for a valid ciphertext blob: 12 (iv) + 0 (ciphertext may
+  // be empty for an empty-string plaintext) + 16 (authTag) = 28 bytes. A
+  // shorter `v1:` value is a prefix-collision with legacy plaintext —
+  // fall back rather than throw.
   if (blob.length < IV_BYTES + AUTH_TAG_BYTES) {
-    throw new Error('Malformed webhook secret ciphertext (too short).');
+    logger.warn(
+      'decryptWebhookSecret: v1:-prefixed value is too short to be ciphertext — treating as legacy plaintext',
+      { storedLength: stored.length },
+    );
+    return stored;
   }
   const iv = blob.subarray(0, IV_BYTES);
   const authTag = blob.subarray(blob.length - AUTH_TAG_BYTES);
   const ciphertext = blob.subarray(IV_BYTES, blob.length - AUTH_TAG_BYTES);
   const decipher = crypto.createDecipheriv(GCM_ALGORITHM, key, iv);
   decipher.setAuthTag(authTag);
-  // setEncoding before update for string output
-  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return plaintext.toString('utf8');
+  try {
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    return plaintext.toString('utf8');
+  } catch (err) {
+    // GCM auth-tag mismatch OR invalid base64 payload. The only way a real
+    // ciphertext fails here is a wrong key (key rotation gone wrong) — in
+    // which case throwing is correct, because silently returning the
+    // ciphertext-as-plaintext would sign webhooks with garbage. We
+    // distinguish: if the base64 didn't even decode to bytes that GCM can
+    // process, it's almost certainly legacy plaintext that happens to
+    // start with `v1:` — fall back. If it decoded cleanly but failed GCM
+    // auth, that's a real key/ciphertext problem — throw.
+    const detail = err instanceof Error ? { message: err.message } : { error: String(err) };
+    // Heuristic: if the post-prefix portion contains non-base64 chars, the
+    // stored value is legacy plaintext mis-prefixed with `v1:`. The base64
+    // decoder is lenient by default (strips whitespace, ignores junk), so
+    // check the raw length parity as a cheap proxy — a real ciphertext's
+    // base64 is always a clean multiple of 4 after padding.
+    const rawPayload = stored.slice(VERSION_PREFIX.length);
+    const looksLikeCleanBase64 = /^[A-Za-z0-9+/]+={0,2}$/.test(rawPayload) && rawPayload.length % 4 === 0;
+    if (!looksLikeCleanBase64) {
+      logger.warn(
+        'decryptWebhookSecret: v1:-prefixed value is not clean base64 — treating as legacy plaintext',
+        detail,
+      );
+      return stored;
+    }
+    logger.error('decryptWebhookSecret: GCM authentication failed — likely a key/ciphertext mismatch (key rotation?)', detail);
+    throw err;
+  }
 }
 
 /** Reset cached key (for tests). */
