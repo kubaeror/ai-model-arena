@@ -118,6 +118,15 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId — run metadata + live per-model status
   router.get('/:runId', async (req, res) => {
+    // This endpoint returns absolute filesystem paths (sandboxDir, outputDir,
+    // resultPath, conversationPath, reportPath, logFile). Restrict it to the
+    // run owner or admin to avoid leaking the on-disk layout of another
+    // tenant's run.
+    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+    if (!owner.ok) {
+      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
+      return;
+    }
     const rec = await getRunRecord(req.params.runId as string);
     if (!rec) {
       res.status(404).json({ error: 'Run not found' });

@@ -17,6 +17,17 @@ import { createLogger } from '../../logger/pino-logger.js';
  * either via the `Sec-WebSocket-Protocol` header (as `access_token, <jwt>`,
  * matching the LiveHub convention) or via a `?token=<jwt>` query parameter.
  * Unauthenticated connections are rejected at the upgrade handshake.
+ *
+ * SECURITY NOTE on the `?token=` fallback: the query string is captured by
+ * upstream reverse proxies (nginx ingress) in their default access log format,
+ * which persists the JWT in log aggregators (Loki/Promtail) beyond the token
+ * lifetime. Prefer the `Sec-WebSocket-Protocol` path for all clients that can
+ * set headers (browsers, programmatic clients with a custom-header API). The
+ * `?token=` path is a last-resort fallback for clients that cannot set the
+ * subprotocol header. When `?token=` is used we emit a `logger.warn` (without
+ * the token value) so operators can detect reliance on this path and either
+ * migrate the client to the subprotocol header or configure the ingress to
+ * scrub `token` from the log line.
  */
 
 const MAX_PAYLOAD_BYTES = 1_048_576; // 1 MiB hard cap per WS message frame
@@ -39,7 +50,8 @@ interface VerifyInfo {
  * Accepts either:
  *   1. `Sec-WebSocket-Protocol: access_token, <jwt>` (browser-friendly; the
  *      client opens with `new WebSocket(url, ['access_token', '<jwt>'])`).
- *   2. `?token=<jwt>` query parameter on the upgrade URL.
+ *   2. `?token=<jwt>` query parameter on the upgrade URL (last-resort; see
+ *      the module security note above about ingress access-log capture).
  *
  * Returns the verified `{ sub, role }` principal, or `null` if no valid
  * credential is present — in which case the caller rejects the upgrade.
@@ -55,11 +67,19 @@ function verifyWsRequest(info: VerifyInfo, auth: AuthConfig): { sub: string; rol
     return verifyToken(auth, protocolToken);
   }
 
-  // 2. ?token=<jwt> query parameter
+  // 2. ?token=<jwt> query parameter (last-resort; logged by upstream proxies)
   try {
     const url = new URL(info.req.url ?? '/', 'http://localhost');
     const queryToken = url.searchParams.get('token');
-    if (queryToken) return verifyToken(auth, queryToken);
+    if (queryToken) {
+      logger.warn(
+        'WebSocket auth used the ?token= query fallback — this JWT may be ' +
+        'captured in upstream reverse-proxy access logs. Migrate the client ' +
+        'to the Sec-WebSocket-Protocol header path if possible.',
+        { path: url.pathname, remoteAddress: info.req.socket.remoteAddress },
+      );
+      return verifyToken(auth, queryToken);
+    }
   } catch {
     // malformed URL — fall through to reject
   }
