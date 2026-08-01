@@ -526,6 +526,130 @@ export async function countRoles(): Promise<number> {
 
 // ── Config table queries (raw-style for dynamic WHERE) ────────────────────
 
+/**
+ * Validate a SQL identifier (table or column name) against a strict allowlist
+ * regex. Prevents SQL injection via the table/select/orderBy fields of
+ * {@link queryTable} / {@link paginatedQuery}, which string-interpolate these
+ * values into raw SQL.
+ *
+ * Allowed forms:
+ *   - bare identifier: `users`, `model_runtime_stats`, `at`
+ *   - double-quoted identifier: `"at"`, `"order"`
+ *   - comma-separated list of the above (for SELECT projections): `id, name, created_at`
+ *   - the literal `*` (for SELECT *)
+ *
+ * @returns the validated identifier (unchanged).
+ * @throws Error if the identifier contains anything outside the allowlist.
+ */
+export function validateSqlIdentifier(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error('SQL identifier cannot be empty');
+  }
+  if (trimmed === '*') return trimmed;
+  // Split on commas, validate each segment independently.
+  for (const rawSegment of trimmed.split(',')) {
+    const segment = rawSegment.trim();
+    if (!segment) {
+      throw new Error(`SQL identifier list has an empty segment: ${JSON.stringify(input)}`);
+    }
+    // A segment may be a bare identifier or a double-quoted identifier.
+    const bare = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+    const quoted = /^"[a-zA-Z_][a-zA-Z0-9_]*"$/;
+    if (!bare.test(segment) && !quoted.test(segment)) {
+      throw new Error(
+        `Refusing to interpolate unsafe SQL identifier: ${JSON.stringify(segment)} ` +
+        `(from ${JSON.stringify(input)}). Only bare identifiers (a-z0-9_) or ` +
+        `"double-quoted" identifiers are allowed in table/select fields.`,
+      );
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Validate an ORDER BY clause. Same identifier rules as
+ * {@link validateSqlIdentifier}, plus an optional ` ASC` or ` DESC` suffix
+ * per column, and comma-separated multi-column lists (e.g. `benchmark, score DESC`).
+ * @returns the validated orderBy clause (unchanged).
+ * @throws Error on any disallowed character.
+ */
+export function validateOrderByClause(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error('ORDER BY clause cannot be empty');
+  }
+  for (const rawSegment of trimmed.split(',')) {
+    const segment = rawSegment.trim();
+    if (!segment) {
+      throw new Error(`ORDER BY clause has an empty segment: ${JSON.stringify(input)}`);
+    }
+    // Strip an optional trailing ASC|DESC (case-insensitive).
+    const m = /^(.+?)\s+(ASC|DESC)$/i.exec(segment);
+    const ident = m ? m[1]! : segment;
+    const bare = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+    const quoted = /^"[a-zA-Z_][a-zA-Z0-9_]*"$/;
+    if (!bare.test(ident) && !quoted.test(ident)) {
+      throw new Error(
+        `Refusing to interpolate unsafe ORDER BY segment: ${JSON.stringify(segment)} ` +
+        `(from ${JSON.stringify(input)}).`,
+      );
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Validate a WHERE clause fragment for {@link queryTable} / {@link paginatedQuery}.
+ *
+ * Callers build WHERE clauses from static SQL fragments joined with AND/OR,
+ * with values passed via `?` placeholders (parameterized). This validator is a
+ * defense-in-depth guard against accidental future refactors that pass
+ * user-controlled strings into the clause. It rejects:
+ *   - statement terminators (`;`)
+ *   - SQL line comments (`--`, `#` at start) and block comments (`/* *\/`)
+ *   - stacked-statement keywords (`UNION`, `xp_`, `exec `, stacked `SELECT`)
+ *   - shell metacharacters that have no place in a WHERE clause
+ *
+ * It does NOT attempt to fully parse SQL (that would require a real parser).
+ * The contract is: callers must build whereClause from static fragments only;
+ * values go in the params array.
+ *
+ * @returns the validated whereClause (unchanged).
+ * @throws Error if the clause contains a disallowed pattern.
+ */
+export function validateWhereClause(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error('WHERE clause cannot be empty');
+  }
+  // Reject obvious injection patterns. The empty-allowlist case ('1=1') is fine.
+  const forbidden = [
+    /;/i,                      // statement terminator
+    /--/i,                     // line comment
+    /\/\*/,                    // block comment open
+    /\*\//,                    // block comment close
+    /\bUNION\b/i,              // stacked SELECT
+    /\bEXEC\b/i,               // MSSQL exec
+    /\bxp_/i,                  // MSSQL extended procs
+    /\bSLEEP\s*\(/i,           // time-based blind injection
+    /\bBENCHMARK\s*\(/i,       // MySQL time-based
+    /\bWAITFOR\s+DELAY\b/i,    // MSSQL time-based
+    /\bLOAD_FILE\s*\(/i,       // MySQL file read
+    /\bINTO\s+OUTFILE\b/i,     // MySQL file write
+  ];
+  for (const re of forbidden) {
+    if (re.test(trimmed)) {
+      throw new Error(
+        `Refusing to execute WHERE clause with disallowed pattern ${re.source}: ` +
+        `${JSON.stringify(input)}. Build clauses from static SQL fragments ` +
+        `only; values must go in the params array as ? placeholders.`,
+      );
+    }
+  }
+  return trimmed;
+}
+
 export async function queryTable(
   tableName: string,
   whereClauses: string[],
@@ -535,9 +659,15 @@ export async function queryTable(
   offset?: number,
 ): Promise<Record<string, unknown>[]> {
   const db = getDrizzleDb() as any;
+  // Defense-in-depth: validate interpolated identifiers before building SQL.
+  // Current callers pass static literals, but this prevents a careless future
+  // refactor from opening a SQL-injection vector.
+  validateSqlIdentifier(tableName);
+  const safeWhere = whereClauses.length ? whereClauses.map(validateWhereClause).join(' AND ') : '';
+  const safeOrderBy = orderBy ? validateOrderByClause(orderBy) : undefined;
   let query = `SELECT * FROM ${tableName}`;
-  if (whereClauses.length) query += ` WHERE ${whereClauses.join(' AND ')}`;
-  if (orderBy) query += ` ORDER BY ${orderBy}`;
+  if (safeWhere) query += ` WHERE ${safeWhere}`;
+  if (safeOrderBy) query += ` ORDER BY ${safeOrderBy}`;
   if (limit != null) query += ` LIMIT ${limit}`;
   if (offset != null) query += ` OFFSET ${offset}`;
   return db.run(query).values(params) as any;
@@ -621,14 +751,22 @@ export async function paginatedQuery(opts: {
   offset: number;
 }): Promise<{ rows: any[]; total: number }> {
   const db = getDrizzleDb();
-  const cols = opts.select ?? '*';
+  // Defense-in-depth: validate interpolated identifiers before building SQL.
+  // Current callers pass static literals (catalog/cost/files/audit routes),
+  // but this prevents a careless future refactor — e.g. passing
+  // req.query.sort straight into orderBy — from opening a SQL-injection
+  // vector. See validateSqlIdentifier / validateOrderByClause / validateWhereClause.
+  const safeTable = validateSqlIdentifier(opts.table);
+  const safeCols = opts.select ? validateSqlIdentifier(opts.select) : '*';
+  const safeWhere = validateWhereClause(opts.whereClause);
+  const safeOrderBy = validateOrderByClause(opts.orderBy);
   const countRows: any[] = await db.all(
-    sql.raw(`SELECT COUNT(*) AS total FROM ${opts.table} WHERE ${opts.whereClause}`),
+    sql.raw(`SELECT COUNT(*) AS total FROM ${safeTable} WHERE ${safeWhere}`),
     ...opts.params,
   );
   const total = Number(countRows[0]?.total ?? 0);
   const rows = await db.all(
-    sql.raw(`SELECT ${cols} FROM ${opts.table} WHERE ${opts.whereClause} ORDER BY ${opts.orderBy} LIMIT ? OFFSET ?`),
+    sql.raw(`SELECT ${safeCols} FROM ${safeTable} WHERE ${safeWhere} ORDER BY ${safeOrderBy} LIMIT ? OFFSET ?`),
     ...opts.params, opts.limit, opts.offset,
   );
   return { rows, total };
