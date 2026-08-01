@@ -24,6 +24,30 @@ async function findEntry(runId: string, model: string): Promise<RunIndexModelEnt
   return (await getRunRecord(runId))?.perModel.find((m) => m.model === model);
 }
 
+/**
+ * Ownership check for a run. Returns one of:
+ *   - { ok: true }                — the caller may proceed (is owner, admin, or legacy run with no createdBy)
+ *   - { ok: false, status: 404 }  — run not found
+ *   - { ok: false, status: 403 }  — run exists but caller is neither owner nor admin
+ *
+ * Several GET endpoints (files-content, logs, diff) previously skipped this
+ * check entirely, letting any authenticated viewer read another tenant's
+ * sandbox files (often containing secrets/prompts/credentials), PM2 logs,
+ * and diffs by runId — an IDOR-style confidentiality gap.
+ *
+ * Note: the check uses `rec.createdBy && ...` semantics — a run with no
+ * createdBy (legacy/migrated) is currently allowed. This is tightened to
+ * default-deny in Wave 2 (H2 fix in src/auth/rbac.ts).
+ */
+async function checkRunOwnership(req: AuthedRequest, runId: string): Promise<{ ok: true } | { ok: false; status: 404 | 403 }> {
+  const rec = await getRunRecord(runId);
+  if (!rec) return { ok: false, status: 404 };
+  if (rec.createdBy && req.user?.sub !== rec.createdBy && req.user?.role !== 'admin') {
+    return { ok: false, status: 403 };
+  }
+  return { ok: true };
+}
+
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache']);
 
 function walkSandbox(dir: string, base: string, acc: string[] = []): string[] {
@@ -168,6 +192,14 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/files/* — read one sandbox file
   router.get('/:runId/models/:model/files/*filepath', async (req, res) => {
+    // Ownership check (H3): without this, any authenticated viewer could read
+    // any run's sandbox files by runId — sandbox files frequently contain
+    // secrets, prompts, and model-generated credentials.
+    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+    if (!owner.ok) {
+      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
+      return;
+    }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -192,6 +224,14 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/logs — tail PM2 log
   router.get('/:runId/models/:model/logs', async (req, res) => {
+    // Ownership check (H3): PM2 logs can leak environment variables, build
+    // output, and model-generated credentials. Without this check any
+    // authenticated viewer could read any run's logs by runId.
+    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+    if (!owner.ok) {
+      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
+      return;
+    }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
@@ -236,6 +276,14 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/diff
   router.get('/:runId/models/:model/diff', async (req, res) => {
+    // Ownership check (H3): diffs expose generated source code; restrict to
+    // the run owner or an admin, matching the conversation/report/files-list
+    // endpoints above.
+    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+    if (!owner.ok) {
+      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
+      return;
+    }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
       res.status(404).json({ error: 'Run or model not found' });
