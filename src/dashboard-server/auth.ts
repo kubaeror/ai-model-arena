@@ -4,6 +4,9 @@ import path from 'node:path';
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
 import { outputRoot } from '../paths.js';
+import { createLogger } from '../logger/pino-logger.js';
+
+const logger = createLogger('ai-arena:auth');
 
 export interface AuthConfig {
   username: string;
@@ -13,18 +16,63 @@ export interface AuthConfig {
   generatedPassword?: string;
 }
 
-// Token revocation blacklist — in-memory by default, Redis-backed if DASHBOARD_REDIS_URL is set.
-// Entries include the token's exp claim so we can auto-purge expired entries.
+// Token revocation blacklist — in-memory by default, Redis-backed if
+// DASHBOARD_REDIS_URL is set. Entries include the token's exp claim so we
+// can auto-purge expired entries.
+//
+// Failover semantics (H4):
+//   - DASHBOARD_REDIS_URL unset (dev): use the in-memory Map only. This is
+//     per-process and best-effort — acceptable for local dev.
+//   - DASHBOARD_REDIS_URL set (prod): Redis is the source of truth for
+//     revocation across multiple dashboard replicas. If Redis is
+//     unreachable, isRevoked() THROWS (RedisUnavailableError) so the
+//     caller (requireAuth) can fail-CLOSED — a revoked or compromised token
+//     must not remain valid during a Redis outage. Previously the error was
+//     swallowed and the request proceeded ("fail-open without revocation
+//     check"), which let a revoked admin token stay valid until natural
+//     expiry (default 12h).
 const blacklist = new Map<string, number>();
 let blacklistRedis: Awaited<ReturnType<typeof getRedisClient>> | null = null;
+let redisInitAttempted = false;
+
+/** Error thrown when Redis is configured but unreachable. */
+export class RedisUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RedisUnavailableError';
+  }
+}
 
 async function getRedisClient() {
   const url = process.env.DASHBOARD_REDIS_URL;
   if (!url) return null;
   try {
     const { Redis } = await import('ioredis');
-    return new Redis(url, { maxRetriesPerRequest: 2, lazyConnect: true, connectTimeout: 5000 });
-  } catch { return null; }
+    const client = new Redis(url, {
+      maxRetriesPerRequest: 2,
+      lazyConnect: true,
+      connectTimeout: 5000,
+      // Prevent unhandled 'error' events from hanging the process when the
+      // connection fails — we handle connect() rejection explicitly below.
+      enableOfflineQueue: false,
+      retryStrategy: () => null, // don't auto-retry; we'll disconnect on failure
+    });
+    // Attach an error listener so ioredis's emitted error events (e.g.
+    // ECONNREFUSED) don't crash the process or hang the event loop.
+    client.on('error', () => { /* handled via connect() rejection below */ });
+    await client.connect();
+    return client;
+  } catch {
+    return null;
+  }
+}
+
+/** Lazily initialize the Redis client once, then reuse. */
+async function getBlacklistRedis(): Promise<Awaited<ReturnType<typeof getRedisClient>> | null> {
+  if (redisInitAttempted) return blacklistRedis;
+  redisInitAttempted = true;
+  blacklistRedis = await getRedisClient();
+  return blacklistRedis;
 }
 
 /** Add a token to the revocation blacklist. Stores the expiry claim for cleanup. */
@@ -34,8 +82,14 @@ export async function revokeToken(token: string): Promise<void> {
     if (!payload?.exp) return;
     const redis = blacklistRedis ?? (blacklistRedis = await getRedisClient());
     if (redis) {
-      try { await redis.set(`arena:revoked:${token}`, '1', 'EXAT', payload.exp); } catch { /* fall through to memory */ }
-      return;
+      try {
+        await redis.set(`arena:revoked:${token}`, '1', 'EXAT', payload.exp);
+        return;
+      } catch {
+        // Redis write failed — fall through to in-memory so the local node
+        // at least records the revocation. Other replicas won't see it until
+        // Redis recovers, but local revocation is better than nothing.
+      }
     }
   } catch { /* non-fatal */ }
   try {
@@ -44,12 +98,40 @@ export async function revokeToken(token: string): Promise<void> {
   } catch { /* ignore */ }
 }
 
-/** Check if a token has been revoked. */
+/**
+ * Check if a token has been revoked.
+ *
+ * @throws {RedisUnavailableError} when DASHBOARD_REDIS_URL is set but the
+ *   Redis client is null or the EXISTS query throws. The caller
+ *   (requireAuth) treats this as fail-CLOSED (reject the request) so a
+ *   revoked token cannot bypass the check during a Redis outage.
+ *
+ * When DASHBOARD_REDIS_URL is unset, the in-memory Map is consulted and
+ * this never throws (dev mode — per-process revocation is acceptable).
+ */
 async function isRevoked(token: string): Promise<boolean> {
-  const redis = blacklistRedis;
-  if (redis) {
-    try { return (await redis.exists(`arena:revoked:${token}`)) === 1; } catch { /* fall through */ }
+  const redisUrl = process.env.DASHBOARD_REDIS_URL;
+  if (redisUrl) {
+    // Operator configured Redis — it is the source of truth.
+    let redis = blacklistRedis;
+    if (!redis) redis = await getBlacklistRedis();
+    if (!redis) {
+      throw new RedisUnavailableError(
+        'DASHBOARD_REDIS_URL is set but the Redis client could not be ' +
+        'initialized — refusing to authorize without revocation check.',
+      );
+    }
+    try {
+      return (await redis.exists(`arena:revoked:${token}`)) === 1;
+    } catch (e) {
+      // Redis query failed (connection dropped, timeout). Re-throw so the
+      // caller fails closed.
+      throw new RedisUnavailableError(
+        `Redis revocation check failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
+  // Dev mode — in-memory blacklist only.
   const exp = blacklist.get(token);
   if (!exp) return false;
   if (Date.now() / 1000 > exp) { blacklist.delete(token); return false; }
@@ -243,15 +325,33 @@ export function requireAuth(cfg: AuthConfig) {
       res.status(401).json({ error: 'Invalid or expired token' });
       return;
     }
-    // Check revocation blacklist — if Redis is down, fail-open without revocation check
+    // Check revocation blacklist. Fail-CLOSED on Redis outage (H4): if
+    // DASHBOARD_REDIS_URL is set the operator intends revocation to be
+    // authoritative across replicas — a Redis outage must NOT let a
+    // revoked token through. Previously this was fail-open ("Redis error —
+    // proceed without revocation check"), which let a revoked admin token
+    // stay valid until natural expiry (default 12h).
     try {
       const revoked = await isRevoked(token);
       if (revoked) {
         res.status(401).json({ error: 'Token has been revoked' });
         return;
       }
-    } catch {
-      // Redis error — proceed without revocation check
+    } catch (e) {
+      if (e instanceof RedisUnavailableError) {
+        // Fail closed: a revoked token must not bypass the check during a
+        // Redis outage. Surface a 503 (not 401) so legitimate clients can
+        // distinguish "token invalid" from "revocation service down".
+        res.status(503).json({
+          error: 'Revocation service unavailable',
+          detail: e.message,
+        });
+        return;
+      }
+      // Unexpected error — fail closed defensively and log.
+      logger.error('Unexpected error during revocation check', { error: e instanceof Error ? e.message : String(e) });
+      res.status(503).json({ error: 'Revocation service unavailable' });
+      return;
     }
     req.user = verified;
     next();
