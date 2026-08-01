@@ -48,6 +48,10 @@ export class LiveHub {
     this.wss = new WebSocketServer({
       server,
       path: '/ws',
+      // Cap message size at 1 MiB. ws's default is 100 MiB, which lets a
+      // single client exhaust memory by sending a huge frame. (The /runner
+      // and /lobby servers in routes/stream.ts use the same cap.)
+      maxPayload: 1_048_576,
       verifyClient: (info: ClientInfo, cb) => {
         const result = this.verifyUser(info, auth);
         (info.req as IncomingMessage & { _wsUser?: { sub: string; role: string } })._wsUser = result ?? undefined;
