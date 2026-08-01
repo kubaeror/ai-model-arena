@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { listModelsWithPricing } from '../../db/query.js';
 import { upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
-import { audit, requireRole } from '../../auth/rbac.js';
+import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { z } from 'zod';
 import type { AuthedRequest } from '../auth.js';
 
@@ -30,7 +30,7 @@ export function createModelsRouter(): Router {
     }
     const id = parsed.data.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
     await upsertCustomProvider({ id, name: parsed.data.name, apiBase: parsed.data.apiBase, authScheme: parsed.data.authScheme, envVar: parsed.data.envVar, adapter: parsed.data.adapter });
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter });
     res.status(201).json({ ok: true, id });
   });
 
@@ -38,7 +38,7 @@ export function createModelsRouter(): Router {
   router.delete('/:name', requireRole('editor'), async (req, res) => {
     const name = String(req.params.name);
     await deleteCustomProvider(name);
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'model.delete', { type: 'model', id: name }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'model.delete', { type: 'model', id: name });
     res.json({ ok: true });
   });
 

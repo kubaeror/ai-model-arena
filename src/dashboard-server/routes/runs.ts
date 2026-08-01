@@ -14,10 +14,7 @@ import type { RunSpec } from '../../orchestrator/run-lifecycle.js';
 import type { RunIndexModelEntry } from '../../orchestrator/run-index.js';
 import { safeResolve } from '../../sandbox/sandbox.js';
 import { readDiffPatch } from '../../sandbox/git.js';
-import { createLogger } from '../../logger/pino-logger.js';
-
-const logger = createLogger('ai-arena:routes:runs');
-import { audit, requireRole } from '../../auth/rbac.js';
+import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 
 async function findEntry(runId: string, model: string): Promise<RunIndexModelEntry | undefined> {
@@ -104,7 +101,7 @@ export function createRunsRouter(): Router {
     }
     try {
       const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard', createdBy: (req as AuthedRequest).user?.sub });
-      audit((req as AuthedRequest).user?.sub ?? 'system', 'run.create', { type: 'run', id: spec.runId }, undefined, { scenario, models }).catch((e) => logger.debug('Audit event failed', { error: e.message }));
+      auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'run.create', { type: 'run', id: spec.runId }, undefined, { scenario, models });
       res.status(202).json({
         runId: spec.runId,
         scenario: spec.scenario,
@@ -259,7 +256,7 @@ export function createRunsRouter(): Router {
         return;
       }
       await stopRun(req.params.runId as string);
-      audit((req as AuthedRequest).user?.sub ?? 'system', 'run.stop', { type: 'run', id: req.params.runId as string }).catch((e) => logger.debug('Audit event failed', { error: e.message }));
+      auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'run.stop', { type: 'run', id: req.params.runId as string });
       res.json({ runId: req.params.runId as string, action: 'stop' });
     } catch (e) {
       res.status(404).json({ error: e instanceof Error ? e.message : String(e) });
@@ -276,7 +273,7 @@ export function createRunsRouter(): Router {
         return;
       }
       await restartRun(req.params.runId as string);
-      audit((req as AuthedRequest).user?.sub ?? 'system', 'run.restart', { type: 'run', id: req.params.runId as string }).catch(() => {});
+      auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'run.restart', { type: 'run', id: req.params.runId as string });
       res.json({ runId: req.params.runId as string, action: 'restart' });
     } catch (e) {
       res.status(404).json({ error: e instanceof Error ? e.message : String(e) });

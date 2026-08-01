@@ -3,7 +3,7 @@ import {
   listSessionsWithCounts, getSessionWithCounts, listMessagesBySession,
   listModelCallsForSession, deleteSessionCascade,
 } from '../../db/query.js';
-import { requireRole, audit } from '../../auth/rbac.js';
+import { requireRole, auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 
 export function createSessionsRouter(): Router {
@@ -64,7 +64,7 @@ export function createSessionsRouter(): Router {
     const sessionId = String(req.params.id);
     await deleteSessionCascade(sessionId);
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'session.delete', { type: 'session', id: sessionId }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'session.delete', { type: 'session', id: sessionId });
     res.json({ ok: true });
   });
 

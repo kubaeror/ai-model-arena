@@ -1,8 +1,11 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
+import { createLogger } from '../logger/pino-logger.js';
 
 interface UserRequest extends Request {
   user?: { sub: string; role: string };
 }
+
+const logger = createLogger('ai-arena:audit');
 
 const ROLE_ORDER = { viewer: 0, editor: 1, admin: 2 } as const;
 type Role = keyof typeof ROLE_ORDER;
@@ -66,4 +69,46 @@ export async function audit(
       auditFailures.inc();
     } catch { /* metrics unavailable in test/dev */ }
   }
+}
+
+/**
+ * Fire-and-forget audit wrapper. Returns `void` (not a Promise) so it is
+ * eslint-safe under `no-floating-promises` — callers can invoke it as a plain
+ * statement without a trailing `.catch()`.
+ *
+ * Replaces the 30+ `audit(...).catch(() => {})` call sites across the
+ * dashboard routes, which swallowed audit-log failures silently (the outer
+ * `.catch` was redundant because `audit()` already swallows internally, but
+ * it also hid the failure from logs entirely — operators had no signal that
+ * audit records were being dropped).
+ *
+ * This helper:
+ *   - Is non-blocking (the route handler does not await it; audit is
+ *     best-effort and must not delay the response).
+ *   - Is observable: on failure it logs at `error` level via pino with the
+ *     full event payload, so dropped audit records are visible in logs and
+ *     can be correlated with the `auditFailures` Prometheus counter.
+ *   - Never throws (the inner `audit()` already catches, but we wrap once
+ *     more so a buggy logger can't take down a request).
+ *
+ * @param actor    - The user/API-key subject performing the action.
+ * @param action   - The action name (e.g. 'user.delete').
+ * @param entity   - The affected entity { type, id? }.
+ * @param before   - Optional before-state snapshot.
+ * @param after    - Optional after-state snapshot.
+ */
+export function auditSafe(
+  actor: string,
+  action: string,
+  entity: { type: string; id?: string },
+  before?: unknown,
+  after?: unknown,
+): void {
+  void audit(actor, action, entity, before, after).catch((err: unknown) => {
+    // `audit()` is not expected to throw (it catches internally), but if the
+    // dynamic import itself fails or the logger throws, we still must not
+    // propagate. Log and move on.
+    const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+    logger.error('auditSafe: audit() threw unexpectedly', { actor, action, entity, ...detail });
+  });
 }

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dump } from 'js-yaml';
-import { audit, requireRole } from '../../auth/rbac.js';
+import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import {
   loadScenario,
@@ -182,7 +182,7 @@ export function createScenariosRouter(): Router {
     const parsed = ScenarioConfigSchema.parse({ ...existing, ...body, name: newName, starterFiles });
     writeScenarioYaml(target, parsed);
     if (target !== p && fs.existsSync(p)) fs.unlinkSync(p);
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'scenario.update', { type: 'scenario', id: newName }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'scenario.update', { type: 'scenario', id: newName });
     res.json({ scenario: parsed });
   });
 
@@ -199,7 +199,7 @@ export function createScenariosRouter(): Router {
     if (scenario.starterFiles) {
       fs.rmSync(path.join(scenariosDir(), scenario.starterFiles), { recursive: true, force: true });
     }
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: req.params.name as string }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: req.params.name as string });
     res.json({ deleted: req.params.name as string });
   });
 

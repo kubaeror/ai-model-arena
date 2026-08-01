@@ -314,8 +314,19 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Task failed', { taskId: task?.taskId, error: msg });
       if (task) {
-        transitionTaskState(task.config.modelRunId as string ?? task.sessionId, task.model, 'failed', runnerId).catch(() => {});
-        await queue.nack(task._redisId ?? task.taskId, msg);
+        // Capture task in a const so the async .catch closure can reference it
+        // without TypeScript narrowing it back to `T | null` across the await
+        // boundary (the `if (task)` guard does not propagate into callbacks).
+        const failedTask = task;
+        // Best-effort state transition to 'failed'. If THIS throws, the run
+        // would stay stuck in 'running' forever — log at error level so
+        // operators can see the dropped transition (previously this was
+        // `.catch(() => {})` which hid the failure entirely).
+        transitionTaskState(failedTask.config.modelRunId as string ?? failedTask.sessionId, failedTask.model, 'failed', runnerId).catch((err: unknown) => {
+          const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+          logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: failedTask.taskId, modelRunId: failedTask.config.modelRunId ?? failedTask.sessionId, ...detail });
+        });
+        await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {
       runningTask = null;

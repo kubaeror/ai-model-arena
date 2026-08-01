@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { audit, requireRole } from '../../auth/rbac.js';
+import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { z } from 'zod';
 import {
@@ -72,7 +72,7 @@ export function createPromptsRouter(): Router {
       tag: parsed.data.tag ?? null, createdAt: timestamp, createdBy: actor,
     });
 
-    audit(actor, 'prompt.create', { type: 'prompt', id: promptId }, undefined, { name: parsed.data.name }).catch(() => {});
+    auditSafe(actor, 'prompt.create', { type: 'prompt', id: promptId }, undefined, { name: parsed.data.name });
     res.status(201).json({ id: promptId, version: 1 });
   });
 
@@ -102,7 +102,7 @@ export function createPromptsRouter(): Router {
       updatedAt: timestamp,
     });
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'prompt.update', { type: 'prompt', id: promptId }, existing, parsed.data).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'prompt.update', { type: 'prompt', id: promptId }, existing, parsed.data);
     res.json({ ok: true });
   });
 
@@ -117,7 +117,7 @@ export function createPromptsRouter(): Router {
 
     await deletePromptById(deleteId);
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'prompt.delete', { type: 'prompt', id: deleteId }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'prompt.delete', { type: 'prompt', id: deleteId });
     res.json({ ok: true });
   });
 
@@ -156,7 +156,7 @@ export function createPromptsRouter(): Router {
 
     await updatePromptMetadata(promptId, { updatedAt: timestamp });
 
-    audit(actor, 'prompt_version.create', { type: 'prompt', id: promptId }, undefined, { version: nextVersion, tag: parsed.data.tag }).catch(() => {});
+    auditSafe(actor, 'prompt_version.create', { type: 'prompt', id: promptId }, undefined, { version: nextVersion, tag: parsed.data.tag });
     res.status(201).json({ id: versionId, version: nextVersion });
   });
 
@@ -206,7 +206,7 @@ export function createPromptsRouter(): Router {
       tasks.push({ taskId: task.taskId, model, provider: task.provider });
     }
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'prompt.enqueue', { type: 'prompt', id: parsed.data.promptId }, undefined, { count: tasks.length, models: parsed.data.models }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'prompt.enqueue', { type: 'prompt', id: parsed.data.promptId }, undefined, { count: tasks.length, models: parsed.data.models });
 
     res.json({ tasks, count: tasks.length });
   });

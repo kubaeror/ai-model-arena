@@ -97,7 +97,14 @@ export class ConversationLogger {
         tokenOutput: entry.usage?.completion ?? null,
         createdAt: entry.timestamp ?? new Date().toISOString(),
       };
-      this.dbSink.appendMessage(this.sessionId, msg).catch(() => {});
+      this.dbSink.appendMessage(this.sessionId, msg).catch((err: unknown) => {
+        // Best-effort write — do not block the agent loop. But log the
+        // failure so dropped conversation messages are observable (previously
+        // this was `.catch(() => {})` which hid all failures).
+        const detail = err instanceof Error ? { message: err.message } : { error: String(err) };
+        // eslint-disable-next-line no-console
+        console.error('conversation-logger: appendMessage failed', { sessionId: this.sessionId, ...detail });
+      });
     }
 
     this.flush();

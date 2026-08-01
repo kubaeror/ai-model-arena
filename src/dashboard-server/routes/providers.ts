@@ -3,7 +3,7 @@ import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from 
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { validateProviderUrl } from '../../providers/url-validator.js';
 import { probeOpenAICompatEndpoint } from '../../providers/capability-probe.js';
-import { audit } from '../../auth/rbac.js';
+import { auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import type { ApiKeyRequest } from '../auth-api-types.js';
 import { z } from 'zod';
@@ -54,22 +54,37 @@ export function createProvidersRouter(): Router {
       }
     }
 
-    upsertCustomProvider(parsed.data);
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.data.id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
+    // Persist before responding. Previously this was a floating promise
+    // (`upsertCustomProvider(parsed.data);` without await), so the API
+    // returned 201 before the DB write completed — a client would get a
+    // success status even if the write later failed. Await and surface 500.
+    try {
+      await upsertCustomProvider(parsed.data);
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to persist provider', detail: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.data.id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter });
     res.status(201).json({
       ok: true,
       id: parsed.data.id,
       health: health ? health : undefined,
     });
   });
-  router.delete('/:id', (req, res) => {
+  router.delete('/:id', async (req, res) => {
     const apiKeyCtx = (req as ApiKeyRequest).apiKey;
     if (apiKeyCtx && !apiKeyCtx.permissions.includes('providers:write')) {
       res.status(403).json({ error: 'Missing permission: providers:write' });
       return;
     }
-    deleteCustomProvider(req.params.id);
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'provider.delete', { type: 'provider', id: req.params.id }).catch(() => {});
+    // Await the delete (was a floating promise; see POST handler above).
+    try {
+      await deleteCustomProvider(req.params.id);
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to delete provider', detail: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'provider.delete', { type: 'provider', id: req.params.id });
     res.json({ ok: true });
   });
   return router;
