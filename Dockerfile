@@ -9,7 +9,11 @@ COPY src ./src
 COPY configs ./configs
 COPY drizzle ./drizzle
 RUN npm run build
-RUN npm audit --production || true
+# Fail the build on any high/critical production vulnerability. Aligned with
+# the CI gate in .github/workflows/pr-checks.yaml. Previously this was
+# `npm audit --production || true` which silently ignored every CVE including
+# critical ones in the shipped image.
+RUN npm audit --audit-level=high --production
 RUN npm prune --production
 
 # ── dashboard client build ──
