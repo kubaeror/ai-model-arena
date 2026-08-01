@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
+import { outputRoot } from '../paths.js';
 
 export interface AuthConfig {
   username: string;
@@ -60,17 +63,35 @@ setInterval(() => {
 }, 300_000).unref();
 
 /**
- * Credentials live in env vars (DASHBOARD_USERNAME / DASHBOARD_PASSWORD). If no
- * password is configured we generate a one-time password and log it, so the
- * dashboard is never exposed unauthenticated — even in local/dev use.
+ * Credentials live in env vars (DASHBOARD_USERNAME / DASHBOARD_PASSWORD). If
+ * no password is configured:
+ *   - In production (NODE_ENV=production) the boot HARD-FAILS. Container log
+ *     aggregators capture stderr, so printing a generated password to stderr
+ *     (the previous behavior) leaked admin credentials into logs — the code
+ *     comment claiming "NOT written to logs" was factually wrong. Operators
+ *     must set DASHBOARD_PASSWORD explicitly in production (the k8s manifest
+ *     already loads it from the `dashboard-auth` secret).
+ *   - In dev we generate a one-time password and write it to a root-owned,
+ *     mode-0600 file at <OUTPUT_ROOT>/.admin-password, printing only the file
+ *     path. The dashboard is never exposed unauthenticated.
  */
 export function loadAuthConfig(): AuthConfig {
   const username = process.env.DASHBOARD_USERNAME ?? 'admin';
   let password = process.env.DASHBOARD_PASSWORD ?? '';
   let generatedPassword: string | undefined;
   if (!password) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'DASHBOARD_PASSWORD is not set and NODE_ENV=production.\n' +
+        'Refusing to boot: generating a random admin password in production is ' +
+        'unsafe (the password had to be surfaced somewhere observable, e.g. ' +
+        'stderr/logs, which defeats the purpose). Set DASHBOARD_PASSWORD ' +
+        'explicitly — in k8s it is loaded from the `dashboard-auth` secret.',
+      );
+    }
     password = crypto.randomBytes(12).toString('base64url');
     generatedPassword = password;
+    writeGeneratedPasswordFile(password);
   }
   const secret = process.env.DASHBOARD_JWT_SECRET ?? '';
   if (!secret) {
@@ -81,6 +102,42 @@ export function loadAuthConfig(): AuthConfig {
     );
   }
   return { username, password, secret, expiresIn: process.env.DASHBOARD_JWT_EXPIRES_IN ?? '12h', generatedPassword };
+}
+
+/**
+ * Write a generated one-time admin password to a root-owned, mode-0600 file
+ * under OUTPUT_ROOT so the operator can retrieve it from the filesystem
+ * without it landing in aggregated container logs. Returns the file path.
+ * Failures are non-fatal (best-effort) — the password is still valid
+ * in-memory and the operator can set DASHBOARD_PASSWORD explicitly next time.
+ */
+function writeGeneratedPasswordFile(password: string): void {
+  try {
+    const dir = outputRoot();
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, '.admin-password');
+    // Write with explicit mode 0o600 (owner read/write only). On Windows the
+    // mode is ignored but the file is still written.
+    const fd = fs.openSync(filePath, 'w', 0o600);
+    fs.writeFileSync(fd, `admin:${password}\n`);
+    fs.closeSync(fd);
+    // Re-assert 0o600 in case the file pre-existed with looser perms.
+    try { fs.chmodSync(filePath, 0o600); } catch { /* best-effort */ }
+    console.error(
+      `[ai-arena] No DASHBOARD_PASSWORD set — generated a one-time admin password.\n` +
+      `[ai-arena] It has been written to: ${filePath}\n` +
+      `[ai-arena] Read it there, then set DASHBOARD_PASSWORD explicitly next time.\n` +
+      `[ai-arena] (This message is safe to log — it does not contain the password.)\n`,
+    );
+  } catch {
+    // Could not write the file (read-only fs, permissions, etc.). The password
+    // is still valid in-memory for this process's lifetime; the operator must
+    // set DASHBOARD_PASSWORD explicitly to recover it.
+    console.error(
+      '[ai-arena] No DASHBOARD_PASSWORD set and unable to write the generated ' +
+      'password file. Set DASHBOARD_PASSWORD explicitly to log in.\n',
+    );
+  }
 }
 
 function timingSafeEqual(a: string, b: string): boolean {

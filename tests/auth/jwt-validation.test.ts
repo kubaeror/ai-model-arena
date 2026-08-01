@@ -46,6 +46,20 @@ test('loadAuthConfig throws without JWT_SECRET', () => {
   process.env.DASHBOARD_JWT_SECRET = testSecret;
 });
 
+test('loadAuthConfig hard-fails in production when DASHBOARD_PASSWORD unset', () => {
+  const prevNodeEnv = process.env.NODE_ENV;
+  const prevPassword = process.env.DASHBOARD_PASSWORD;
+  process.env.NODE_ENV = 'production';
+  delete process.env.DASHBOARD_PASSWORD;
+  try {
+    assert.throws(() => loadAuthConfig(), /DASHBOARD_PASSWORD/);
+  } finally {
+    process.env.NODE_ENV = prevNodeEnv;
+    if (prevPassword !== undefined) process.env.DASHBOARD_PASSWORD = prevPassword;
+    else delete process.env.DASHBOARD_PASSWORD;
+  }
+});
+
 test('signToken default role is admin', () => {
   const cfg = loadAuthConfig();
   const token = signToken(cfg, 'testuser');

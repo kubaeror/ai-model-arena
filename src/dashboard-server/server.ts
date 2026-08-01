@@ -58,19 +58,13 @@ function clientDist(): string {
 async function start(): Promise<void> {
   startOtel();
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
+  // loadAuthConfig() throws in production if DASHBOARD_PASSWORD is unset, and
+  // writes a generated dev password to <OUTPUT_ROOT>/.admin-password in dev.
+  // The plaintext password is never printed to stderr (where log aggregators
+  // would capture it).
   const auth = loadAuthConfig();
   if (auth.generatedPassword) {
-    process.stderr.write(
-      '\n' +
-      '╔══════════════════════════════════════════════════════════════════╗\n' +
-      '║  WARNING: No DASHBOARD_PASSWORD set — generated a one-time      ║\n' +
-      '║  admin password. This password will NOT be shown again and is   ║\n' +
-      '║  NOT written to logs. Save it now or set DASHBOARD_PASSWORD in  ║\n' +
-      '║  your environment to a known value.                              ║\n' +
-      `║  Password: ${auth.generatedPassword.padEnd(48)}║\n` +
-      '╚══════════════════════════════════════════════════════════════════╝\n\n',
-    );
-    logger.warn('No DASHBOARD_PASSWORD set — a one-time password was generated (see stderr output). It will not be shown again.');
+    logger.warn('No DASHBOARD_PASSWORD set — generated a one-time admin password written to <OUTPUT_ROOT>/.admin-password. Set DASHBOARD_PASSWORD explicitly.');
   }
   const root = findProjectRoot();
   const allowedOrigins = (process.env.DASHBOARD_CORS_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean);
