@@ -131,7 +131,17 @@ export function createScenariosRouter(): Router {
       starterFiles = writeStarterFiles(name, body.starterFilesContent);
     }
     const parsed = ScenarioConfigSchema.parse({ ...body, starterFiles });
-    const p = resolveScenarioPath(scenariosDir(), parsed.name);
+    // Validate the scenario name BEFORE resolving the path. The body `name`
+    // was previously passed straight to resolveScenarioPath(), which accepted
+    // absolute paths and `../` traversal — allowing an editor to write a YAML
+    // file to arbitrary filesystem locations (e.g. overwrite configs/api-keys.yaml
+    // to register an admin API key). resolveAndValidate() enforces a bare
+    // alphanumeric name and isWithin(scenariosDir()) on the resolved path.
+    const p = resolveAndValidate(parsed.name);
+    if (!p) {
+      res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
+      return;
+    }
     if (fs.existsSync(p)) {
       res.status(409).json({ error: 'Scenario already exists; use PUT to edit' });
       return;
@@ -156,7 +166,14 @@ export function createScenariosRouter(): Router {
     const existing = loadScenario(p);
     const body = req.body ?? {};
     const newName = String(body.name ?? existing.name);
-    const target = newName !== existing.name ? resolveScenarioPath(scenariosDir(), newName) : p;
+    // Validate the rename target the same way as POST: bare alphanumeric name,
+    // resolved path must stay within scenariosDir(). Without this, a PUT with
+    // body.name = "/etc/cron.d/evil.yaml" could write outside scenariosDir().
+    const target = newName !== existing.name ? resolveAndValidate(newName) : p;
+    if (!target) {
+      res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
+      return;
+    }
 
     let starterFiles = body.starterFiles ?? existing.starterFiles;
     if (Array.isArray(body.starterFilesContent) && body.starterFilesContent.length) {
