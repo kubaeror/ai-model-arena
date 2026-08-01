@@ -366,8 +366,11 @@ export async function insertWebhook(data: {
   url: string; events: string; secret?: string | null; createdAt: string;
 }): Promise<DbWebhook> {
   const db = getDrizzleDb() as any;
+  // Encrypt the HMAC secret at rest (H5) — mirror anomaly-detection/db.ts.
+  const { encryptWebhookSecret } = await import('../security/webhook-secret-crypto.js');
+  const encryptedSecret = encryptWebhookSecret(data.secret ?? null);
   const result = await db.insert(webhooks).values({
-    url: data.url, events: data.events, secret: data.secret ?? null,
+    url: data.url, events: data.events, secret: encryptedSecret,
     created_at: data.createdAt, active: 1,
   }).returning();
   return result[0] as DbWebhook;
