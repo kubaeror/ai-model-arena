@@ -335,8 +335,9 @@ async function start(): Promise<void> {
   }
 
   const server = http.createServer(app);
-  // Session-scoped stream WebSocket (runner ↔ dashboard relay)
-  attachStreamWs(server);
+  // Session-scoped stream WebSocket (runner ↔ dashboard relay). Authenticated
+  // via verifyClient — mirrors LiveHub's auth pattern.
+  attachStreamWs(server, auth);
   // WebSocket gateway (auth via token in Sec-WebSocket-Protocol).
   const hub = new LiveHub(server, auth);
 
