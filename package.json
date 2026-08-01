@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "tsx --test tests/**/*.test.ts",
-    "test:coverage": "c8 --lines 70 --functions 70 --branches 65 --statements 70 tsx --test $(cat .c8-test-list.txt)",
+    "test:coverage": "c8 --check-coverage --lines 45 --functions 30 --branches 75 --statements 45 tsx --test $(cat .c8-test-list.txt)",
     "test:ci": "npm run typecheck && npm run lint && npm run test:coverage && npm run test:db",
     "audit": "npm audit --audit-level=high --production",
     "db:generate": "drizzle-kit generate",
