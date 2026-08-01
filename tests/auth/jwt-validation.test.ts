@@ -66,3 +66,16 @@ test('signToken default role is admin', () => {
   const decoded = verifyToken(cfg, token);
   assert.equal(decoded!.role, 'admin');
 });
+
+test('verifyToken rejects a token signed with a different algorithm (HS384)', () => {
+  const cfg = loadAuthConfig();
+  // Sign with HS384 instead of HS256 — verifyToken pins algorithms to HS256.
+  const token = jwt.sign({ sub: 'user', role: 'admin' }, testSecret, { algorithm: 'HS384', expiresIn: '1h' });
+  assert.equal(verifyToken(cfg, token), null);
+});
+
+test('verifyToken rejects a token signed with a different algorithm (HS512)', () => {
+  const cfg = loadAuthConfig();
+  const token = jwt.sign({ sub: 'user', role: 'admin' }, testSecret, { algorithm: 'HS512', expiresIn: '1h' });
+  assert.equal(verifyToken(cfg, token), null);
+});

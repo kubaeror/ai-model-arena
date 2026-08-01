@@ -157,7 +157,13 @@ export function signToken(cfg: AuthConfig, username: string, role = 'admin'): st
 
 export function verifyToken(cfg: AuthConfig, token: string): { sub: string; role: string } | null {
   try {
-    const payload = jwt.verify(token, cfg.secret) as { sub?: string; role?: string };
+    // Pin the accepted algorithms to HS256. Without this, jwt.verify accepts
+    // HS256/HS384/HS512 — a defense-in-depth gap that could enable
+    // algorithm-confusion attacks (e.g. a token signed with a public key
+    // used as the HMAC secret) if a future library upgrade or key-type
+    // change silently broadens the accepted set. signToken() always emits
+    // HS256, so pinning verify to HS256 is the strict match.
+    const payload = jwt.verify(token, cfg.secret, { algorithms: ['HS256'] }) as { sub?: string; role?: string };
     return { sub: payload.sub ?? 'unknown', role: payload.role ?? 'viewer' };
   } catch {
     return null;
