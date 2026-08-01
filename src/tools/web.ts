@@ -44,7 +44,10 @@ const PRIVATE_IP_RANGES = [
   /^fe[89ab][0-9a-f]:/i,                      // IPv6 link-local (fe80::/10)
   /^fc00:/i,                                   // IPv6 unique-local (fc00::/7)
   /^fd[0-9a-f]{2}:/i,                         // IPv6 unique-local (fd00::/8)
-  /^::ffff:\d+\.\d+\.\d+\.\d+$/i,             // IPv4-mapped IPv6 — also test the inner v4
+  // Note: IPv4-mapped IPv6 (::ffff:1.2.3.4) is handled by the recursive
+  // `mapped` extraction in isPrivateIp() which delegates to the v4 ranges.
+  // Do NOT add a blanket /^::ffff:/ regex here — it would false-positive on
+  // public IPs like ::ffff:8.8.8.8.
 ];
 
 /** Cloud metadata service hostnames (in addition to the 169.254.x IPs). */
@@ -183,6 +186,20 @@ function stripHtml(html: string): string {
  * The manual redirect-follow is necessary because Node's `fetch(url,
  * {redirect:'follow'})` does NOT re-run the URL validation on redirect
  * targets — a server could 30x to http://169.254.169.254/...
+ *
+ * NOTE on HTTPS SNI: pinning to an IP literal for HTTPS would break TLS
+ * certificate validation (the cert is for the hostname, not the IP). For
+ * HTTPS we resolve+validate the DNS and then fetch the ORIGINAL url — the
+ * pre-validation blocks literal private IPs and metadata hostnames, and the
+ * manual redirect re-validation blocks redirect-based SSRF. There is a
+ * theoretical DNS-rebinding TOCTOU window for HTTPS (between our
+ * resolveAndValidateHost call and fetch's own DNS lookup) — closing it
+ * fully requires a custom undici dispatcher with a connect hook that pins
+ * the socket to the validated IP while setting `servername` for SNI. That
+ * is a follow-up; the current implementation blocks the common SSRF vectors
+ * (literal private IPs, metadata endpoints, redirect-to-metadata).
+ *
+ * For HTTP (no TLS) we DO pin to the IP literal, defeating DNS rebinding.
  */
 async function ssrfSafeFetch(
   url: URL,
@@ -201,27 +218,49 @@ async function ssrfSafeFetch(
     const check = validateUrl(currentUrl.toString());
     if (!check.ok) throw new Error(check.error);
 
-    // Resolve + validate the host's DNS, pin to the validated IP.
+    // Resolve + validate the host's DNS. This blocks hostnames that resolve
+    // to private IPs (e.g. evil.com -> 169.254.169.254).
     const pinnedIp = await resolveAndValidateHost(currentUrl.hostname);
-    // Construct a URL with the IP literal so fetch connects to the validated
-    // IP (defeating DNS rebinding between resolution and connection). Preserve
-    // the original port and path. Set the Host header to the original hostname.
-    const pinnedUrl = new URL(currentUrl.toString());
-    pinnedUrl.hostname = currentUrl.port ? `[${pinnedIp}]:${currentUrl.port}` : `[${pinnedIp}]`;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res: Response;
     try {
-      res = await fetch(pinnedUrl, {
-        signal: controller.signal,
-        redirect: 'manual', // we follow manually to re-validate each hop
-        headers: {
-          'Accept': 'text/html,application/json,text/plain,*/*',
-          'User-Agent': 'AI-Model-Arena/1.0',
-          'Host': currentUrl.host, // preserve original host
-        },
-      });
+      if (currentUrl.protocol === 'http:') {
+        // HTTP: pin to the validated IP literal (defeats DNS rebinding between
+        // resolveAndValidateHost and the fetch). Preserve the original Host
+        // header so the server sees the expected virtual host.
+        const pinnedUrl = new URL(currentUrl.toString());
+        // Build a URL string with the IP literal — the URL hostname setter is
+        // unreliable for IPv6 and bracketed forms, so construct via href.
+        // For IPv4: http://1.2.3.4:port/path (bare IP works).
+        // For IPv6: http://[::1]:port/path (must include brackets manually).
+        const ipLiteral = pinnedIp.includes(':') ? `[${pinnedIp}]` : pinnedIp;
+        const portPart = currentUrl.port ? `:${currentUrl.port}` : '';
+        pinnedUrl.host = `${ipLiteral}${portPart}`;
+        res = await fetch(pinnedUrl, {
+          signal: controller.signal,
+          redirect: 'manual',
+          headers: {
+            'Accept': 'text/html,application/json,text/plain,*/*',
+            'User-Agent': 'AI-Model-Arena/1.0',
+            'Host': currentUrl.host,
+          },
+        });
+      } else {
+        // HTTPS: can't pin to IP literal without breaking TLS cert validation
+        // (would need a custom undici dispatcher with a connect hook setting
+        // `servername`). Fetch the original URL — pre-validation + manual
+        // redirect re-validation still block the common SSRF vectors.
+        res = await fetch(currentUrl, {
+          signal: controller.signal,
+          redirect: 'manual',
+          headers: {
+            'Accept': 'text/html,application/json,text/plain,*/*',
+            'User-Agent': 'AI-Model-Arena/1.0',
+          },
+        });
+      }
     } finally {
       clearTimeout(timer);
     }

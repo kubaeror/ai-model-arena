@@ -33,7 +33,6 @@ export interface AuthConfig {
 //     expiry (default 12h).
 const blacklist = new Map<string, number>();
 let blacklistRedis: Awaited<ReturnType<typeof getRedisClient>> | null = null;
-let redisInitAttempted = false;
 
 /** Error thrown when Redis is configured but unreachable. */
 export class RedisUnavailableError extends Error {
@@ -67,12 +66,19 @@ async function getRedisClient() {
   }
 }
 
-/** Lazily initialize the Redis client once, then reuse. */
+/** Lazily initialize the Redis client. Retries on every call until success
+ * (does NOT cache a null result), so a transient Redis outage at boot does
+ * not permanently brick the dashboard. Once a connection succeeds, the
+ * client is cached for the process lifetime. */
 async function getBlacklistRedis(): Promise<Awaited<ReturnType<typeof getRedisClient>> | null> {
-  if (redisInitAttempted) return blacklistRedis;
-  redisInitAttempted = true;
-  blacklistRedis = await getRedisClient();
-  return blacklistRedis;
+  // Only cache a successful client. A null result from getRedisClient() is
+  // NOT cached — so the next call retries init (rate-limited by connectTimeout
+  // inside getRedisClient). This allows recovery after a transient failure.
+  if (blacklistRedis) return blacklistRedis;
+  const client = await getRedisClient();
+  // Assign only on success so a transient failure doesn't stick.
+  if (client) blacklistRedis = client;
+  return client ?? null;
 }
 
 /** Add a token to the revocation blacklist. Stores the expiry claim for cleanup. */
@@ -80,7 +86,10 @@ export async function revokeToken(token: string): Promise<void> {
   try {
     const payload = jwt.decode(token) as { exp?: number } | null;
     if (!payload?.exp) return;
-    const redis = blacklistRedis ?? (blacklistRedis = await getRedisClient());
+    // Route through getBlacklistRedis() for consistent lazy-init (I2: this
+    // previously bypassed it and called getRedisClient() directly, which
+    // could race with the first isRevoked call and leak a connection).
+    const redis = await getBlacklistRedis();
     if (redis) {
       try {
         await redis.set(`arena:revoked:${token}`, '1', 'EXAT', payload.exp);
