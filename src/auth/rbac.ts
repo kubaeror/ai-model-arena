@@ -27,9 +27,19 @@ export function requireOwnership(
 ): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
     const actor = (req as UserRequest).user?.sub;
+    const role = (req as UserRequest).user?.role;
     const owner = getOwnerId(req);
-    if (!owner) return next(); // No owner = legacy resource, allow
-    if (actor !== owner && (req as UserRequest).user?.role !== 'admin') {
+    // Default-DENY: previously a missing owner (legacy/migrated resource)
+    // was treated as "allow" (the `if (!owner) return next()` branch), which
+    // let any authenticated viewer read/mutate another tenant's resources
+    // when createdBy was null. Now: a resource with no owner (undefined, null,
+    // or empty string) is only accessible to admins (who can reassign
+    // ownership or delete the orphan). An admin is always allowed. Otherwise
+    // the actor must match the owner exactly.
+    const isAdmin = role === 'admin';
+    const ownerIsPresent = typeof owner === 'string' && owner.length > 0;
+    const allowed = isAdmin || (ownerIsPresent && actor === owner);
+    if (!allowed) {
       res.status(403).json({ error: 'forbidden: not the resource owner' });
       return;
     }

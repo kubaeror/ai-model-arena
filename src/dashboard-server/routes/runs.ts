@@ -23,25 +23,23 @@ async function findEntry(runId: string, model: string): Promise<RunIndexModelEnt
 
 /**
  * Ownership check for a run. Returns one of:
- *   - { ok: true }                — the caller may proceed (is owner, admin, or legacy run with no createdBy)
+ *   - { ok: true }                — the caller may proceed (is owner or admin)
  *   - { ok: false, status: 404 }  — run not found
  *   - { ok: false, status: 403 }  — run exists but caller is neither owner nor admin
  *
- * Several GET endpoints (files-content, logs, diff) previously skipped this
- * check entirely, letting any authenticated viewer read another tenant's
- * sandbox files (often containing secrets/prompts/credentials), PM2 logs,
- * and diffs by runId — an IDOR-style confidentiality gap.
- *
- * Note: the check uses `rec.createdBy && ...` semantics — a run with no
- * createdBy (legacy/migrated) is currently allowed. This is tightened to
- * default-deny in Wave 2 (H2 fix in src/auth/rbac.ts).
+ * Default-DENY (H2): a run with no `createdBy` (legacy/migrated) is NOT
+ * accessible to non-admins. Previously `rec.createdBy && ...` short-circuited
+ * to allow when createdBy was null, letting any authenticated viewer read
+ * another tenant's sandbox files, logs, diffs, and metadata by runId — an
+ * IDOR-style confidentiality gap. Now: only the owner or an admin may proceed.
  */
 async function checkRunOwnership(req: AuthedRequest, runId: string): Promise<{ ok: true } | { ok: false; status: 404 | 403 }> {
   const rec = await getRunRecord(runId);
   if (!rec) return { ok: false, status: 404 };
-  if (rec.createdBy && req.user?.sub !== rec.createdBy && req.user?.role !== 'admin') {
-    return { ok: false, status: 403 };
-  }
+  const isAdmin = req.user?.role === 'admin';
+  const ownerIsPresent = typeof rec.createdBy === 'string' && rec.createdBy.length > 0;
+  const allowed = isAdmin || (ownerIsPresent && req.user?.sub === rec.createdBy);
+  if (!allowed) return { ok: false, status: 403 };
   return { ok: true };
 }
 
@@ -146,10 +144,12 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/conversation
   router.get('/:runId/models/:model/conversation', async (req, res) => {
-    const rec = await getRunRecord(req.params.runId as string);
-    if (!rec) { res.status(404).json({ error: 'Run not found' }); return; }
-    if (rec.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
-      res.status(403).json({ error: 'forbidden: not the run owner' }); return;
+    // Default-deny ownership check (H2): runs with no createdBy are only
+    // accessible to admins.
+    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+    if (!owner.ok) {
+      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
+      return;
     }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
@@ -166,9 +166,10 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/report
   router.get('/:runId/models/:model/report', async (req, res) => {
-    const rec = await getRunRecord(req.params.runId as string);
-    if (rec?.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
-      res.status(403).json({ error: 'forbidden: not the run owner' }); return;
+    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+    if (!owner.ok) {
+      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
+      return;
     }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
@@ -180,9 +181,10 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/files — list sandbox files
   router.get('/:runId/models/:model/files', async (req, res) => {
-    const rec = await getRunRecord(req.params.runId as string);
-    if (rec?.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
-      res.status(403).json({ error: 'forbidden: not the run owner' }); return;
+    const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+    if (!owner.ok) {
+      res.status(owner.status).json({ error: owner.status === 404 ? 'Run not found' : 'forbidden: not the run owner' });
+      return;
     }
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
@@ -249,10 +251,9 @@ export function createRunsRouter(): Router {
   // POST /api/runs/:runId/stop
   router.post('/:runId/stop', requireRole('editor'), async (req, res) => {
     try {
-      const rec = await getRunRecord(req.params.runId as string);
-      if (!rec) { res.status(404).json({ error: 'run not found' }); return; }
-      if (rec.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
-        res.status(403).json({ error: 'forbidden: not the run owner' });
+      const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+      if (!owner.ok) {
+        res.status(owner.status).json({ error: owner.status === 404 ? 'run not found' : 'forbidden: not the run owner' });
         return;
       }
       await stopRun(req.params.runId as string);
@@ -266,10 +267,9 @@ export function createRunsRouter(): Router {
   // POST /api/runs/:runId/restart
   router.post('/:runId/restart', requireRole('editor'), async (req, res) => {
     try {
-      const rec = await getRunRecord(req.params.runId as string);
-      if (!rec) { res.status(404).json({ error: 'run not found' }); return; }
-      if (rec.createdBy && (req as AuthedRequest).user?.sub !== rec.createdBy && (req as AuthedRequest).user?.role !== 'admin') {
-        res.status(403).json({ error: 'forbidden: not the run owner' });
+      const owner = await checkRunOwnership(req as AuthedRequest, req.params.runId as string);
+      if (!owner.ok) {
+        res.status(owner.status).json({ error: owner.status === 404 ? 'run not found' : 'forbidden: not the run owner' });
         return;
       }
       await restartRun(req.params.runId as string);
