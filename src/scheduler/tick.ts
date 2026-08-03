@@ -2,6 +2,7 @@ import { listDueSchedules, updateScheduleRun } from '../db/query.js';
 import { CronExpressionParser } from 'cron-parser';
 import { updateScheduleState, getScheduleState } from './manager.js';
 import { createLogger } from '../logger/pino-logger.js';
+import { scheduleFailures } from '../observability/metrics.js';
 
 const logger = createLogger('ai-arena:scheduler');
 
@@ -45,6 +46,7 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
     }
 
     if (scheduleFailed) {
+      scheduleFailures.inc({ schedule_id: scheduleId });
       failures.push(scheduleId);
       updateScheduleState(scheduleId, {
         status: 'error',

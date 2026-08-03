@@ -206,10 +206,12 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       logger.info('Kill switch active — finishing in-flight task before stopping');
     }
     let task: Task | null = null;
+    let taskStartedAt: Date | null = null;
     try {
       task = await queue.dequeue(30000);
       if (!task) continue;
       runningTask = task;
+      taskStartedAt = new Date();
       activeTasks.inc();
 
       // Check per-run cancellation before starting execution
@@ -285,6 +287,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const resolved = await resolveModelForRun(modelName);
       if (!resolved) {
         logger.error('Model not found', { model: modelName });
+        taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
+        taskDuration.observe((Date.now() - startedAt.getTime()) / 1000);
         await queue.nack(task.taskId, `Model not found: ${modelName}`);
         continue;
       }
@@ -303,6 +307,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         transitionTaskState(runId, task.model, 'failed', runnerId).catch(e =>
           logger.warn('Failed to write failed state', { error: String(e) }),
         );
+        taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
+        taskDuration.observe((Date.now() - startedAt.getTime()) / 1000);
         await queue.ack(task!._redisId ?? task!.taskId);
         continue;
       }
@@ -479,11 +485,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
           logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: failedTask.taskId, modelRunId: failedTask.config.modelRunId ?? failedTask.sessionId, ...detail });
         });
+        taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
+        if (taskStartedAt) taskDuration.observe((Date.now() - taskStartedAt.getTime()) / 1000);
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {
       if (runningTask) activeTasks.dec();
       runningTask = null;
+      taskStartedAt = null;
     }
   }
 
