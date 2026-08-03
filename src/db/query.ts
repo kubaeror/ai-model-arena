@@ -759,7 +759,7 @@ export async function getCostSummary(groupBy: 'model' | 'day', model?: string): 
   const params: any[] = [];
   let query: string;
   if (groupBy === 'day') {
-    query = `SELECT date(recorded_at) AS period, model, SUM(cost_usd) AS total_cost, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, COUNT(*) AS entry_count FROM cost_ledger WHERE ${model ? 'model = ?' : '1=1'} GROUP BY period, model ORDER BY period DESC, model ASC`;
+    query = `SELECT substr(recorded_at, 1, 10) AS period, model, SUM(cost_usd) AS total_cost, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, COUNT(*) AS entry_count FROM cost_ledger WHERE ${model ? 'model = ?' : '1=1'} GROUP BY period, model ORDER BY period DESC, model ASC`;
   } else {
     query = `SELECT model, SUM(cost_usd) AS total_cost, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, COUNT(*) AS entry_count FROM cost_ledger WHERE ${model ? 'model = ?' : '1=1'} GROUP BY model ORDER BY total_cost DESC`;
   }

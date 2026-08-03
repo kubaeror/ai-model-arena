@@ -23,18 +23,6 @@ function extractSql(q: any): string {
 async function doRawQuery(query: any, ...params: any[]): Promise<any[]> {
   let sqlStr = extractSql(query);
 
-  // Convert SQLite INSERT OR IGNORE / INSERT OR REPLACE to Postgres equivalents
-  sqlStr = sqlStr.replace(/INSERT\s+OR\s+IGNORE\s+INTO/i, 'INSERT INTO');
-  if (sqlStr.match(/INSERT\s+INTO\s+(\w+)/i) && !sqlStr.match(/ON\s+CONFLICT|RETURNING/i)) {
-    // If originally was INSERT OR IGNORE (now INSERT), append ON CONFLICT DO NOTHING
-    // We detect this by checking if the original query had OR IGNORE
-    const original = extractSql(query);
-    if (original.match(/INSERT\s+OR\s+IGNORE/i)) {
-      // Strip trailing semicolons and append
-      sqlStr = sqlStr.replace(/;?\s*$/, ' ON CONFLICT DO NOTHING');
-    }
-  }
-
   // Flatten params: SQLite callers pass named objects or positional arrays
   if (params.length === 1 && typeof params[0] === 'object' && params[0] !== null && !Array.isArray(params[0])) {
     // named params object — convert ? placeholders to $1,$2,... and extract values in order
@@ -50,7 +38,7 @@ async function doRawQuery(query: any, ...params: any[]): Promise<any[]> {
     return result.rows;
   }
 
-  // Positional params — convert ? to $1,$2,...
+  // Positional params — convert ? placeholders to $1,$2,...
   let counter = 0;
   const replaced = sqlStr.replace(/\?/g, () => {
     counter++;
