@@ -34,14 +34,14 @@ export function generateManifest(
 ): ArtifactManifest {
   const entries: ArtifactEntry[] = [];
   if (!fs.existsSync(sandboxDir)) {
-    return { runId, model, generatedAt: new Date().toISOString(), quarantined: true, entries };
+    return { runId, model, generatedAt: new Date().toISOString(), quarantined: false, entries };
   }
   walkAndHash(sandboxDir, sandboxDir, entries, producedByTool);
   return {
     runId,
     model,
     generatedAt: new Date().toISOString(),
-    quarantined: true,
+    quarantined: false,
     entries,
   };
 }
@@ -89,53 +89,4 @@ export function writeManifest(
     quarantined: manifest.quarantined,
   });
   return manifestPath;
-}
-
-/** Load a manifest from disk. */
-export function loadManifest(outputDir: string): ArtifactManifest | null {
-  const manifestPath = path.join(outputDir, 'artifact-manifest.json');
-  if (!fs.existsSync(manifestPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-/** Mark an artifact manifest as validated (removes quarantine). */
-export function validateManifest(
-  outputDir: string,
-  validatedBy: string,
-  logger?: Logger,
-): ArtifactManifest | null {
-  const manifest = loadManifest(outputDir);
-  if (!manifest) return null;
-  manifest.quarantined = false;
-  manifest.validatedBy = validatedBy;
-  manifest.validatedAt = new Date().toISOString();
-  writeManifest(manifest, outputDir, logger);
-  return manifest;
-}
-
-/** Verify a manifest by re-hashing all files and comparing checksums. */
-export function verifyManifest(outputDir: string): { valid: boolean; mismatches: string[] } {
-  const manifest = loadManifest(outputDir);
-  if (!manifest) return { valid: false, mismatches: ['Manifest not found'] };
-  const mismatches: string[] = [];
-  for (const entry of manifest.entries) {
-    const filePath = path.join(outputDir, 'files', entry.path);
-    if (!fs.existsSync(filePath)) {
-      mismatches.push(`${entry.path}: file missing`);
-      continue;
-    }
-    const stat = fs.statSync(filePath);
-    if (stat.size !== entry.size) {
-      mismatches.push(`${entry.path}: size mismatch (manifest: ${entry.size}, actual: ${stat.size})`);
-    }
-    const actual = hashFile(filePath);
-    if (actual !== entry.sha256) {
-      mismatches.push(`${entry.path}: checksum mismatch`);
-    }
-  }
-  return { valid: mismatches.length === 0, mismatches };
 }

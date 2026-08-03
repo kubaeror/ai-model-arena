@@ -24,16 +24,10 @@ export const RegressionConfigSchema = z.object({
   failOnRegression: z.boolean().default(true),
 });
 
-export const RollbackConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  failPrompt: z.string().optional(),
-});
-
 export const EvaluationConfigSchema = z.object({
   judge: JudgeConfigSchema.optional(),
   rubric: RubricSchema.optional(),
   regression: RegressionConfigSchema.optional(),
-  rollback: RollbackConfigSchema.optional(),
 });
 
 export type RubricItem = z.output<typeof RubricItemSchema>;
