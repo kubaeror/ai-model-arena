@@ -5,7 +5,6 @@
 export {
   ARENA_PREFIX,
   projectRoot,
-  workerScriptPath,
   timestamp,
   sanitizeName,
   formatBytes,

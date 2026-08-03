@@ -18,21 +18,21 @@ import { eq, and, desc, sql, count, sum, max } from 'drizzle-orm';
 import { getDrizzleDb } from './index.js';
 import {
   sessions, messages, model_calls,
-  runs, run_models, cost_ledger,
+  run_models, cost_ledger,
   files, audit_log, output_mappings,
   anomalies, webhooks,
   prompts, prompt_versions,
   users, roles, user_roles,
   providers, models, model_providers, pricing, pricing_snapshots,
-  model_runtime_stats, schedules, tool_call_stats,
+  schedules,
 } from './schema.js';
 import type {
   DbSession, DbMessage, DbModelCall,
-  DbRun, DbRunModel,
+  DbRunModel,
   DbAnomaly, DbWebhook,
   DbPrompt, DbPromptVersion,
   DbUser, DbRole,
-  DbProvider, DbPricing,
+  DbProvider,
   DbOutputMapping, DbSchedule, DbModel,
 } from './schema.js';
 
@@ -130,38 +130,10 @@ export async function getModelCallBySessionAndTurn(sessionId: string, turn: numb
 
 // ── Runs ──────────────────────────────────────────────────────────────────
 
-export async function getRunById(runId: string): Promise<DbRun | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(runs).where(eq(runs.run_id, runId)).limit(1);
-  return rows[0] ?? null;
-}
-
-export async function listRuns(): Promise<DbRun[]> {
-  const db = getDrizzleDb();
-  return db.select().from(runs).orderBy(desc(runs.started_at)) as any;
-}
-
 export async function listRunModels(runId?: string): Promise<DbRunModel[]> {
   const db = getDrizzleDb();
   if (runId) return db.select().from(run_models).where(eq(run_models.run_id, runId)) as any;
   return db.select().from(run_models).orderBy(run_models.run_id) as any;
-}
-
-export async function upsertRun(data: {
-  runId: string; scenario: string; models: string; startedAt: string;
-  finishedAt: string | null; status: string; source: string;
-  comparisonMdPath: string | null; comparisonJsonPath: string | null; createdBy?: string | null;
-}): Promise<void> {
-  const db = getDrizzleDb();
-  await db.insert(runs).values({
-    run_id: data.runId, scenario: data.scenario, models: data.models,
-    started_at: data.startedAt, finished_at: data.finishedAt, status: data.status, source: data.source,
-    comparison_md_path: data.comparisonMdPath, comparison_json_path: data.comparisonJsonPath,
-    created_by: data.createdBy ?? null,
-  }).onConflictDoUpdate({
-    target: runs.run_id,
-    set: { scenario: data.scenario, models: data.models, started_at: data.startedAt, finished_at: data.finishedAt, status: data.status, source: data.source, comparison_md_path: data.comparisonMdPath, comparison_json_path: data.comparisonJsonPath, created_by: data.createdBy ?? null },
-  });
 }
 
 export async function upsertRunModel(data: {
@@ -342,24 +314,6 @@ export async function insertAnomaly(data: {
   return result[0] as DbAnomaly;
 }
 
-export async function getAnomalyById(id: number): Promise<DbAnomaly | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(anomalies).where(eq(anomalies.id, id)).limit(1);
-  return rows[0] ?? null;
-}
-
-export async function listAnomaliesByRun(runId: string): Promise<DbAnomaly[]> {
-  const db = getDrizzleDb();
-  return db.select().from(anomalies).where(eq(anomalies.run_id, runId)).orderBy(desc(anomalies.detected_at)) as any;
-}
-
-export async function resolveAnomalyQuery(id: number, resolvedAs: string): Promise<void> {
-  const db = getDrizzleDb();
-  await db.update(anomalies).set({
-    resolved: 1, resolved_at: new Date().toISOString(), resolved_as: resolvedAs,
-  }).where(eq(anomalies.id, id));
-}
-
 // ── Webhooks ──────────────────────────────────────────────────────────────
 
 export async function insertWebhook(data: {
@@ -382,27 +336,7 @@ export async function listWebhooks(activeOnly = false): Promise<DbWebhook[]> {
   return db.select().from(webhooks).orderBy(desc(webhooks.created_at)) as any;
 }
 
-export async function getWebhookById(id: number): Promise<DbWebhook | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(webhooks).where(eq(webhooks.id, id)).limit(1);
-  return rows[0] ?? null;
-}
-
-export async function deleteWebhookById(id: number): Promise<boolean> {
-  const db = getDrizzleDb();
-  const result = await db.delete(webhooks).where(eq(webhooks.id, id));
-  return (result as any).changes > 0;
-}
-
 // ── Pricing ───────────────────────────────────────────────────────────────
-
-export async function getPricingByModelId(modelId: string): Promise<DbPricing | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(pricing)
-    .where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} IS NULL`))
-    .limit(1);
-  return rows[0] ?? null;
-}
 
 export async function getLatestPricingVersion(): Promise<string | null> {
   const db = getDrizzleDb();
@@ -532,8 +466,7 @@ export async function countRoles(): Promise<number> {
 /**
  * Validate a SQL identifier (table or column name) against a strict allowlist
  * regex. Prevents SQL injection via the table/select/orderBy fields of
- * {@link queryTable} / {@link paginatedQuery}, which string-interpolate these
- * values into raw SQL.
+ * {@link paginatedQuery}, which string-interpolates these values into raw SQL.
  *
  * Allowed forms:
  *   - bare identifier: `users`, `model_runtime_stats`, `at`
@@ -603,7 +536,7 @@ export function validateOrderByClause(input: string): string {
 }
 
 /**
- * Validate a WHERE clause fragment for {@link queryTable} / {@link paginatedQuery}.
+ * Validate a WHERE clause fragment for {@link paginatedQuery}.
  *
  * Callers build WHERE clauses from static SQL fragments joined with AND/OR,
  * with values passed via `?` placeholders (parameterized). This validator is a
@@ -651,68 +584,6 @@ export function validateWhereClause(input: string): string {
     }
   }
   return trimmed;
-}
-
-export async function queryTable(
-  tableName: string,
-  whereClauses: string[],
-  params: Record<string, unknown>,
-  orderBy?: string,
-  limit?: number,
-  offset?: number,
-): Promise<Record<string, unknown>[]> {
-  const db = getDrizzleDb() as any;
-  // Defense-in-depth: validate interpolated identifiers before building SQL.
-  // Current callers pass static literals, but this prevents a careless future
-  // refactor from opening a SQL-injection vector.
-  validateSqlIdentifier(tableName);
-  const safeWhere = whereClauses.length ? whereClauses.map(validateWhereClause).join(' AND ') : '';
-  const safeOrderBy = orderBy ? validateOrderByClause(orderBy) : undefined;
-  let query = `SELECT * FROM ${tableName}`;
-  if (safeWhere) query += ` WHERE ${safeWhere}`;
-  if (safeOrderBy) query += ` ORDER BY ${safeOrderBy}`;
-  if (limit != null) query += ` LIMIT ${limit}`;
-  if (offset != null) query += ` OFFSET ${offset}`;
-  return db.run(query).values(params) as any;
-}
-
-// ── Model runtime stats ───────────────────────────────────────────────────
-
-export async function upsertModelRuntimeStat(data: {
-  modelId: string; runId: string; latencyP50Ms: number | null;
-  latencyP95Ms: number | null; tps: number | null;
-  cacheHitRate: number | null; cacheReadTokens: number | null;
-  cacheWriteTokens: number | null; costUsd: number | null;
-  success: number; measuredAt: string;
-}): Promise<void> {
-  const db = getDrizzleDb();
-  await db.insert(model_runtime_stats).values({
-    model_id: data.modelId, run_id: data.runId,
-    latency_p50_ms: data.latencyP50Ms, latency_p95_ms: data.latencyP95Ms,
-    tps: data.tps, cache_hit_rate: data.cacheHitRate,
-    cache_read_tokens: data.cacheReadTokens, cache_write_tokens: data.cacheWriteTokens,
-    cost_usd: data.costUsd, success: data.success, measured_at: data.measuredAt,
-  }).onConflictDoUpdate({
-    target: [model_runtime_stats.model_id, model_runtime_stats.run_id],
-    set: {
-      latency_p50_ms: data.latencyP50Ms, latency_p95_ms: data.latencyP95Ms,
-      tps: data.tps, cache_hit_rate: data.cacheHitRate,
-      cache_read_tokens: data.cacheReadTokens, cache_write_tokens: data.cacheWriteTokens,
-      cost_usd: data.costUsd, success: data.success, measured_at: data.measuredAt,
-    },
-  });
-}
-
-export async function insertToolCallStat(data: {
-  runId: string; model: string; toolName: string;
-  total: number; successCount: number; failCount: number; recordedAt: string;
-}): Promise<void> {
-  const db = getDrizzleDb();
-  await db.insert(tool_call_stats).values({
-    run_id: data.runId, model: data.model, tool_name: data.toolName,
-    total: data.total, success_count: data.successCount,
-    fail_count: data.failCount, recorded_at: data.recordedAt,
-  });
 }
 
 // ── Anomaly counts ────────────────────────────────────────────────────────

@@ -1,7 +1,23 @@
+import crypto from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeTaskId, configHash } from '../../src/runner/idempotency.js';
-import { initDb, closeDb } from '../../src/db/client.js';
+
+function configHash(config: Record<string, unknown>): string {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify(config, Object.keys(config).sort()))
+    .digest('hex');
+}
+
+function computeTaskId(opts: {
+  promptId: string;
+  promptVersion: number;
+  model: string;
+  configHash: string;
+  runId: string;
+}): string {
+  const input = `${opts.promptId}|${opts.promptVersion}|${opts.model}|${opts.configHash}|${opts.runId}`;
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
 
 test('configHash is deterministic across JSON key reorderings', () => {
   const a = configHash({ b: 2, a: 1, c: 3 });

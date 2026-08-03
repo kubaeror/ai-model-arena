@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { findProjectRoot } from '../paths.js';
 
 export const ARENA_PREFIX = 'arena-';
@@ -6,10 +5,6 @@ export const DASHBOARD_PROC_NAME = 'arena-dashboard';
 
 export function projectRoot(): string {
   return process.env.AI_ARENA_ROOT ?? findProjectRoot();
-}
-
-export function workerScriptPath(root: string): string {
-  return path.join(root, 'dist', 'worker.js');
 }
 
 export function timestamp(): string {

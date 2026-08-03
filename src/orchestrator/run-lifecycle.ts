@@ -1,9 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-const execFileAsync = promisify(execFile);
 import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
@@ -88,34 +85,6 @@ export interface PerModelStatus {
   online: boolean;
 }
 
-/** Build the project (tsc) if the compiled worker is missing. */
-export async function ensureBuilt(root: string, logger: Logger): Promise<void> {
-  const worker = pm2h.workerScriptPath(root);
-  if (fs.existsSync(worker)) return;
-  logger.info('Compiled worker not found — building project (npm run build)...');
-  try {
-    await execFileAsync(
-      process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      ['run', 'build'],
-      { cwd: root, shell: process.platform === 'win32' },
-    );
-  } catch (err) {
-    throw new Error(
-      `Failed to build automatically. Run "npm run build" first. (${
-        err instanceof Error ? err.message : String(err)
-      })`,
-    );
-  }
-}
-
-/** Get the latest pricing snapshot version for audit trail use. */
-async function getLatestPricingVersion(): Promise<string | null> {
-  try {
-    const { getLatestPricingVersion: q } = await import('../db/query.js');
-    return q();
-  } catch { return null; }
-}
-
 /** Validate models + compute all run paths (no PM2, no spawning). */
 export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   const root = pm2h.projectRoot();
@@ -161,42 +130,6 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   };
 }
 
-/** Connect to PM2 and start one worker per model, then disconnect. */
-export async function spawnRunWorkers(spec: RunSpec, logger: Logger): Promise<void> {
-  await pm2h.pm2Connect();
-  try {
-    for (const m of spec.models) {
-      const env: Record<string, unknown> = {
-        ...process.env,
-        AI_ARENA_MODEL: m.model,
-        AI_ARENA_SCENARIO: spec.scenario,
-        AI_ARENA_RUN_ID: spec.runId,
-        AI_ARENA_ROOT: spec.root!,
-        AI_ARENA_MODELS_CONFIG: spec.modelsConfigPath,
-        AI_ARENA_SCENARIOS_DIR: spec.scenariosDir,
-      };
-      const startOpts: Record<string, unknown> = {
-        name: m.procName,
-        script: pm2h.workerScriptPath(spec.root!),
-        interpreter: 'node',
-        exec_mode: 'fork',
-        autorestart: false,
-        max_restarts: 0,
-        cwd: spec.root!,
-        time: true,
-        merge_logs: true,
-        out_file: m.logFile,
-        error_file: m.logFile,
-        env,
-      };
-      logger.info('Spawning worker', { procName: m.procName, model: m.model, runId: spec.runId });
-      await pm2h.pm2Start(startOpts);
-    }
-  } finally {
-    await pm2h.pm2Disconnect();
-  }
-}
-
 /** Register a run (status=running) in the index. */
 export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli', createdBy?: string): Promise<void> {
   const perModel: RunIndexModelEntry[] = spec.models.map((m) => ({
@@ -215,7 +148,6 @@ export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | '
 export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   const root = pm2h.projectRoot();
   const logger = opts.logger ?? createLogger('ai-arena:orchestrator');
-  await ensureBuilt(root, logger);
   
   // Load budget config for enforcement (pricing now comes from the SQLite catalog)
   loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);
@@ -405,7 +337,7 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
       void addSpend(entry.model, entry.result.costUsd, spec.root!, logger);
       // Write to immutable cost ledger
       try {
-        const { insertCostLedgerEntry } = await import('../db/query.js');
+        const { insertCostLedgerEntry, getLatestPricingVersion } = await import('../db/query.js');
         const tokens = entry.result.tokenUsage ?? {};
         const pricingVersion = await getLatestPricingVersion();
         await insertCostLedgerEntry({
