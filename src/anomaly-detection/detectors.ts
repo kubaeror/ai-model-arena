@@ -1,6 +1,5 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import type { TraceMeta, SpanMeta } from '../observability/trace-meta.js';
+import { readJudgeResult } from '../evaluation/judge.js';
 import type { RunResult } from '../logger/result-logger.js';
 import type { AnomalyDetectionConfig } from './config.js';
 import type { RunHistory } from './baselines.js';
@@ -25,15 +24,8 @@ export type Detector = (input: RunAnalysisInput, config: AnomalyDetectionConfig,
 
 /** Read the judge score (0-100) for a run, if judge_score.json exists. */
 export function readJudgeScore(outputDir: string): number | null {
-  const p = path.join(outputDir, 'judge_score.json');
-  if (!fs.existsSync(p)) return null;
-  try {
-    const data = JSON.parse(fs.readFileSync(p, 'utf8')) as Record<string, unknown>;
-    const score = data.score ?? data.judgeScore ?? data.totalScore;
-    return typeof score === 'number' ? score : null;
-  } catch {
-    return null;
-  }
+  const r = readJudgeResult(outputDir);
+  return r ? r.averageScore : null;
 }
 
 // ── Latency ──────────────────────────────────────────────────────────────────
