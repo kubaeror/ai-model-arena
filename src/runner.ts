@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { outputRoot } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState } from './db/query.js';
@@ -8,18 +9,23 @@ import { createQueue, type TaskQueue, type Task } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun } from './db/model-resolver.js';
-import { loadScenario, resolveScenarioPath } from './config.js';
+import { loadScenario, resolveScenarioPath, type ScenarioConfig } from './config.js';
 import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
-import { Sandbox } from './sandbox/sandbox.js';
+import { writeReport } from './logger/report-logger.js';
+import { writeResultJson, type RunResult } from './logger/result-logger.js';
+import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
+import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
+import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
 import { generateManifest, writeManifest } from './sandbox/artifact-manifest.js';
 import { getProfile, getAllowedTools } from './profiles/definitions.js';
 import { runAgentLoop } from './agent-loop/loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
 import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
-import { loadBudgetConfig, checkBudget } from './cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, computeCost } from './cost-tracking/index.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled } from './orchestrator/run-lifecycle.js';
+import { activeTasks, taskCounter, taskDuration } from './observability/metrics.js';
 import type { ToolExecutionContext, TokenUsage } from './types.js';
 import { closeDb } from './db/index.js';
 import { secretStore } from './secrets/store.js';
@@ -42,6 +48,79 @@ function markReady(): void {
 
 function unmarkReady(): void {
   try { fs.unlinkSync(READINESS_FILE); } catch { /* ignore */ }
+}
+
+export interface SuccessOutcome {
+  command?: string;
+  expectedExitCode: number;
+  exitCode: number | null;
+  output: string;
+  outputContainsPassed?: boolean;
+  passed: boolean;
+}
+
+// Ported verbatim from the legacy worker (src/worker.ts): runs the scenario's
+// successCriteria command inside the sandbox and reports whether it passed.
+export async function runSuccessCriteria(
+  scenario: ScenarioConfig,
+  sandboxDir: string,
+  ctx: ToolExecutionContext,
+): Promise<SuccessOutcome | undefined> {
+  const sc = scenario.successCriteria;
+  if (!sc || !sc.command) return undefined;
+
+  const outcome: SuccessOutcome = {
+    command: sc.command,
+    expectedExitCode: sc.expectedExitCode,
+    exitCode: null,
+    output: '',
+    outputContainsPassed: undefined,
+    passed: false,
+  };
+
+  if (SHELL_METACHAR_RE.test(sc.command)) {
+    return {
+      command: sc.command,
+      expectedExitCode: sc.expectedExitCode,
+      exitCode: -1,
+      output: 'successCriteria.command contains disallowed shell metacharacters. ' +
+              'Use a simple command like "npm test" or "python -m pytest".',
+      passed: false,
+    };
+  }
+  const [bin = '', ...args] = sc.command.trim().split(/\s+/);
+  try {
+    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+      execFile(
+        bin, args,
+        {
+          cwd: sandboxDir,
+          timeout: ctx.shellTimeoutMs,
+          maxBuffer: ctx.maxShellOutputBytes,
+          env: sandboxEnv(),
+        },
+        (err, stdout, stderr) => {
+          if (err) reject(Object.assign(err, { stdout, stderr }));
+          else resolve({ stdout });
+        },
+      );
+    });
+    outcome.output = stdout;
+    outcome.exitCode = 0;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string; killed?: boolean };
+    outcome.output = `${e.stdout ?? ''}\n${e.stderr ?? ''}`.trim();
+    outcome.exitCode = typeof e.code === 'number' ? e.code : null;
+  }
+
+  let ok = outcome.exitCode === outcome.expectedExitCode;
+  if (sc.expectedOutputContains) {
+    const contains = outcome.output.includes(sc.expectedOutputContains);
+    outcome.outputContainsPassed = contains;
+    ok = ok && contains;
+  }
+  outcome.passed = ok;
+  return outcome;
 }
 
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
@@ -131,6 +210,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       task = await queue.dequeue(30000);
       if (!task) continue;
       runningTask = task;
+      activeTasks.inc();
 
       // Check per-run cancellation before starting execution
       const runId = task.config.modelRunId as string ?? task.sessionId;
@@ -165,12 +245,16 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       fs.mkdirSync(runOutputDir, { recursive: true });
       fs.mkdirSync(sandboxDir, { recursive: true });
 
+      const startedAt = new Date();
+
+      // Ported from worker.ts: conversation.json is written so report.md can
+      // be generated from it at the end of the run.
       const conv = new ConversationLogger(path.join(runOutputDir, 'conversation.json'), {
         model: modelName,
         scenario: scenarioName,
         runId: modelRunId,
-        startedAt: new Date().toISOString(),
-      }, { disableFile: true });
+        startedAt: startedAt.toISOString(),
+      });
 
       const profile = getProfile(scenario.executionProfile ?? 'read-only-analysis');
       const allowedTools = new Set(getAllowedTools(profile));
@@ -193,10 +277,33 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         sandbox.seedFrom(templateDir);
       }
 
+      // Ported from worker.ts: init git after seeding so the final diff.patch
+      // captures only agent-made changes relative to the starter state.
+      const sandboxGit = new SandboxGit({ sandboxDir, modelName, logger });
+      await sandboxGit.init();
+
       const resolved = await resolveModelForRun(modelName);
       if (!resolved) {
         logger.error('Model not found', { model: modelName });
         await queue.nack(task.taskId, `Model not found: ${modelName}`);
+        continue;
+      }
+
+      // Ported from worker.ts: fail fast on a missing API key instead of
+      // letting the adapter surface a confusing auth error mid-loop.
+      if (resolved.envVar && !secretStore.get(resolved.envVar)) {
+        const msg = `Missing API key: set ${resolved.envVar} in your .env`;
+        logger.error(msg, { model: modelName });
+        writeResultJson(path.join(runOutputDir, 'result.json'), {
+          model: modelName, scenario: scenarioName, runId: modelRunId,
+          startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString(),
+          durationMs: 0, turnsUsed: 0, maxTurns: 0, totalToolCalls: 0, toolsCalled: [],
+          tokenUsage: {}, stopReason: 'setup_error', errors: [msg], success: false,
+        });
+        transitionTaskState(runId, task.model, 'failed', runnerId).catch(e =>
+          logger.warn('Failed to write failed state', { error: String(e) }),
+        );
+        await queue.ack(task!._redisId ?? task!.taskId);
         continue;
       }
 
@@ -294,7 +401,50 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       const result = loopResult!;
 
-      // Transition to completed/failed based on result
+      // ── Ported from worker.ts: success criteria + git diff + result/report artifacts ──
+      let success = result.stopReason === 'task_complete';
+      let successOutcome: Awaited<ReturnType<typeof runSuccessCriteria>> | undefined;
+      try {
+        successOutcome = await runSuccessCriteria(scenario, sandboxDir, toolCtx);
+        success = successOutcome ? successOutcome.passed : success;
+      } catch { /* non-fatal */ }
+
+      const costBreakdown = await computeCost(modelName, {
+        prompt: result.tokenUsage.prompt ?? 0,
+        completion: result.tokenUsage.completion ?? 0,
+        cached: result.tokenUsage.cacheReadTokens ?? 0,
+      });
+
+      await sandboxGit.commitFinal(success ? 'Task completed successfully' : 'Task failed or incomplete');
+      const diff = await sandboxGit.generateDiff();
+      if (diff) await writeDiffPatch(runOutputDir, diff, logger);
+
+      const finishedAt = new Date();
+      const runResult: RunResult = {
+        model: modelName, scenario: scenarioName, runId: modelRunId,
+        startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(),
+        durationMs: finishedAt.getTime() - startedAt.getTime(),
+        turnsUsed: result.turnsUsed, maxTurns: result.maxTurns,
+        totalToolCalls: result.totalToolCalls, toolsCalled: result.toolsCalled,
+        tokenUsage: result.tokenUsage, stopReason: result.stopReason,
+        errors: result.errors, success, costUsd: costBreakdown.total,
+        toolSuccessRates: result.toolSuccessRates,
+        successCriteria: successOutcome ? {
+          command: successOutcome.command, expectedExitCode: successOutcome.expectedExitCode,
+          exitCode: successOutcome.exitCode, output: successOutcome.output,
+          outputContainsPassed: successOutcome.outputContainsPassed, passed: successOutcome.passed,
+        } : undefined,
+      };
+      writeResultJson(path.join(runOutputDir, 'result.json'), runResult);
+      conv.setEnded(runResult.finishedAt);
+      try {
+        const convFile = JSON.parse(fs.readFileSync(path.join(runOutputDir, 'conversation.json'), 'utf8'));
+        writeReport(path.join(runOutputDir, 'report.md'), runResult, convFile);
+      } catch { /* best-effort */ }
+
+      // run_models.status reflects loop health, not the success-criteria result:
+      // a clean loop whose criteria failed stays 'completed' (criteria is
+      // recorded in result.json). Loop errors still map to 'failed'.
       const finalStatus = result.errors.length > 0 ? 'failed' : 'completed';
       transitionTaskState(runId, task.model, finalStatus, runnerId).catch(e =>
         logger.warn('Failed to write final state', { error: String(e) }),
@@ -307,7 +457,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           { error: manifestErr instanceof Error ? manifestErr.message : String(manifestErr) });
       }
 
-      logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed });
+      taskCounter.inc({ model: modelName, scenario: scenarioName, status: finalStatus });
+      taskDuration.observe((finishedAt.getTime() - startedAt.getTime()) / 1000);
+
+      logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed, success });
       await store.updateSessionStatus(session.id, result.errors.length > 0 ? 'errored' : 'completed');
       await queue.ack(task!._redisId ?? task!.taskId);
     } catch (err) {
@@ -329,6 +482,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {
+      if (runningTask) activeTasks.dec();
       runningTask = null;
     }
   }

@@ -4,7 +4,7 @@ import type { TokenUsage } from '../types.js';
 
 /**
  * Structured per-run outcome. Written to `outputs/<model>/<runId>/result.json`
- * by the worker and aggregated by the orchestrator into a comparison report.
+ * by the runner and aggregated by the orchestrator into a comparison report.
  */
 export interface RunResult {
   model: string;
