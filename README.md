@@ -10,7 +10,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 ## Features
 
-- **59 LLM providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, OpenRouter, Groq, Cerebras, NVIDIA, Mistral, SambaNova, Scaleway, Cloudflare, GitHub Copilot, xAI, Ollama, DeepSeek, DeepInfra, Together, Fireworks, Perplexity, Cohere, HuggingFace, Azure, Snowflake Cortex, SAP AI Core, and many more — all behind a unified adapter interface with 3 adapter families (openai-compat, anthropic, google)
+- **59 LLM providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, OpenRouter, Groq, Cerebras, NVIDIA, Mistral, SambaNova, Scaleway, Cloudflare, GitHub Copilot, xAI, Ollama, DeepSeek, DeepInfra, Together, Fireworks, Perplexity, Cohere, HuggingFace, Azure, Snowflake Cortex, SAP AI Core, and many more — all behind a unified adapter interface with 4 adapter families (openai-compat, anthropic, google, bedrock)
 - **Sandboxed workspaces** with path escape prevention and shell policy enforcement
 - **Agent loop**: prompt → model response → tool execution → repeat; stops on `task_complete` or `max_turns`
 - **13 built-in tools**: read_file, write_file, edit_file, glob, list_files, run_shell_command, search_code, web_fetch, web_search, todo_read, todo_write, task (subagent), task_complete
@@ -79,8 +79,8 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Runner entry** | `src/runner-entry.ts` | Container entrypoint (starts OTel + runner) |
 | **Queue** | `src/queue/` | Abstraction: `types`, `in-memory`, `redis` (Streams with consumer groups + XAUTOCLAIM), `router`, `redis-config` |
 | **Agent loop** | `src/agent-loop/loop.ts` | Core send→tool→loop with per-turn budget/cancellation checks |
-| **Providers** | `src/providers/` | Provider registry (59 providers), descriptor system, 3 adapter families (openai-compat, anthropic, google) |
-| **Provider adapters** | `src/providers/adapters/` | Wire-format translation: `openai-compat`, `anthropic`, `google` (3 adapter families covering all 59 providers) |
+| **Providers** | `src/providers/` | Provider registry (59 providers), descriptor system, 4 adapter families (openai-compat, anthropic, google, bedrock) |
+| **Provider adapters** | `src/providers/adapters/` | Wire-format translation: `openai-compat`, `anthropic`, `google`, `bedrock` (4 adapter families covering all 59 providers) |
 | **Tools** | `src/tools/` | 13 tools: read_file, write_file, edit_file, glob, list_files, run_shell_command, search_code, web_fetch, web_search, todo_read, todo_write, task (subagent), task_complete — with JSON-Schema definitions, Zod-validated executors, sandbox enforcement, shell policy, and web access gating |
 | **Sandbox** | `src/sandbox/` | Isolated workspace with path escape prevention, shell policy, git integration |
 | **Session store** | `src/session/store.ts` | Message + session persistence per turn |
@@ -99,7 +99,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Environment** | `src/env/` | Platform auto-detection (Kubernetes vs bare-metal) |
 | **Lineage** | `src/lineage/` | Artifact provenance tracking |
 | **Logger** | `src/logger/` | Pino structured logger, conversation/report/result/comparison loggers |
-| **Dashboard server** | `src/dashboard-server/` | Express API + WebSocket gateway, JWT auth, RBAC, 27 route modules |
+| **Dashboard server** | `src/dashboard-server/` | Express API + WebSocket gateway, JWT auth, RBAC, 26 route modules |
 | **Dashboard client** | `src/dashboard-client/` | React + Vite + TanStack Query + Tailwind SPA |
 
 ---
@@ -260,7 +260,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 
 ## Adding a model
 
-Models are managed through the provider catalog (59 built-in providers across 3 adapter families: `openai-compat`, `anthropic`, `google`). To add a new model:
+Models are managed through the provider catalog (59 built-in providers across 4 adapter families: `openai-compat`, `anthropic`, `google`, `bedrock`). To add a new model:
 
 1. Ensure the provider descriptor exists in `src/providers/descriptors/`
 2. Add the model via the dashboard (**Models** page) or the API
@@ -414,7 +414,6 @@ ai-model-arena/
 │   ├── cli.ts                    # CLI entry (commander)
 │   ├── runner.ts                 # Queue-driven runner loop
 │   ├── runner-entry.ts           # Container entrypoint
-│   ├── worker.ts                 # Legacy direct session worker
 │   ├── config.ts                 # Zod schemas + YAML loaders
 │   ├── env.ts                    # Dashboard env config
 │   ├── types.ts                  # Shared TypeScript interfaces
@@ -423,7 +422,7 @@ ai-model-arena/
 │   ├── auth/                     # Password hashing + RBAC
 │   ├── catalog/                  # models.dev sync + model matching
 │   ├── cost-tracking/            # Pricing + budget enforcement
-│   ├── dashboard-server/         # Express API + WebSocket + 27 route modules
+│   ├── dashboard-server/         # Express API + WebSocket + 26 route modules
 │   ├── dashboard-client/         # React SPA (Vite + TanStack Query)
 │   ├── db/                       # Drizzle ORM (SQLite + Postgres)
 │   ├── env/                      # Platform auto-detection (k8s vs bare-metal)
@@ -435,7 +434,7 @@ ai-model-arena/
 │   ├── notifications/            # Slack, Discord, webhooks
 │   ├── observability/            # OpenTelemetry setup + trace instrumentation
 │   ├── orchestrator/             # Run lifecycle, PM2 helpers, run index
-│   ├── providers/                # 59 provider descriptors + 3 adapter families
+│   ├── providers/                # 59 provider descriptors + 4 adapter families
 │   ├── queue/                    # In-memory + Redis Streams queue
 │   ├── runner/                   # Checkpointing + idempotency
 │   ├── sandbox/                  # Isolated filesystem + git

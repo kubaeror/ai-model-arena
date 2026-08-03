@@ -14,6 +14,7 @@ test('postgres: migrations + Drizzle round-trip + task transition columns', { sk
   await migratePostgres(getPgClient());
   try {
     const scheduleId = `pg-smoke-${Date.now()}`;
+    const runId = `pg-smoke-run-${Date.now()}`;
     await insertSchedule({ id: scheduleId, scenario: 'express-rest', models: ['gpt-4o'], cron: '0 3 * * *', enabled: true });
     const due = await listDueSchedules(new Date().toISOString());
     assert.ok(due.some((s: any) => s.id === scheduleId), 'schedules insert/list due via PG');
@@ -21,17 +22,17 @@ test('postgres: migrations + Drizzle round-trip + task transition columns', { sk
 
     const db = getDrizzleDb();
     await db.insert(runs).values({
-      run_id: 'pg-smoke-run', scenario: 'express-rest', models: JSON.stringify(['gpt-4o']),
+      run_id: runId, scenario: 'express-rest', models: JSON.stringify(['gpt-4o']),
       started_at: new Date().toISOString(), status: 'running', source: 'dashboard',
     });
     await insertCostLedgerEntry({
-      runId: 'pg-smoke-run', model: 'gpt-4o', costUsd: 0.5,
+      runId, model: 'gpt-4o', costUsd: 0.5,
       inputTokens: 100, outputTokens: 20, recordedAt: new Date().toISOString(),
     });
     const byMonth = await getCostSummary('month', 'gpt-4o');
     assert.ok(Array.isArray(byMonth), 'cost summary (previously SQLite date()) runs on PG');
 
-    await transitionTaskState('pg-smoke-run', 'gpt-4o', 'running', 'runner-test');
+    await transitionTaskState(runId, 'gpt-4o', 'running', 'runner-test');
     assert.ok(true, 'transitionTaskState did not throw (run_models columns present)');
   } finally {
     await closeDb();

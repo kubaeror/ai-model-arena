@@ -1,4 +1,5 @@
 tests/agent-loop/loop-stop.test.ts
+tests/anomaly-detection/silent-failure.test.ts
 tests/auth/audit-safe.test.ts
 tests/auth/jwt-validation.test.ts
 tests/auth/rate-limit.test.ts
@@ -18,13 +19,15 @@ tests/db/pagination.test.ts
 tests/db/runs.test.ts
 tests/db/schedules.test.ts
 tests/db/sessions.test.ts
-tests/evaluation/*.test.ts
-tests/fs/*.test.ts
+tests/evaluation/judge-config.test.ts
+tests/fs/walk.test.ts
 tests/metrics/cache-metrics.test.ts
 tests/metrics/prometheus.test.ts
 tests/metrics/writeback.test.ts
-tests/notifications/*.test.ts
-tests/orchestrator/*.test.ts
+tests/notifications/format.test.ts
+tests/notifications/webhooks-dispatch.test.ts
+tests/orchestrator/budget-integration.test.ts
+tests/orchestrator/finalize-merge.test.ts
 tests/providers/bedrock.test.ts
 tests/providers/circuit-breaker.test.ts
 tests/providers/custom.test.ts
@@ -43,7 +46,7 @@ tests/runner/success-criteria.test.ts
 tests/sandbox/escape.test.ts
 tests/sandbox/sandbox.test.ts
 tests/sandbox/workspace.test.ts
-tests/scheduler/*.test.ts
+tests/scheduler/sync-schedules.test.ts
 tests/security/prompt-injection-wiring.test.ts
 tests/security/prompt-injection.test.ts
 tests/security/shell-secrets.test.ts
