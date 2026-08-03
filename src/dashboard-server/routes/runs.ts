@@ -17,7 +17,7 @@ import { readDiffPatch } from '../../sandbox/git.js';
 import { walkFiles } from '../../fs/walk.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
-import type { Response } from 'express';
+import { allowIfRunOwner } from '../run-ownership.js';
 
 async function findEntry(runId: string, model: string): Promise<RunIndexModelEntry | undefined> {
   return (await getRunRecord(runId))?.perModel.find((m) => m.model === model);
@@ -35,43 +35,6 @@ async function findEntry(runId: string, model: string): Promise<RunIndexModelEnt
  * another tenant's sandbox files, logs, diffs, and metadata by runId — an
  * IDOR-style confidentiality gap. Now: only the owner or an admin may proceed.
  */
-async function checkRunOwnership(req: AuthedRequest, runId: string): Promise<{ ok: true } | { ok: false; status: 404 | 403 }> {
-  const rec = await getRunRecord(runId);
-  if (!rec) return { ok: false, status: 404 };
-  const isAdmin = req.user?.role === 'admin';
-  const ownerIsPresent = typeof rec.createdBy === 'string' && rec.createdBy.length > 0;
-  const allowed = isAdmin || (ownerIsPresent && req.user?.sub === rec.createdBy);
-  if (!allowed) return { ok: false, status: 403 };
-  return { ok: true };
-}
-
-/**
- * I3: shared ownership gate. Runs `checkRunOwnership` and, on denial,
- * sends the 404/403 response and returns `false`; on success returns `true`
- * so the handler can proceed. Collapses the 9 repeated
- * `if (!owner.ok) { res.status(...).json(...); return; }` blocks into one
- * call site, so the ownership contract lives in exactly one place.
- *
- * @param req     - the authed request (carries the user identity).
- * @param res     - the express response (used to send the denial).
- * @param runId   - the runId path param.
- * @param notFoundMsg - optional override for the 404 message (stop/restart use lowercase 'run not found').
- * @returns `true` if the handler may proceed, `false` if the response was already sent.
- */
-async function allowIfRunOwner(
-  req: AuthedRequest,
-  res: Response,
-  runId: string,
-  notFoundMsg: string = 'Run not found',
-): Promise<boolean> {
-  const owner = await checkRunOwnership(req, runId);
-  if (owner.ok) return true;
-  res.status(owner.status).json({
-    error: owner.status === 404 ? notFoundMsg : 'forbidden: not the run owner',
-  });
-  return false;
-}
-
 const IGNORE_DIRS = ['dist', '.cache'];
 
 async function readTail(filePath: string, lines = 400): Promise<string> {
