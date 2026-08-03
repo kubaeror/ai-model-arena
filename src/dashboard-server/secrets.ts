@@ -1,4 +1,4 @@
-const SENSITIVE_KEYS = /(api.?key|\bsecret\b|password|token|auth|credential)/i;
+const SENSITIVE_KEYS = /^(api_?key|secret|password|token|authorization|credential)$/i;
 
 export function maskSecrets(obj: unknown, depth = 0): unknown {
   if (depth > 10) return obj;
