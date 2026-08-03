@@ -157,7 +157,21 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   for (const modelName of opts.models) {
     const budgetCheck = checkBudget(modelName, root, opts.forceBudget ?? false, logger);
     if (!budgetCheck.allowed) {
-      throw new Error(budgetCheck.reason ?? `Budget exceeded for ${modelName}`);
+      const reason = budgetCheck.reason ?? `Budget exceeded for ${modelName}`;
+      // Dispatch budget_exceeded webhook first (non-blocking), then throw.
+      void (async () => {
+        try {
+          const { dispatchWebhooks } = await import('../notifications/webhooks.js');
+          await dispatchWebhooks('budget_exceeded', {
+            model: modelName,
+            spentUsd: budgetCheck.spentUsd,
+            limitUsd: budgetCheck.limitUsd,
+            percentUsed: budgetCheck.percentUsed,
+            reason,
+          }, logger);
+        } catch { /* non-blocking */ }
+      })();
+      throw new Error(reason);
     }
 
     // Estimate cost: assume maxTurns tokens × worst-case pricing
