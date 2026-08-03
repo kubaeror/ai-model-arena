@@ -31,7 +31,7 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
     return this.withRetry(async () => {
       const body = this.buildBody(messages, tools, opts);
       const url = `${this.baseUrl}/v1beta/models/${this.modelId}:generateContent?key=${this.apiKey ?? ''}`;
-      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
+      const res = await this.post(url, body);
       if (!res.ok) {
         const text = await res.text();
         throw new HttpError(res.status, text, `Google ${res.status}: ${text.slice(0, 200)}`);

@@ -25,7 +25,25 @@ const RETRYABLE_MESSAGES = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAI
 
 export abstract class BaseAdapter {
   protected logger?: Logger;
+  protected timeoutMs = 60_000;
   constructor(logger?: Logger) { this.logger = logger; }
+
+  /**
+   * Shared JSON POST with a sane default timeout. Adapters supply their own
+   * auth headers (Bearer, x-api-key, x-goog-api-key, sigv4 — see bedrock).
+   */
+  protected async post(
+    url: string,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<Response> {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+  }
 
   protected isRetryable(err: unknown): boolean {
     if (err instanceof NormalizedProviderError) return err.retryable;

@@ -207,15 +207,10 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
       if (opts?.temperature !== undefined) body.temperature = opts.temperature;
       if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
 
-      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      const headers: Record<string, string> = {};
       if (this.gatewayKey) headers.authorization = `Bearer ${this.gatewayKey}`;
 
-      const res = await fetch(`${this.gatewayUrl}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(60_000),
-      });
+      const res = await this.post(`${this.gatewayUrl}/chat/completions`, body, headers);
       if (!res.ok) {
         const text = await res.text();
         throw new HttpError(res.status, text, `Bedrock ${res.status}: ${text.slice(0, 200)}`);
