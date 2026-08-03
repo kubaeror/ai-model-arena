@@ -12,6 +12,7 @@ import {
 } from '../../config.js';
 import { findProjectRoot } from '../../paths.js';
 import { isWithin } from '../../sandbox/sandbox.js';
+import { walkFiles } from '../../fs/walk.js';
 
 function scenariosDir(): string {
   return path.join(findProjectRoot(), 'configs', 'scenarios');
@@ -55,19 +56,10 @@ function listStarterFiles(scenario: ScenarioConfig): StarterFile[] {
   if (!scenario.starterFiles) return [];
   const dir = path.join(scenariosDir(), scenario.starterFiles);
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
-  const out: StarterFile[] = [];
-  const walk = (d: string) => {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (e.name === 'node_modules' || e.name === '.git') continue;
-      const full = path.join(d, e.name);
-      if (e.isDirectory()) walk(full);
-      else if (e.isFile()) {
-        out.push({ path: path.relative(dir, full).replace(/\\/g, '/'), content: fs.readFileSync(full, 'utf8') });
-      }
-    }
-  };
-  walk(dir);
-  return out;
+  return walkFiles(dir).map((full) => ({
+    path: path.relative(dir, full).replace(/\\/g, '/'),
+    content: fs.readFileSync(full, 'utf8'),
+  }));
 }
 
 function writeScenarioYaml(filePath: string, config: ScenarioConfig): ScenarioConfig {

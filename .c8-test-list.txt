@@ -28,3 +28,4 @@ tests/evaluation/*.test.ts
 tests/notifications/*.test.ts
 tests/scheduler/*.test.ts
 tests/orchestrator/*.test.ts
+tests/fs/*.test.ts

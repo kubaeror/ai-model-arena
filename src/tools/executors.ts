@@ -4,6 +4,7 @@ import { exec, execFile } from 'node:child_process';
 import { z } from 'zod/v4';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
+import { walkFiles } from '../fs/walk.js';
 import { wrapFileContent } from '../security/prompt-injection.js';
 import { sanitizeSecrets } from '../security/shell-secrets.js';
 import { globToRegex } from './glob-matcher.js';
@@ -45,27 +46,7 @@ function validateArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): {
   return { ok: false, error: `Invalid arguments: ${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
 }
 
-const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache', '.npm']);
-
-function walkFiles(dir: string, recursive: boolean, acc: string[] = []): string[] {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return acc;
-  }
-  for (const e of entries) {
-    if (IGNORE_DIRS.has(e.name)) continue;
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      if (recursive) walkFiles(full, recursive, acc);
-    } else if (e.isFile()) {
-      acc.push(full);
-      if (acc.length >= MAX_LIST_FILES) break;
-    }
-  }
-  return acc;
-}
+const IGNORE_DIRS = ['node_modules', '.git', 'dist', '.cache', '.npm'];
 
 function toRel(sandboxDir: string, abs: string): string {
   return path.relative(sandboxDir, abs).replace(/\\/g, '/');
@@ -115,7 +96,10 @@ export const listFiles: ToolExecutor = async (args, ctx) => {
   const abs = safeResolve(ctx.sandboxDir, rel);
   if (!fs.existsSync(abs)) return { content: `Error: directory not found: ${rel}`, isError: true };
   if (!fs.statSync(abs).isDirectory()) return { content: `Error: not a directory: ${rel}`, isError: true };
-  const files = walkFiles(abs, recursive).map((f) => toRel(ctx.sandboxDir, f));
+  const files = walkFiles(abs, { exclude: [...IGNORE_DIRS] })
+    .filter((f) => recursive || path.dirname(f) === abs)
+    .slice(0, MAX_LIST_FILES)
+    .map((f) => toRel(ctx.sandboxDir, f));
   files.sort();
   return { content: files.length ? files.join('\n') : '(empty workspace)', isError: false };
 };
@@ -253,7 +237,7 @@ export const searchCode: ToolExecutor = async (args, ctx) => {
     }
   }
 
-  const files = walkFiles(ctx.sandboxDir, true);
+  const files = walkFiles(ctx.sandboxDir, { exclude: [...IGNORE_DIRS] }).slice(0, MAX_LIST_FILES);
   const matches: string[] = [];
   const lowerQuery = query.toLowerCase();
 
@@ -360,7 +344,7 @@ export const globFiles: ToolExecutor = async (args, ctx) => {
     return { content: `Error: invalid glob pattern: ${(e as Error).message}`, isError: true };
   }
 
-  const files = walkFiles(absDir, true);
+  const files = walkFiles(absDir, { exclude: [...IGNORE_DIRS] }).slice(0, MAX_LIST_FILES);
   const matches: string[] = [];
   for (const file of files) {
     const rel = toRel(ctx.sandboxDir, file);

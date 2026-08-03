@@ -14,6 +14,7 @@ import type { RunSpec } from '../../orchestrator/run-lifecycle.js';
 import type { RunIndexModelEntry } from '../../orchestrator/run-index.js';
 import { safeResolve } from '../../sandbox/sandbox.js';
 import { readDiffPatch } from '../../sandbox/git.js';
+import { walkFiles } from '../../fs/walk.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import type { Response } from 'express';
@@ -71,23 +72,7 @@ async function allowIfRunOwner(
   return false;
 }
 
-const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache']);
-
-function walkSandbox(dir: string, base: string, acc: string[] = []): string[] {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return acc;
-  }
-  for (const e of entries) {
-    if (IGNORE_DIRS.has(e.name)) continue;
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) walkSandbox(full, base, acc);
-    else if (e.isFile()) acc.push(path.relative(base, full).replace(/\\/g, '/'));
-  }
-  return acc;
-}
+const IGNORE_DIRS = ['dist', '.cache'];
 
 async function readTail(filePath: string, lines = 400): Promise<string> {
   try {
@@ -207,7 +192,10 @@ export function createRunsRouter(): Router {
       res.json({ files: [] });
       return;
     }
-    res.json({ files: walkSandbox(entry.sandboxDir, entry.sandboxDir).sort() });
+    const files = walkFiles(entry.sandboxDir, { exclude: IGNORE_DIRS })
+      .map((f) => path.relative(entry.sandboxDir, f).replace(/\\/g, '/'))
+      .sort();
+    res.json({ files });
   });
 
   // GET /api/runs/:runId/models/:model/files/* — read one sandbox file
