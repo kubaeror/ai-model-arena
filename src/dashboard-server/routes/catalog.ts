@@ -51,6 +51,7 @@ export function createCatalogRouter(): Router {
       toolCall: req.query.tool_call === '1',
       minContext: req.query.min_context ? Number(req.query.min_context) : undefined,
       sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
+      q: typeof req.query.q === 'string' ? req.query.q : undefined,
     });
     res.json({ data: rows });
   });

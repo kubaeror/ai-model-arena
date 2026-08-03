@@ -723,7 +723,7 @@ export async function insertRole(data: { id: string; description: string }): Pro
 
 export async function listCatalogModels(filters: {
   provider?: string; reasoning?: boolean; toolCall?: boolean;
-  minContext?: number; sort?: string;
+  minContext?: number; sort?: string; q?: string;
 }): Promise<any[]> {
   const db = getDrizzleDb();
   const where: string[] = [];
@@ -732,6 +732,7 @@ export async function listCatalogModels(filters: {
   if (filters.reasoning) where.push('m.reasoning = 1');
   if (filters.toolCall) where.push('m.tool_call = 1');
   if (filters.minContext != null) { where.push('m.context_limit >= ?'); params.push(filters.minContext); }
+  if (filters.q) { where.push('lower(m.name) LIKE ?'); params.push(`%${filters.q.toLowerCase()}%`); }
   const sort = filters.sort === 'context' ? 'm.context_limit DESC' : 'm.name ASC';
   return db.all(sql.raw(`
     SELECT m.id, m.name, m.family, m.provider_id, m.release_date, m.attachment, m.reasoning, m.temperature,
