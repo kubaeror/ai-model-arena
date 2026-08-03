@@ -15,7 +15,6 @@ tests/queue/in-memory-extended.test.ts
 tests/queue/in-memory.test.ts
 tests/queue/redis.test.ts
 tests/queue/router.test.ts
-tests/runner/config-hash.test.ts
 tests/runner/runner.test.ts
 tests/sandbox/escape.test.ts
 tests/sandbox/workspace.test.ts

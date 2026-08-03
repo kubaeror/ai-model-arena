@@ -74,7 +74,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| **CLI** | `src/cli.ts` | Commander-based CLI: `run`, `status`, `logs`, `cleanup`, `regress`, `schedule`, `export`, `diff`, `budget`. No-args starts the dashboard server. |
+| **CLI** | `src/cli.ts` | Commander-based CLI: `run`, `status`, `cleanup`, `regress`, `schedule`, `export`, `diff`, `budget`. No-args starts the dashboard server. |
 | **Runner** | `src/runner.ts` | Long-lived queue consumer: dequeue → agent loop → checkpoint → ack/nack |
 | **Runner entry** | `src/runner-entry.ts` | Container entrypoint (starts OTel + runner) |
 | **Queue** | `src/queue/` | Abstraction: `types`, `in-memory`, `redis` (Streams with consumer groups + XAUTOCLAIM), `router`, `redis-config` |
@@ -164,7 +164,6 @@ Set `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` in `.env` (authentication is m
 ```
 ai-arena run     -s <scenario> -m <model1,model2,...>  Run a scenario
 ai-arena status                                         List runs
-ai-arena logs    -m <model> [-n <lines>]                Tail model logs
 ai-arena diff    <runId> [-m <model>]                   View run diff
 ai-arena cleanup [-d <days>]                            Cleanup old artifacts
 ai-arena regress -s <suite>                             Run regression suite
