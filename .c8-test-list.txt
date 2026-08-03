@@ -24,3 +24,4 @@ tests/smoke/trace-smoke.test.ts
 tests/tools/shell-metachar.test.ts
 tests/anomaly-detection/*.test.ts
 tests/evaluation/*.test.ts
+tests/notifications/*.test.ts

@@ -1,10 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { outputRoot } from '../paths.js';
+import { outputRoot, findProjectRoot } from '../paths.js';
 import type { Logger } from '../types.js';
 import type { BaselineSnapshot, RegressionResult, JudgeResult } from './types.js';
 import type { RunResult } from '../logger/result-logger.js';
 import { readJudgeResult } from './judge.js';
+
+async function notifyRegressionFailed(
+  suite: string,
+  model: string,
+  regressions: RegressionResult['regressions'],
+  logger?: Logger
+): Promise<void> {
+  try {
+    const { loadNotificationConfig, dispatchNotification, DispatchEventType } = await import('../notifications/index.js');
+    loadNotificationConfig(path.join(findProjectRoot(), 'configs', 'notifications.yaml'), logger);
+    await dispatchNotification({
+      type: DispatchEventType.onRegressionFailed,
+      data: { suite, model, regressions },
+      timestamp: new Date().toISOString(),
+    }, logger);
+  } catch (err) {
+    logger?.warn('Regression notification dispatch failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 export function getBaselinePath(baselineDir: string, model: string, scenario: string): string {
   return path.join(baselineDir, model, `${scenario}.json`);
@@ -168,6 +189,7 @@ export async function runRegressionSuite(
         if (!regression.passed) {
           suiteResult.passed = false;
           logger?.warn('Regression detected', { model, scenario, regressions: regression.regressions });
+          void notifyRegressionFailed(suiteName, model, regression.regressions, logger);
         }
       }
       
