@@ -29,7 +29,7 @@ function listSuites(): string[] {
  * request like `GET /api/regression/suites/..%2F..%2Fapi-keys` would resolve
  * to `configs/api-keys.yaml` — letting any viewer-role user read arbitrary
  * YAML files under the project root (including configs/api-keys.yaml with
- * API-key definitions and configs/webhooks.yaml with HMAC secrets).
+ * API-key definitions and HMAC secrets).
  *
  * This helper enforces a bare alphanumeric suite name and isWithin() on the
  * resolved path, matching the scenarios.ts resolveAndValidate pattern.

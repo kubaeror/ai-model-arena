@@ -361,6 +361,35 @@ export async function updateScheduleRun(id: string, lastRun: string, nextRun: st
   await db.update(schedules).set({ last_run: lastRun, next_run: nextRun }).where(eq(schedules.id, id));
 }
 
+export interface ScheduleInput {
+  id: string;
+  scenario: string;
+  models: string[];
+  cron: string;
+  enabled: boolean;
+  createdAt?: string;
+}
+
+export async function insertSchedule(s: ScheduleInput): Promise<void> {
+  const db = getDrizzleDb();
+  const existing = await db.select({ id: schedules.id }).from(schedules).where(eq(schedules.id, s.id)).limit(1);
+  if (existing.length > 0) return;
+  await db.insert(schedules).values({
+    id: s.id, scenario: s.scenario, models: JSON.stringify(s.models),
+    cron: s.cron, enabled: s.enabled ? 1 : 0, created_at: s.createdAt ?? new Date().toISOString(),
+  });
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  const db = getDrizzleDb();
+  await db.delete(schedules).where(eq(schedules.id, id));
+}
+
+export async function listSchedules(): Promise<DbSchedule[]> {
+  const db = getDrizzleDb();
+  return db.select().from(schedules) as any;
+}
+
 // ── Providers (custom) ────────────────────────────────────────────────────
 
 export async function listCustomProviders(): Promise<DbProvider[]> {

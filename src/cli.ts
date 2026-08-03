@@ -247,7 +247,7 @@ scheduleCmd
   .requiredOption('-c, --cron <expr>', 'Cron expression')
   .option('--id <id>', 'Schedule ID (auto-generated if not provided)')
   .option('--disabled', 'Create as disabled', false)
-  .action((opts) => {
+  .action(async (opts) => {
     const root = rootDir();
     const configPath = path.join(root, 'configs', 'schedules.yaml');
     const models = String(opts.models).split(',').map((m: string) => m.trim()).filter(Boolean);
@@ -262,7 +262,7 @@ scheduleCmd
     };
     
     try {
-      addSchedule(configPath, schedule);
+      await addSchedule(configPath, schedule);
       console.log(`\nSchedule created: ${id}`);
       console.log(`  Scenario: ${opts.scenario}`);
       console.log(`  Models: ${models.join(', ')}`);
@@ -277,10 +277,10 @@ scheduleCmd
   .command('remove')
   .description('Remove a scheduled job.')
   .requiredOption('-i, --id <id>', 'Schedule ID')
-  .action((opts) => {
+  .action(async (opts) => {
     const root = rootDir();
     const configPath = path.join(root, 'configs', 'schedules.yaml');
-    if (removeSchedule(configPath, opts.id)) {
+    if (await removeSchedule(configPath, opts.id)) {
       console.log(`\nSchedule removed: ${opts.id}\n`);
     } else {
       console.error(`Schedule not found: ${opts.id}`);

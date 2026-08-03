@@ -23,5 +23,7 @@ tests/smoke/agent-loop-smoke.test.ts
 tests/smoke/trace-smoke.test.ts
 tests/tools/shell-metachar.test.ts
 tests/anomaly-detection/*.test.ts
+tests/db/schedules.test.ts
 tests/evaluation/*.test.ts
 tests/notifications/*.test.ts
+tests/scheduler/*.test.ts

@@ -83,6 +83,12 @@ async function start(): Promise<void> {
   }
   startCatalogCron(logger);
 
+  // Boot: mirror YAML schedules into the `schedules` DB table so the
+  // scheduler CronJob ticks real rows. Non-fatal — the job self-heals by
+  // re-syncing on add/remove, and a missing/empty YAML sync is a warning.
+  const { syncSchedulesToDb } = await import('../scheduler/manager.js');
+  await syncSchedulesToDb(path.join(root, 'configs', 'schedules.yaml'), logger);
+
   const app = express();
   const corsOrigins = allowedOrigins.length
     ? allowedOrigins
