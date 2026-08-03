@@ -44,7 +44,6 @@ import { createOutputMappingsRouter } from './routes/output-mappings.js';
 import { createSessionsRouter } from './routes/sessions.js';
 import { createUsersRouter } from './routes/users.js';
 import { createAuditRouter } from './routes/audit.js';
-import { createCostRouter } from './routes/cost.js';
 import { createFilesRouter } from './routes/files.js';
 import { attachStreamWs } from './routes/stream.js';
 import { mountOpenApi } from './openapi.js';
@@ -257,7 +256,6 @@ async function start(): Promise<void> {
   app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
 
   // ── Cost ledger (viewer for reads) ────────────────────────────────────
-  app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
 
   // ── Files listing (viewer for reads) ─────────────────────────────────
   app.use('/api/files', requireAuth(auth), requireRole('viewer'), createFilesRouter());
@@ -304,7 +302,6 @@ async function start(): Promise<void> {
   app.use('/api/v1/budget', requireApiKey(['budget:read']), createBudgetRouter());
   app.use('/api/v1/schedules', requireApiKey(['schedules:read']), createSchedulesRouter());
   app.use('/api/v1/regression', requireApiKey(['regression:execute']), createRegressionRouter());
-  app.use('/api/v1/cost', requireApiKey(['cost:read']), createCostRouter());
   app.use('/api/v1/files', requireApiKey(['files:read']), createFilesRouter());
   app.use('/api/v1/sessions', requireApiKey(['sessions:read']), createSessionsRouter());
   app.use('/api/v1/prompts', requireApiKey(['prompts:read']), createPromptsRouter());

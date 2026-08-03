@@ -1,7 +1,8 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server, IncomingMessage } from 'node:http';
-import { verifyToken, type AuthConfig } from '../auth.js';
+import { type AuthConfig } from '../auth.js';
 import { createLogger } from '../../logger/pino-logger.js';
+import { verifyWsRequest } from '../ws-auth.js';
 
 /**
  * Session-scoped WebSocket relay for runner ↔ dashboard communication.
@@ -44,49 +45,6 @@ interface VerifyInfo {
   req: IncomingMessage;
 }
 
-/**
- * Extract a JWT from an incoming WebSocket upgrade request.
- *
- * Accepts either:
- *   1. `Sec-WebSocket-Protocol: access_token, <jwt>` (browser-friendly; the
- *      client opens with `new WebSocket(url, ['access_token', '<jwt>'])`).
- *   2. `?token=<jwt>` query parameter on the upgrade URL (last-resort; see
- *      the module security note above about ingress access-log capture).
- *
- * Returns the verified `{ sub, role }` principal, or `null` if no valid
- * credential is present — in which case the caller rejects the upgrade.
- */
-function verifyWsRequest(info: VerifyInfo, auth: AuthConfig): { sub: string; role: string } | null {
-  // 1. Sec-WebSocket-Protocol header (mirror LiveHub's convention)
-  const protocols = String(info.req.headers['sec-websocket-protocol'] ?? '');
-  const protocolToken = protocols
-    .split(',')
-    .map((p) => p.trim())
-    .find((p) => p !== 'access_token' && p.length > 0);
-  if (protocolToken) {
-    return verifyToken(auth, protocolToken);
-  }
-
-  // 2. ?token=<jwt> query parameter (last-resort; logged by upstream proxies)
-  try {
-    const url = new URL(info.req.url ?? '/', 'http://localhost');
-    const queryToken = url.searchParams.get('token');
-    if (queryToken) {
-      logger.warn(
-        'WebSocket auth used the ?token= query fallback — this JWT may be ' +
-        'captured in upstream reverse-proxy access logs. Migrate the client ' +
-        'to the Sec-WebSocket-Protocol header path if possible.',
-        { path: url.pathname, remoteAddress: info.req.socket.remoteAddress },
-      );
-      return verifyToken(auth, queryToken);
-    }
-  } catch {
-    // malformed URL — fall through to reject
-  }
-
-  return null;
-}
-
 /** Attach stream WebSocket handlers to an existing HTTP server. */
 export function attachStreamWs(server: Server, auth: AuthConfig): void {
   // Runner endpoint: runners connect here (authenticated)
@@ -95,7 +53,7 @@ export function attachStreamWs(server: Server, auth: AuthConfig): void {
     path: '/runner',
     maxPayload: MAX_PAYLOAD_BYTES,
     verifyClient: (info: VerifyInfo, cb) => {
-      const result = verifyWsRequest(info, auth);
+      const result = verifyWsRequest(info, auth, { useQueryToken: true });
       if (result === null) {
         logger.warn('Rejected unauthenticated /runner WebSocket upgrade', {
           remoteAddress: info.req.socket.remoteAddress,
@@ -129,7 +87,7 @@ export function attachStreamWs(server: Server, auth: AuthConfig): void {
     path: '/lobby',
     maxPayload: MAX_PAYLOAD_BYTES,
     verifyClient: (info: VerifyInfo, cb) => {
-      const result = verifyWsRequest(info, auth);
+      const result = verifyWsRequest(info, auth, { useQueryToken: true });
       if (result === null) {
         logger.warn('Rejected unauthenticated /lobby WebSocket upgrade', {
           remoteAddress: info.req.socket.remoteAddress,
