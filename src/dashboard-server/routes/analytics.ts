@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { promises as fsp } from 'node:fs';
 import { listRuns } from '../../orchestrator/orchestrator.js';
-import { extractToolCallsFromConversation } from '../../logger/conversation-parser.js';
+import { extractToolCallsFromConversation, detectTurnLoops, type LoopIncident } from '../../logger/conversation-parser.js';
 import { getDrizzleDb } from '../../db/index.js';
 import { tool_call_stats, run_models } from '../../db/schema.js';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -46,13 +46,6 @@ interface ModelToolStat {
   success_rate: number;
 }
 
-interface LoopIncident {
-  runId: string;
-  model: string;
-  turn: number;
-  tools: string[];
-}
-
 interface ToolAnalyticsResponse {
   model: string | null;
   totalRuns: number;
@@ -82,30 +75,6 @@ async function readResultFile(resultPath: string): Promise<Record<string, unknow
 
 async function readConversationFile(convPath: string): Promise<Record<string, unknown> | null> {
   try { return JSON.parse(await fsp.readFile(convPath, 'utf8')); } catch { return null; }
-}
-
-function detectLoopsInConversation(conv: Record<string, unknown>): LoopIncident[] {
-  const entries = (conv.entries as Array<Record<string, unknown>>) ?? [];
-  const incidents: LoopIncident[] = [];
-  const turnTools = new Map<number, string[]>();
-  for (const entry of entries) {
-    if (entry.type === 'tool_call') {
-      const turn = (entry.turn as number) ?? 0;
-      const toolName = entry.toolName as string;
-      if (!turnTools.has(turn)) turnTools.set(turn, []);
-      turnTools.get(turn)!.push(toolName);
-    }
-  }
-  const turns = Array.from(turnTools.keys()).sort((a, b) => a - b);
-  for (let i = 0; i < turns.length - 2; i++) {
-    const t1 = turnTools.get(turns[i]!) ?? [];
-    const t2 = turnTools.get(turns[i + 1]!) ?? [];
-    const t3 = turnTools.get(turns[i + 2]!) ?? [];
-    if (t1.length > 0 && JSON.stringify(t1) === JSON.stringify(t2) && JSON.stringify(t2) === JSON.stringify(t3)) {
-      incidents.push({ runId: (conv.runId as string) ?? '', model: (conv.meta as Record<string, unknown>)?.model as string ?? '', turn: turns[i]!, tools: t1 });
-    }
-  }
-  return incidents;
 }
 
 export function createAnalyticsRouter(): Router {
@@ -185,7 +154,7 @@ export function createAnalyticsRouter(): Router {
         const result = await readResultFile(perModel.resultPath);
         const conv = await readConversationFile(perModel.conversationPath);
         if (conv) {
-          const loops = detectLoopsInConversation(conv);
+          const loops = detectTurnLoops(conv);
           allLoops.push(...loops);
         }
         const toolCalls = conv ? extractToolCallsFromConversation(conv) : [];

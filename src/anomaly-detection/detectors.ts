@@ -6,6 +6,7 @@ import type { RunHistory } from './baselines.js';
 import { latencyStats, tokenStats, costStats, errorRateStats, readResult } from './baselines.js';
 import type { NewAnomaly, AnomalySeverity } from './db.js';
 import type { ToolCallEntry } from '../logger/conversation-parser.js';
+import { detectLoops } from '../logger/conversation-parser.js';
 
 export type ToolCallRow = ToolCallEntry;
 
@@ -61,28 +62,16 @@ function latencyDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig
 function loopDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): NewAnomaly[] {
   const cfg = config.loop;
   if (!cfg.enabled) return [];
-  const calls = input.toolCalls;
-  const min = cfg.consecutiveRepeats;
-  for (let i = 0; i <= calls.length - min; i++) {
-    const c = calls[i]!;
-    const key = `${c.name}:${JSON.stringify(c.arguments)}`;
-    let consecutive = 1;
-    for (let j = i + 1; j < calls.length; j++) {
-      const cj = calls[j]!;
-      const k2 = `${cj.name}:${JSON.stringify(cj.arguments)}`;
-      if (k2 === key) consecutive++;
-      else break;
-    }
-    if (consecutive >= min) {
-      return [{
-        run_id: input.runId,
-        model: input.model,
-        type: 'loop',
-        severity: cfg.severity as AnomalySeverity,
-        description: `Tool "${c.name}" with identical arguments repeated ${consecutive} times consecutively (turn ${c.turn})`,
-        metadata: { tool: c.name, arguments: c.arguments, consecutive, turn: c.turn },
-      }];
-    }
+  const found = detectLoops(input.toolCalls, cfg.consecutiveRepeats);
+  if (found) {
+    return [{
+      run_id: input.runId,
+      model: input.model,
+      type: 'loop',
+      severity: cfg.severity as AnomalySeverity,
+      description: `Tool "${found.tool}" with identical arguments repeated ${found.consecutive} times consecutively (turn ${found.turns[0] ?? 'n/a'})`,
+      metadata: { tool: found.tool, consecutive: found.consecutive, turn: found.turns[0] ?? null },
+    }];
   }
   return [];
 }

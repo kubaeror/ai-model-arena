@@ -36,3 +36,56 @@ export function extractToolCallsFromConversation(
   }
   return calls;
 }
+
+export interface LoopIncident {
+  runId: string;
+  model: string;
+  turn: number;
+  tools: string[];
+}
+
+export interface ConsecutiveLoop {
+  tool: string;
+  consecutive: number;
+  turns: number[];
+}
+
+/** Detect N+ consecutive identical tool+arguments calls (anomaly detector semantics). */
+export function detectLoops(toolCalls: ToolCallEntry[], minConsecutive: number): ConsecutiveLoop | null {
+  for (let i = 0; i <= toolCalls.length - minConsecutive; i++) {
+    const key = `${toolCalls[i]!.name}:${JSON.stringify(toolCalls[i]!.arguments)}`;
+    let n = 1;
+    const turns = [toolCalls[i]!.turn];
+    for (let j = i + 1; j < toolCalls.length; j++) {
+      if (`${toolCalls[j]!.name}:${JSON.stringify(toolCalls[j]!.arguments)}` === key) { n++; turns.push(toolCalls[j]!.turn); }
+      else break;
+    }
+    if (n >= minConsecutive) return { tool: toolCalls[i]!.name, consecutive: n, turns };
+  }
+  return null;
+}
+
+/** Detect 3+ consecutive turns with an identical tool-name sequence (analytics semantics). */
+export function detectTurnLoops(conv: Record<string, unknown>): LoopIncident[] {
+  const entries = (conv.entries as Array<Record<string, unknown>>) ?? [];
+  const incidents: LoopIncident[] = [];
+  const turnTools = new Map<number, string[]>();
+  for (const entry of entries) {
+    if (entry.type === 'tool_call') {
+      const turn = (entry.turn as number) ?? 0;
+      const toolName = entry.toolName as string;
+      if (!turnTools.has(turn)) turnTools.set(turn, []);
+      turnTools.get(turn)!.push(toolName);
+    }
+  }
+  const turns = Array.from(turnTools.keys()).sort((a, b) => a - b);
+  for (let i = 0; i < turns.length - 2; i++) {
+    const t1 = turnTools.get(turns[i]!) ?? [];
+    const t2 = turnTools.get(turns[i + 1]!) ?? [];
+    const t3 = turnTools.get(turns[i + 2]!) ?? [];
+    if (t1.length > 0 && JSON.stringify(t1) === JSON.stringify(t2) && JSON.stringify(t2) === JSON.stringify(t3)) {
+      incidents.push({ runId: (conv.runId as string) ?? '', model: (conv.meta as Record<string, unknown>)?.model as string ?? '', turn: turns[i]!, tools: t1 });
+    }
+  }
+  return incidents;
+}
