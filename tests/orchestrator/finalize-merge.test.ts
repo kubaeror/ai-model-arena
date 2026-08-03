@@ -1,0 +1,172 @@
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { initDb, closeDb } from '../../src/db/index.js';
+import { resetBudgetCache } from '../../src/cost-tracking/budget.js';
+import { createLogger } from '../../src/logger/pino-logger.js';
+import {
+  finalizeRun,
+  finalizeRunByRunId,
+  registerRun,
+  type RunSpec,
+  type PerModelSpec,
+} from '../../src/orchestrator/run-lifecycle.js';
+import { getRunRecord } from '../../src/orchestrator/run-index.js';
+import { writeJudgeResult } from '../../src/evaluation/judge.js';
+
+function makePerModel(runId: string, model: string, root: string, ts: string): PerModelSpec {
+  const outputDir = path.join(root, 'outputs', model, runId);
+  return {
+    model,
+    providerId: 'test',
+    procName: `arena-${model}-${ts}`,
+    outputDir,
+    sandboxDir: path.join(outputDir, 'files'),
+    resultPath: path.join(outputDir, 'result.json'),
+    conversationPath: path.join(outputDir, 'conversation.json'),
+    reportPath: path.join(outputDir, 'report.md'),
+    logFile: path.join(outputDir, 'pm2.log'),
+  };
+}
+
+function writeResult(spec: PerModelSpec, overrides: Record<string, unknown> = {}): void {
+  fs.mkdirSync(spec.outputDir, { recursive: true });
+  fs.mkdirSync(spec.sandboxDir, { recursive: true });
+  const result = {
+    model: spec.model,
+    scenario: 'basic',
+    runId: path.basename(spec.outputDir),
+    success: true,
+    maxTurns: 5,
+    turnsUsed: 2,
+    totalToolCalls: 3,
+    toolsCalled: [{ name: 'read_file', count: 3 }],
+    tokenUsage: { prompt: 100, completion: 50, total: 150 },
+    stopReason: 'completed',
+    durationMs: 1234,
+    errors: [],
+    costUsd: 0.02,
+    successCriteria: { command: 'echo ok', expectedExitCode: 0, exitCode: 0, passed: true },
+    ...overrides,
+  };
+  fs.writeFileSync(spec.resultPath, JSON.stringify(result, null, 2));
+}
+
+function buildSpec(runId: string, root: string, models: PerModelSpec[]): RunSpec {
+  return {
+    runId,
+    scenario: 'basic',
+    ts: runId,
+    startedAt: new Date().toISOString(),
+    root,
+    modelsConfigPath: path.join(root, 'configs', 'models.yaml'),
+    scenariosDir: path.join(root, 'configs', 'scenarios'),
+    comparisonBase: path.join(root, 'outputs', 'comparisons', runId),
+    models,
+  };
+}
+
+describe('finalize merge (run-lifecycle single core)', () => {
+  let tmp: string;
+  let root: string;
+  let logger: ReturnType<typeof createLogger>;
+
+  before(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-finalize-'));
+    root = tmp;
+    process.env.ARENA_DB_PATH = path.join(tmp, 'arena.db');
+    process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+    process.env.AI_ARENA_ROOT = tmp;
+    initDb(path.join(tmp, 'arena.db'));
+    resetBudgetCache();
+    logger = createLogger('test:finalize', 'warn');
+  });
+
+  after(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    delete process.env.ARENA_DB_PATH;
+    delete process.env.OUTPUT_ROOT;
+    delete process.env.AI_ARENA_ROOT;
+    await closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('finalizeRun returns entries/md/json and patches index to completed (success)', async () => {
+    const runId = 'run_merge_success';
+    const alpha = makePerModel(runId, 'alpha', root, 't1');
+    const beta = makePerModel(runId, 'beta', root, 't1');
+    writeResult(alpha);
+    writeResult(beta);
+    const spec = buildSpec(runId, root, [alpha, beta]);
+    await registerRun(spec, 'cli');
+
+    const out = await finalizeRun(spec, logger);
+
+    assert.strictEqual(out.entries.length, 2);
+    assert.ok(out.mdPath.endsWith('.md') && fs.existsSync(out.mdPath), 'comparison.md written');
+    assert.ok(out.jsonPath.endsWith('.json') && fs.existsSync(out.jsonPath), 'comparison.json written');
+    assert.ok(out.entries.every((e) => e.result), 'every model parsed a result');
+
+    const rec = await getRunRecord(runId);
+    assert.ok(rec, 'run record exists');
+    assert.strictEqual(rec.status, 'completed');
+    assert.strictEqual(rec.comparisonMdPath, out.mdPath);
+    assert.ok(rec.perModel.every((m) => m.status === 'completed'), 'per-model marked completed');
+    assert.ok(rec.perModel.every((m) => m.success === true), 'per-model success persisted');
+  });
+
+  it('finalizeRunByRunId resolves the same core path via the index', async () => {
+    const runId = 'run_merge_hookup';
+    const alpha = makePerModel(runId, 'alpha', root, 't2');
+    writeResult(alpha, { success: false, costUsd: 0.0 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'dashboard');
+
+    await assert.doesNotReject(finalizeRunByRunId(runId, logger));
+
+    const rec = await getRunRecord(runId);
+    assert.ok(rec, 'run record exists');
+    assert.strictEqual(rec.status, 'completed');
+    assert.strictEqual(rec.perModel[0].status, 'completed');
+    assert.strictEqual(rec.perModel[0].success, false);
+  });
+
+  it('errored per-model is surfaced (missing result.json) without throwing', async () => {
+    const runId = 'run_merge_errored';
+    const alpha = makePerModel(runId, 'alpha', root, 't3');
+    const beta = makePerModel(runId, 'beta', root, 't3');
+    writeResult(alpha);
+    fs.mkdirSync(beta.outputDir, { recursive: true });
+    const spec = buildSpec(runId, root, [alpha, beta]);
+    await registerRun(spec, 'cli');
+
+    const out = await finalizeRun(spec, logger);
+
+    const betaEntry = out.entries.find((e) => e.model === 'beta');
+    assert.ok(betaEntry?.error, 'missing result surfaces an error entry');
+    const rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.perModel.find((m) => m.model === 'beta')?.status, 'errored');
+    assert.strictEqual(rec?.perModel.find((m) => m.model === 'alpha')?.status, 'completed');
+  });
+
+  it('writeJudgeResult persists judge_score.json (the finalizeCore persist step)', () => {
+    const outputDir = path.join(tmp, 'judge-out');
+    const verdict = {
+      model: 'alpha',
+      runId: 'run_judge_unit',
+      scores: [{ category: 'correctness', score: 9, maxScore: 10, reasoning: 'ok' }],
+      averageScore: 90,
+      summary: 'solid',
+      judgedAt: new Date().toISOString(),
+      judgeModel: 'test-judge',
+    };
+    writeJudgeResult(outputDir, verdict, logger);
+    const file = path.join(outputDir, 'judge_score.json');
+    assert.ok(fs.existsSync(file), 'judge_score.json written');
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.strictEqual(parsed.model, 'alpha');
+    assert.strictEqual(parsed.averageScore, 90);
+  });
+});
