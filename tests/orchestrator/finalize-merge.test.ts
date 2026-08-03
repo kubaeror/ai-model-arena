@@ -3,8 +3,10 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { initDb, closeDb } from '../../src/db/index.js';
-import { resetBudgetCache } from '../../src/cost-tracking/budget.js';
+import { initDb, closeDb, getDrizzleDb } from '../../src/db/index.js';
+import { resetBudgetCache, loadBudgetConfig, getBudgetStatus } from '../../src/cost-tracking/budget.js';
+import { cost_ledger } from '../../src/db/schema.js';
+import { eq } from 'drizzle-orm';
 import { createLogger } from '../../src/logger/pino-logger.js';
 import {
   finalizeRun,
@@ -149,6 +151,75 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const rec = await getRunRecord(runId);
     assert.strictEqual(rec?.perModel.find((m) => m.model === 'beta')?.status, 'errored');
     assert.strictEqual(rec?.perModel.find((m) => m.model === 'alpha')?.status, 'completed');
+  });
+
+  it('finalizeRunByRunId on a missing run returns undefined without throwing', async () => {
+    const res = await finalizeRunByRunId('run_does_not_exist', logger);
+    assert.strictEqual(res, undefined);
+  });
+
+  it('merged finalize with costUsd>0 writes one cost_ledger row and credits budget spend once', async () => {
+    const cfgDir = path.join(root, 'configs');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'budget.yaml'), [
+      'global:',
+      '  daily: 1000',
+      '  monthly: 1000',
+      'models:',
+      '  alpha:',
+      '    daily: 100',
+      '    monthly: 100',
+      'stateFile: outputs/.budget-state.json',
+      '',
+    ].join('\n'));
+    resetBudgetCache();
+    loadBudgetConfig(path.join(cfgDir, 'budget.yaml'), logger);
+
+    const runId = 'run_ledger_single_credit';
+    const alpha = makePerModel(runId, 'alpha', root, 't-ledger');
+    writeResult(alpha, { costUsd: 0.02 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'dashboard');
+
+    await finalizeRun(spec, logger);
+
+    const db = getDrizzleDb();
+    const ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'exactly one cost_ledger row for this run');
+    assert.ok(Math.abs(Number(ledger[0].cost_usd) - 0.02) < 1e-9, 'ledger cost recorded as 0.02');
+    assert.strictEqual(Number(ledger[0].total_tokens), 150, 'ledger tokens recorded from result.json');
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const status = getBudgetStatus(root, logger);
+    assert.strictEqual(status.models.alpha.daily.spent, 0.02, 'budget daily spend credited once (0.02, not 0.04)');
+    assert.strictEqual(status.global.daily.spent, 0.02, 'global budget daily spend credited once');
+  });
+
+  it('judge_score.json is NOT written when judge is disabled', async () => {
+    const cfgDir = path.join(root, 'configs');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'evaluation.yaml'), [
+      'judge:',
+      '  model: gpt-4o',
+      '  enabled: false',
+      'rubric:',
+      '  correctness:',
+      '    description: "code correctness"',
+      '    maxScore: 10',
+      '',
+    ].join('\n'));
+
+    const runId = 'run_judge_disabled';
+    const alpha = makePerModel(runId, 'alpha', root, 't-judge');
+    writeResult(alpha, { costUsd: 0.01 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+
+    await finalizeRun(spec, logger);
+
+    const judgeFile = path.join(alpha.outputDir, 'judge_score.json');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(fs.existsSync(judgeFile), false, 'judge_score.json not written when judge disabled');
   });
 
   it('writeJudgeResult persists judge_score.json (the finalizeCore persist step)', () => {

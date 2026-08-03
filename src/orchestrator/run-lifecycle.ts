@@ -5,7 +5,7 @@ import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
-import { loadBudgetConfig, checkBudget, addSpend, reserveBudget, releaseReservation, getPricing } from '../cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing } from '../cost-tracking/index.js';
 import * as pm2h from './pm2-helpers.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
@@ -324,7 +324,6 @@ async function buildPerModelEntries(
   entries: ComparisonEntry[],
   logger: Logger,
 ): Promise<RunIndexModelEntry[]> {
-  const root = pm2h.projectRoot();
   return Promise.all(rec!.perModel.map(async (m) => {
     const r = entries.find((x) => x.model === m.model)?.result;
     const base = {
@@ -334,7 +333,6 @@ async function buildPerModelEntries(
     };
     if (!r) return { ...base, status: 'errored' as const };
     if (typeof r.costUsd === 'number' && r.costUsd > 0) {
-      void addSpend(m.model, r.costUsd, root, logger);
       try {
         const { insertCostLedgerEntry } = await import('../db/query.js');
         const tokens = r.tokenUsage ?? {};
