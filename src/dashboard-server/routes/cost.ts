@@ -1,5 +1,15 @@
 import { Router } from 'express';
-import { paginatedQuery, getCostSummary } from '../../db/query.js';
+import { and, eq, gte, lte } from 'drizzle-orm';
+import { paginate, getCostSummary } from '../../db/query.js';
+import { cost_ledger } from '../../db/schema.js';
+
+const costColumns = {
+  id: cost_ledger.id,
+  run_id: cost_ledger.run_id,
+  model: cost_ledger.model,
+  cost_usd: cost_ledger.cost_usd,
+  recorded_at: cost_ledger.recorded_at,
+};
 
 export function createCostRouter(): Router {
   const router = Router();
@@ -13,20 +23,17 @@ export function createCostRouter(): Router {
     const from = typeof req.query.from === 'string' ? req.query.from : undefined;
     const to = typeof req.query.to === 'string' ? req.query.to : undefined;
 
-    const clauses: string[] = ['1=1'];
-    const params: unknown[] = [];
+    const conds = [];
+    if (runId) conds.push(eq(cost_ledger.run_id, runId));
+    if (model) conds.push(eq(cost_ledger.model, model));
+    if (from) conds.push(gte(cost_ledger.recorded_at, from));
+    if (to) conds.push(lte(cost_ledger.recorded_at, to));
 
-    if (runId) { clauses.push('run_id = ?'); params.push(runId); }
-    if (model) { clauses.push('model = ?'); params.push(model); }
-    if (from) { clauses.push('recorded_at >= ?'); params.push(from); }
-    if (to) { clauses.push('recorded_at <= ?'); params.push(to); }
-
-    const { rows, total } = await paginatedQuery({
-      table: 'cost_ledger',
-      whereClause: clauses.join(' AND '),
-      params,
-      orderBy: 'recorded_at DESC',
-      limit,
+    const { rows, total } = await paginate(cost_ledger, costColumns, {
+      where: conds.length ? and(...conds) : undefined,
+      orderBy: 'recorded_at',
+      dir: 'desc',
+      pageSize: limit,
       offset,
     });
 

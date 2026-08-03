@@ -1,7 +1,44 @@
 import { Router } from 'express';
+import { and, eq } from 'drizzle-orm';
 import {
-  listCatalogModels, getModelDetail,
+  listCatalogModels, getModelDetail, paginate,
 } from '../../db/query.js';
+import { benchmarks, model_runtime_stats, pricing } from '../../db/schema.js';
+
+const benchmarkColumns = {
+  id: benchmarks.id,
+  model_id: benchmarks.model_id,
+  benchmark: benchmarks.benchmark,
+  source: benchmarks.source,
+  score: benchmarks.score,
+  measured_at: benchmarks.measured_at,
+  source_url: benchmarks.source_url,
+  is_preferred: benchmarks.is_preferred,
+};
+
+const runtimeColumns = {
+  id: model_runtime_stats.id,
+  run_id: model_runtime_stats.run_id,
+  model_id: model_runtime_stats.model_id,
+  latency_p50_ms: model_runtime_stats.latency_p50_ms,
+  latency_p95_ms: model_runtime_stats.latency_p95_ms,
+  tps: model_runtime_stats.tps,
+  ttft_ms: model_runtime_stats.ttft_ms,
+  cache_hit_rate: model_runtime_stats.cache_hit_rate,
+  cost_usd: model_runtime_stats.cost_usd,
+  success: model_runtime_stats.success,
+  measured_at: model_runtime_stats.measured_at,
+};
+
+const pricingColumns = {
+  model_id: pricing.model_id,
+  tier_size: pricing.tier_size,
+  input: pricing.input,
+  output: pricing.output,
+  cache_read: pricing.cache_read,
+  cache_write: pricing.cache_write,
+  updated_at: pricing.updated_at,
+};
 
 export function createCatalogRouter(): Router {
   const router = Router();
@@ -21,59 +58,54 @@ export function createCatalogRouter(): Router {
   router.get('/models/:id', async (req, res) => {
     const model = (await getModelDetail(req.params.id))[0] ?? null;
     if (!model) { res.status(404).json({ error: 'Model not found' }); return; }
-    const { paginatedQuery } = await import('../../db/query.js');
-    const { rows: benchmarks } = await paginatedQuery({
-      table: 'benchmarks', select: 'benchmark, source, score, measured_at, source_url, is_preferred',
-      whereClause: 'model_id = ?', params: [req.params.id],
-      orderBy: 'benchmark', limit: 200, offset: 0,
-    });
-    const { rows: runtime } = await paginatedQuery({
-      table: 'model_runtime_stats',
-      select: 'run_id, latency_p50_ms, latency_p95_ms, tps, ttft_ms, cache_hit_rate, cost_usd, success, measured_at',
-      whereClause: 'model_id = ?', params: [req.params.id],
-      orderBy: 'measured_at DESC', limit: 50, offset: 0,
-    });
-    res.json({ model, benchmarks, runtime });
+    const [{ rows: benchmarkRows }, { rows: runtimeRows }] = await Promise.all([
+      paginate(benchmarks, benchmarkColumns, {
+        where: eq(benchmarks.model_id, req.params.id),
+        orderBy: 'benchmark', pageSize: 200, offset: 0,
+      }),
+      paginate(model_runtime_stats, runtimeColumns, {
+        where: eq(model_runtime_stats.model_id, req.params.id),
+        orderBy: 'measured_at', dir: 'desc', pageSize: 50, offset: 0,
+      }),
+    ]);
+    const benchmarksOut = benchmarkRows.map((r: Record<string, unknown>) => ({
+      benchmark: r.benchmark, source: r.source, score: r.score,
+      measured_at: r.measured_at, source_url: r.source_url, is_preferred: r.is_preferred,
+    }));
+    const runtime = runtimeRows.map((r: Record<string, unknown>) => ({
+      run_id: r.run_id, latency_p50_ms: r.latency_p50_ms, latency_p95_ms: r.latency_p95_ms,
+      tps: r.tps, ttft_ms: r.ttft_ms, cache_hit_rate: r.cache_hit_rate, cost_usd: r.cost_usd,
+      success: r.success, measured_at: r.measured_at,
+    }));
+    res.json({ model, benchmarks: benchmarksOut, runtime });
   });
 
   router.get('/benchmarks', async (req, res) => {
-    const where: string[] = [];
-    const params: string[] = [];
-    if (typeof req.query.name === 'string') { where.push('benchmark = ?'); params.push(req.query.name); }
-    if (typeof req.query.source === 'string') { where.push('source = ?'); params.push(req.query.source); }
-    if (typeof req.query.model === 'string') { where.push('model_id = ?'); params.push(req.query.model); }
-    const { paginatedQuery } = await import('../../db/query.js');
-    const { rows } = await paginatedQuery({
-      table: 'benchmarks',
-      whereClause: where.length ? where.join(' AND ') : '1=1',
-      params,
+    const conds = [];
+    if (typeof req.query.name === 'string') conds.push(eq(benchmarks.benchmark, req.query.name));
+    if (typeof req.query.source === 'string') conds.push(eq(benchmarks.source, req.query.source));
+    if (typeof req.query.model === 'string') conds.push(eq(benchmarks.model_id, req.query.model));
+    const { rows } = await paginate(benchmarks, benchmarkColumns, {
+      where: conds.length ? and(...conds) : undefined,
       orderBy: 'benchmark, score DESC',
-      limit: 1000,
+      pageSize: 1000,
       offset: 0,
     });
     res.json({ data: rows });
   });
 
   router.get('/benchmarks/:modelId', async (req, res) => {
-    const { paginatedQuery } = await import('../../db/query.js');
-    const { rows } = await paginatedQuery({
-      table: 'benchmarks',
-      whereClause: 'model_id = ?', params: [req.params.modelId],
-      orderBy: 'benchmark', limit: 200, offset: 0,
+    const { rows } = await paginate(benchmarks, benchmarkColumns, {
+      where: eq(benchmarks.model_id, req.params.modelId),
+      orderBy: 'benchmark', pageSize: 200, offset: 0,
     });
     res.json({ data: rows });
   });
 
   router.get('/pricing', async (req, res) => {
-    const params = typeof req.query.model === 'string' ? [req.query.model] : [];
-    const { paginatedQuery } = await import('../../db/query.js');
-    const { rows } = await paginatedQuery({
-      table: 'pricing',
-      whereClause: typeof req.query.model === 'string' ? 'model_id = ?' : '1=1',
-      params,
-      orderBy: 'model_id',
-      limit: 5000,
-      offset: 0,
+    const { rows } = await paginate(pricing, pricingColumns, {
+      where: typeof req.query.model === 'string' ? eq(pricing.model_id, req.query.model) : undefined,
+      orderBy: 'model_id', pageSize: 5000, offset: 0,
     });
     res.json({ data: rows });
   });

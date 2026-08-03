@@ -14,7 +14,8 @@
  * The runtime API is identical — Drizzle handles the dialect differences.
  */
 
-import { eq, and, desc, sql, count, sum, max } from 'drizzle-orm';
+import { eq, and, desc, asc, sql, count, sum, max, inArray } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { getDrizzleDb } from './index.js';
 import {
   sessions, messages, model_calls,
@@ -182,7 +183,7 @@ export async function transitionTaskState(
 ): Promise<void> {
   const db = getDrizzleDb();
   const now = new Date().toISOString();
-  const updates: Record<string, any> = { status: newStatus };
+  const updates: Partial<typeof run_models.$inferInsert> = { status: newStatus };
 
   switch (newStatus) {
     case 'claimed':
@@ -199,10 +200,9 @@ export async function transitionTaskState(
       break;
   }
 
-  // Use raw SQL for cross-driver compatibility with update + where clause
-  await db.run(
-    `UPDATE run_models SET ${Object.keys(updates).map(k => `${k} = ?`).join(', ')} WHERE run_id = ? AND model = ?`,
-    ...Object.values(updates), runId, model,
+  // Drizzle update — works on both SQLite and Postgres dialects.
+  await db.update(run_models).set(updates).where(
+    and(eq(run_models.run_id, runId), eq(run_models.model, model)),
   );
 }
 
@@ -490,131 +490,6 @@ export async function countRoles(): Promise<number> {
   return rows[0]?.cnt ?? 0;
 }
 
-// ── Config table queries (raw-style for dynamic WHERE) ────────────────────
-
-/**
- * Validate a SQL identifier (table or column name) against a strict allowlist
- * regex. Prevents SQL injection via the table/select/orderBy fields of
- * {@link paginatedQuery}, which string-interpolates these values into raw SQL.
- *
- * Allowed forms:
- *   - bare identifier: `users`, `model_runtime_stats`, `at`
- *   - double-quoted identifier: `"at"`, `"order"`
- *   - comma-separated list of the above (for SELECT projections): `id, name, created_at`
- *   - the literal `*` (for SELECT *)
- *
- * @returns the validated identifier (unchanged).
- * @throws Error if the identifier contains anything outside the allowlist.
- */
-export function validateSqlIdentifier(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    throw new Error('SQL identifier cannot be empty');
-  }
-  if (trimmed === '*') return trimmed;
-  // Split on commas, validate each segment independently.
-  for (const rawSegment of trimmed.split(',')) {
-    const segment = rawSegment.trim();
-    if (!segment) {
-      throw new Error(`SQL identifier list has an empty segment: ${JSON.stringify(input)}`);
-    }
-    // A segment may be a bare identifier or a double-quoted identifier.
-    const bare = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-    const quoted = /^"[a-zA-Z_][a-zA-Z0-9_]*"$/;
-    if (!bare.test(segment) && !quoted.test(segment)) {
-      throw new Error(
-        `Refusing to interpolate unsafe SQL identifier: ${JSON.stringify(segment)} ` +
-        `(from ${JSON.stringify(input)}). Only bare identifiers (a-z0-9_) or ` +
-        `"double-quoted" identifiers are allowed in table/select fields.`,
-      );
-    }
-  }
-  return trimmed;
-}
-
-/**
- * Validate an ORDER BY clause. Same identifier rules as
- * {@link validateSqlIdentifier}, plus an optional ` ASC` or ` DESC` suffix
- * per column, and comma-separated multi-column lists (e.g. `benchmark, score DESC`).
- * @returns the validated orderBy clause (unchanged).
- * @throws Error on any disallowed character.
- */
-export function validateOrderByClause(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    throw new Error('ORDER BY clause cannot be empty');
-  }
-  for (const rawSegment of trimmed.split(',')) {
-    const segment = rawSegment.trim();
-    if (!segment) {
-      throw new Error(`ORDER BY clause has an empty segment: ${JSON.stringify(input)}`);
-    }
-    // Strip an optional trailing ASC|DESC (case-insensitive).
-    const m = /^(.+?)\s+(ASC|DESC)$/i.exec(segment);
-    const ident = m ? m[1]! : segment;
-    const bare = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-    const quoted = /^"[a-zA-Z_][a-zA-Z0-9_]*"$/;
-    if (!bare.test(ident) && !quoted.test(ident)) {
-      throw new Error(
-        `Refusing to interpolate unsafe ORDER BY segment: ${JSON.stringify(segment)} ` +
-        `(from ${JSON.stringify(input)}).`,
-      );
-    }
-  }
-  return trimmed;
-}
-
-/**
- * Validate a WHERE clause fragment for {@link paginatedQuery}.
- *
- * Callers build WHERE clauses from static SQL fragments joined with AND/OR,
- * with values passed via `?` placeholders (parameterized). This validator is a
- * defense-in-depth guard against accidental future refactors that pass
- * user-controlled strings into the clause. It rejects:
- *   - statement terminators (`;`)
- *   - SQL line comments (`--`, `#` at start) and block comments (`/* *\/`)
- *   - stacked-statement keywords (`UNION`, `xp_`, `exec `, stacked `SELECT`)
- *   - shell metacharacters that have no place in a WHERE clause
- *
- * It does NOT attempt to fully parse SQL (that would require a real parser).
- * The contract is: callers must build whereClause from static fragments only;
- * values go in the params array.
- *
- * @returns the validated whereClause (unchanged).
- * @throws Error if the clause contains a disallowed pattern.
- */
-export function validateWhereClause(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    throw new Error('WHERE clause cannot be empty');
-  }
-  // Reject obvious injection patterns. The empty-allowlist case ('1=1') is fine.
-  const forbidden = [
-    /;/i,                      // statement terminator
-    /--/i,                     // line comment
-    /\/\*/,                    // block comment open
-    /\*\//,                    // block comment close
-    /\bUNION\b/i,              // stacked SELECT
-    /\bEXEC\b/i,               // MSSQL exec
-    /\bxp_/i,                  // MSSQL extended procs
-    /\bSLEEP\s*\(/i,           // time-based blind injection
-    /\bBENCHMARK\s*\(/i,       // MySQL time-based
-    /\bWAITFOR\s+DELAY\b/i,    // MSSQL time-based
-    /\bLOAD_FILE\s*\(/i,       // MySQL file read
-    /\bINTO\s+OUTFILE\b/i,     // MySQL file write
-  ];
-  for (const re of forbidden) {
-    if (re.test(trimmed)) {
-      throw new Error(
-        `Refusing to execute WHERE clause with disallowed pattern ${re.source}: ` +
-        `${JSON.stringify(input)}. Build clauses from static SQL fragments ` +
-        `only; values must go in the params array as ? placeholders.`,
-      );
-    }
-  }
-  return trimmed;
-}
-
 // ── Anomaly counts ────────────────────────────────────────────────────────
 
 export async function anomalyCountsByModel(): Promise<Array<{ model: string; total: number; unresolved: number }>> {
@@ -640,39 +515,72 @@ function providersTable() {
 // ── Dashboard: generic paginated query helpers ────────────────────────────
 
 /**
- * Run a parametrized raw-SQL select with COUNT, then SELECT with LIMIT/OFFSET.
- * Safe for both SQLite and Postgres — uses Drizzle's sql template literal
- * so dialect differences are handled per-driver.
+ * Resolve an `orderBy` string against a per-table column map, returning Drizzle
+ * order expressions. Never interpolates raw identifiers into SQL. Each
+ * comma-separated segment must be a key of `columns` (optionally suffixed with
+ * ` ASC`/` DESC`); segments without an explicit direction use `dir` (or asc).
  */
-export async function paginatedQuery(opts: {
-  table: string;
-  select?: string;
-  whereClause: string;
-  params: unknown[];
-  orderBy: string;
-  limit: number;
-  offset: number;
-}): Promise<{ rows: any[]; total: number }> {
+function resolveOrderBy(
+  columns: Record<string, SQL>,
+  orderBy: string | undefined,
+  dir: 'asc' | 'desc' | undefined,
+): SQL[] {
+  const segments = (orderBy ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (segments.length === 0) {
+    const first = Object.keys(columns)[0]!;
+    return [dir === 'desc' ? desc(columns[first]!) : asc(columns[first]!)];
+  }
+  const out: SQL[] = [];
+  for (const segment of segments) {
+    const m = /^(.+?)\s+(ASC|DESC)$/i.exec(segment);
+    const key = (m ? m[1]! : segment).trim();
+    const column = columns[key];
+    if (!column) {
+      throw new Error(`Refusing to sort by unknown column: ${JSON.stringify(key)}`);
+    }
+    const d = m ? m[2]!.toLowerCase() as 'asc' | 'desc' : (dir ?? 'asc');
+    out.push(d === 'desc' ? desc(column) : asc(column));
+  }
+  return out;
+}
+
+/**
+ * Paginate a table with Drizzle: total `count(*)` + `SELECT ... LIMIT/OFFSET`.
+ *
+ * `orderBy` is whitelisted against `columns` (no raw identifiers in SQL).
+ * `offset` takes precedence over `page` when both are provided (route callers
+ * speak limit/offset; tests speak page/pageSize).
+ */
+export async function paginate<T extends Record<string, unknown>>(
+  table: any,
+  columns: Record<string, any>,
+  q: {
+    page?: number;
+    pageSize: number;
+    offset?: number;
+    orderBy?: string;
+    dir?: 'asc' | 'desc';
+    where?: SQL;
+  },
+): Promise<{ rows: T[]; total: number }> {
   const db = getDrizzleDb();
-  // Defense-in-depth: validate interpolated identifiers before building SQL.
-  // Current callers pass static literals (catalog/cost/files/audit routes),
-  // but this prevents a careless future refactor — e.g. passing
-  // req.query.sort straight into orderBy — from opening a SQL-injection
-  // vector. See validateSqlIdentifier / validateOrderByClause / validateWhereClause.
-  const safeTable = validateSqlIdentifier(opts.table);
-  const safeCols = opts.select ? validateSqlIdentifier(opts.select) : '*';
-  const safeWhere = validateWhereClause(opts.whereClause);
-  const safeOrderBy = validateOrderByClause(opts.orderBy);
-  const countRows: any[] = await db.all(
-    sql.raw(`SELECT COUNT(*) AS total FROM ${safeTable} WHERE ${safeWhere}`),
-    ...opts.params,
-  );
-  const total = Number(countRows[0]?.total ?? 0);
-  const rows = await db.all(
-    sql.raw(`SELECT ${safeCols} FROM ${safeTable} WHERE ${safeWhere} ORDER BY ${safeOrderBy} LIMIT ? OFFSET ?`),
-    ...opts.params, opts.limit, opts.offset,
-  );
-  return { rows, total };
+  const pageSize = Math.max(q.pageSize, 1);
+  const page = Math.max(q.page ?? 1, 1);
+  const offset = q.offset ?? (page - 1) * pageSize;
+  const conds = q.where;
+  const countRows = await db.select({ count: count() }).from(table).where(conds);
+  const total = (countRows[0]?.count ?? 0) as number;
+  const order = resolveOrderBy(columns, q.orderBy, q.dir);
+  const rows = await db.select()
+    .from(table)
+    .where(conds)
+    .orderBy(...order)
+    .limit(pageSize)
+    .offset(offset);
+  return { rows: rows as T[], total };
 }
 
 // ── Dashboard: prompts helpers ────────────────────────────────────────────
@@ -786,7 +694,7 @@ export async function getUserRolesByUserId(userId: string): Promise<any[]> {
 
 export async function assignUserRole(userId: string, roleId: string): Promise<void> {
   const db = getDrizzleDb();
-  await db.run(sql.raw('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)'), userId, roleId);
+  await db.insert(user_roles).values({ user_id: userId, role_id: roleId }).onConflictDoNothing();
 }
 
 export async function unassignUserRole(userId: string, roleId: string): Promise<void> {
@@ -808,7 +716,7 @@ export async function countUserRoles(roleId?: string, userId?: string): Promise<
 
 export async function insertRole(data: { id: string; description: string }): Promise<void> {
   const db = getDrizzleDb();
-  await db.run(sql.raw('INSERT OR IGNORE INTO roles (id, description) VALUES (?, ?)'), data.id, data.description);
+  await db.insert(roles).values({ id: data.id, description: data.description }).onConflictDoNothing();
 }
 
 // ── Dashboard: catalog + model helpers ────────────────────────────────────
@@ -900,22 +808,39 @@ export async function listSessionsWithCounts(opts: {
   status?: string; model?: string; limit: number; offset: number;
 }): Promise<{ sessions: any[]; total: number }> {
   const db = getDrizzleDb();
-  const where: string[] = ['1=1'];
-  const params: any[] = [];
-  if (opts.status) { where.push('s.status = ?'); params.push(opts.status); }
-  if (opts.model) { where.push('s.model = ?'); params.push(opts.model); }
-  const w = where.join(' AND ');
-  const countRows = await db.all(sql.raw(`SELECT COUNT(*) AS total FROM sessions s WHERE ${w}`), ...params);
-  const rows = await db.all(sql.raw(`
-    SELECT s.id, s.prompt_id, s.prompt_version, s.model, s.status, s.created_at, s.updated_at,
-      (SELECT COUNT(*) FROM messages WHERE session_id = s.id) AS message_count,
-      (SELECT COUNT(*) FROM model_calls WHERE session_id = s.id) AS call_count
-    FROM sessions s
-    WHERE ${w}
-    ORDER BY s.created_at DESC
-    LIMIT ? OFFSET ?
-  `), ...params, opts.limit, opts.offset);
-  return { sessions: rows, total: Number(countRows[0]?.total ?? 0) };
+  const conds: SQL[] = [];
+  if (opts.status) conds.push(eq(sessions.status, opts.status));
+  if (opts.model) conds.push(eq(sessions.model, opts.model));
+  const where = conds.length ? and(...conds) : undefined;
+
+  const { rows, total } = await paginate(sessions, {
+    id: sessions.id,
+    model: sessions.model,
+    status: sessions.status,
+    created_at: sessions.created_at,
+    updated_at: sessions.updated_at,
+  }, {
+    orderBy: 'created_at',
+    dir: 'desc',
+    pageSize: opts.limit,
+    offset: opts.offset,
+    where,
+  });
+
+  const ids = (rows as Array<{ id: string }>).map(r => r.id);
+  const groups = async (table: any, col: any) =>
+    ids.length
+      ? db.select({ sessionId: col, c: count() }).from(table).where(inArray(col, ids)).groupBy(col)
+      : [];
+  const msgCounts = new Map((await groups(messages, messages.session_id)).map((g: any) => [g.sessionId, g.c]));
+  const callCounts = new Map((await groups(model_calls, model_calls.session_id)).map((g: any) => [g.sessionId, g.c]));
+
+  const result = (rows as Array<{ id: string }>).map(r => ({
+    ...r,
+    message_count: msgCounts.get(r.id) ?? 0,
+    call_count: callCounts.get(r.id) ?? 0,
+  }));
+  return { sessions: result, total };
 }
 
 export async function getSessionWithCounts(sessionId: string): Promise<any | null> {
