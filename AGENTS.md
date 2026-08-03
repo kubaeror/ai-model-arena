@@ -5,7 +5,7 @@ Multi-model agentic coding arena. TypeScript/Node.js monorepo with React dashboa
 Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscaling. Each runner pulls tasks, runs an agentic coding loop with sandboxed tools, and checkpoints progress to Postgres/SQLite.
 
 ## Tech Stack
-- **Runtime**: Node.js >= 20.11, TypeScript (ESM, strict)
+- **Runtime**: Node.js >= 22, TypeScript (ESM, strict)
 - **Backend**: Express.js REST API + WebSocket (port 4000)
 - **Frontend**: React 18 + Vite + TanStack Query + Tailwind CSS + CodeMirror
 - **Queue**: Redis Streams (production) or in-memory (dev)

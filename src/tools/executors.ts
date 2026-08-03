@@ -7,7 +7,6 @@ import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
 import { walkFiles } from '../fs/walk.js';
 import { wrapFileContent } from '../security/prompt-injection.js';
 import { sanitizeSecrets } from '../security/shell-secrets.js';
-import { globToRegex } from './glob-matcher.js';
 import { webFetch, webSearch } from './web.js';
 import { todoRead, todoWrite } from './todo.js';
 import { task } from './task.js';
@@ -324,6 +323,8 @@ export const editFile: ToolExecutor = async (args, ctx) => {
 
 // ── glob ─────────────────────────────────────────────────────────────────────
 const MAX_GLOB_FILES = 5000;
+/** Directories always excluded from glob results (mirrors IGNORE_DIRS). */
+const GLOB_EXCLUDE_PATTERNS = IGNORE_DIRS.map((name) => `**/${name}/**`);
 
 export const globFiles: ToolExecutor = async (args, ctx) => {
   const v = validateArgs(GlobArgs, args);
@@ -337,25 +338,22 @@ export const globFiles: ToolExecutor = async (args, ctx) => {
   if (!fs.existsSync(absDir)) return { content: `Error: directory not found: ${targetDir}`, isError: true };
   if (!fs.statSync(absDir).isDirectory()) return { content: `Error: not a directory: ${targetDir}`, isError: true };
 
-  let regex: RegExp;
+  let rawMatches: string[];
   try {
-    regex = globToRegex(pattern);
+    rawMatches = fs.globSync(pattern, { cwd: absDir, exclude: GLOB_EXCLUDE_PATTERNS });
   } catch (e) {
     return { content: `Error: invalid glob pattern: ${(e as Error).message}`, isError: true };
   }
 
-  const files = walkFiles(absDir, { exclude: [...IGNORE_DIRS] }).slice(0, MAX_LIST_FILES);
   const matches: string[] = [];
-  for (const file of files) {
-    const rel = toRel(ctx.sandboxDir, file);
-    // When searching a subdirectory, also produce a directory-relative path for matching
-    const dirRel = targetDir === '.' ? rel : toRel(absDir, file);
-    if (regex.test(dirRel)) {
-      matches.push(rel);
-      if (matches.length >= MAX_GLOB_FILES) {
-        matches.push('…[truncated, too many matches]');
-        break;
-      }
+  for (const relMatch of rawMatches) {
+    const abs = path.resolve(absDir, relMatch);
+    // Only regular files (not directories, not symlinks) — matches walkFiles semantics.
+    if (!fs.lstatSync(abs).isFile()) continue;
+    matches.push(toRel(ctx.sandboxDir, abs));
+    if (matches.length >= MAX_GLOB_FILES) {
+      matches.push('…[truncated, too many matches]');
+      break;
     }
   }
   return { content: matches.length ? matches.join('\n') : 'No files matched.', isError: false };

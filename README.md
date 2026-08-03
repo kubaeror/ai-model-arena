@@ -106,7 +106,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 ## Quick start
 
-**Requirements**: Node.js ≥ 20.11
+**Requirements**: Node.js ≥ 22
 
 ```bash
 git clone <repo-url> && cd ai-model-arena
