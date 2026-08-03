@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AnthropicAdapter } from '../../../src/providers/adapters/anthropic.js';
 import type { ProviderDescriptor } from '../../../src/providers/types.js';
-import type { ChatMessage } from '../../../src/types.js';
 
 const anthropicDescriptor: ProviderDescriptor = {
   id: 'anthropic', name: 'Anthropic', apiBase: 'https://api.anthropic.com',
@@ -87,19 +86,5 @@ test('AnthropicAdapter.supportsReasoning returns true', () => {
   const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-7-sonnet-20250219', { apiKey: 'sk-ant' });
   assert.equal(adapter.supportsReasoning(), true);
   assert.equal(adapter.supportsPromptCaching(), true);
-  assert.equal(adapter.supportsStreaming(), true);
-});
-
-test('AnthropicAdapter.buildCacheBreakpoints preserves message count', () => {
-  const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-7-sonnet-20250219', { apiKey: 'sk-ant' });
-  const messages: ChatMessage[] = [
-    { role: 'system', content: 'sys' },
-    { role: 'user', content: 'u1' },
-    { role: 'assistant', content: 'a1' },
-    { role: 'user', content: 'u2' },
-    { role: 'assistant', content: 'a2' },
-    { role: 'user', content: 'u3' },
-  ];
-  const result = adapter.buildCacheBreakpoints!(messages);
-  assert.equal(result.length, messages.length);
+  assert.equal(adapter.supportsStreaming(), false);
 });

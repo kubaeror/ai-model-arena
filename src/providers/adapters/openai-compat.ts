@@ -1,5 +1,5 @@
 import type { ChatMessage, ModelResponse, ToolCall, TokenUsage, ToolDefinition } from '../../types.js';
-import type { ModelAdapter, SendOpts, StreamChunk } from './base.js';
+import type { ModelAdapter, SendOpts } from './base.js';
 import { BaseAdapter, HttpError } from './base.js';
 import type { ProviderDescriptor } from '../types.js';
 import type { CreateAdapterOpts } from '../registry.js';
@@ -30,14 +30,9 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
   }
 
-  supportsStreaming(): boolean { return true; }
+  supportsStreaming(): boolean { return false; }
   supportsReasoning(): boolean { return true; }
   supportsPromptCaching(): boolean { return true; }
-
-  buildCacheBreakpoints(messages: ChatMessage[]): ChatMessage[] {
-    // OpenAI auto-caches; no explicit breakpoints needed.
-    return messages;
-  }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     return this.withRetry(async () => {
@@ -50,51 +45,6 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
       const json = (await res.json()) as OpenAIResponse;
       return this.parseResponse(json);
     }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
-  }
-
-  async *sendMessageStream(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): AsyncIterable<StreamChunk> {
-    const body = this.buildBody(messages, tools, opts, true);
-    const res = await this.fetchEndpoint('/chat/completions', body);
-    if (!res.ok || !res.body) {
-      const text = await res.text();
-      throw new HttpError(res.status, text, `OpenAI-compat stream ${res.status}`);
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') continue;
-        try {
-          const evt = JSON.parse(data) as {
-            choices?: Array<{ delta?: { content?: string; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string }>;
-            usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
-          };
-          const delta = evt.choices?.[0]?.delta;
-          if (delta?.content) yield { text: delta.content };
-          if (delta?.tool_calls?.length) {
-            for (const tc of delta.tool_calls) {
-              yield { toolCallDelta: { id: tc.id, name: tc.function?.name, arguments: tc.function?.arguments } };
-            }
-          }
-          if (evt.choices?.[0]?.finish_reason) yield { finishReason: evt.choices[0].finish_reason };
-          if (evt.usage) {
-            yield {
-              usage: { prompt: evt.usage.prompt_tokens, completion: evt.usage.completion_tokens, total: evt.usage.total_tokens },
-              cacheReadTokens: evt.usage.prompt_tokens_details?.cached_tokens,
-            };
-          }
-        } catch { /* skip non-JSON */ }
-      }
-    }
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined, stream: boolean): Record<string, unknown> {
@@ -114,9 +64,6 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     }
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
-    if (opts?.reasoning && opts.reasoning.type === 'effort') {
-      body.reasoning_effort = opts.reasoning.value ?? 'medium';
-    }
     return body;
   }
 

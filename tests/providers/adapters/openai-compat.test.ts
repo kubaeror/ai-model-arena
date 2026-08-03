@@ -80,9 +80,9 @@ test('OpenAICompatAdapter.sendMessage extracts cached_tokens from prompt_tokens_
   }
 });
 
-test('OpenAICompatAdapter.supportsStreaming returns true', () => {
+test('OpenAICompatAdapter.supportsStreaming returns false without a stream implementation', () => {
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
-  assert.equal(adapter.supportsStreaming(), true);
+  assert.equal(adapter.supportsStreaming(), false);
 });
 
 test('OpenAICompatAdapter.supportsPromptCaching returns true', () => {

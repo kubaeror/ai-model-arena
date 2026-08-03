@@ -63,7 +63,7 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
     }
   }
 
-  supportsStreaming(): boolean { return true; }
+  supportsStreaming(): boolean { return false; }
   supportsReasoning(): boolean { return false; }
   supportsPromptCaching(): boolean { return false; }
 

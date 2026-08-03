@@ -7,22 +7,11 @@ export interface SendOpts {
   maxTokens?: number;
 }
 
-export interface StreamChunk {
-  text?: string;
-  toolCallDelta?: { id?: string; name?: string; arguments?: string };
-  usage?: { prompt?: number; completion?: number; total?: number };
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  finishReason?: string;
-}
-
 export interface ModelAdapter {
   sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse>;
-  sendMessageStream?(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): AsyncIterable<StreamChunk>;
   supportsStreaming(): boolean;
   supportsReasoning(): boolean;
   supportsPromptCaching(): boolean;
-  buildCacheBreakpoints?(messages: ChatMessage[]): ChatMessage[];
 }
 
 export class HttpError extends Error {
