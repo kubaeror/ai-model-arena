@@ -138,7 +138,7 @@ program
 // ── status ──────────────────────────────────────────────────────────────────
 program
   .command('status')
-  .description('Show PM2-managed arena sessions and their status.')
+  .description('Show current arena run status.')
   .action(async () => {
     try {
       await printStatus();
@@ -192,9 +192,6 @@ program
 
     const { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath } =
       await import('./evaluation/regression.js');
-    const { readJudgeResult } = await import('./evaluation/judge.js');
-    void readJudgeResult; // used in getCurrentRunResult below
-
     const result = await runRegressionSuite(
       suite,
       models,
