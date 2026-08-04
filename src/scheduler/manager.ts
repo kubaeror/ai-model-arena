@@ -97,9 +97,15 @@ export async function removeSchedule(configPath: string, id: string, logger?: Lo
 export async function syncSchedulesToDb(configPath: string, logger?: Logger): Promise<void> {
   try {
     const config = loadSchedulesConfig(configPath, logger);
-    const { insertSchedule } = await import('../db/query.js');
+    const { insertSchedule, listSchedules, deleteSchedule } = await import('../db/query.js');
+
+    const desiredIds = new Set(config.schedules.map((s) => s.id));
     for (const s of config.schedules) {
       await insertSchedule({ id: s.id, scenario: s.scenario, models: s.models, cron: s.cron, enabled: s.enabled ?? true });
+    }
+
+    for (const row of await listSchedules()) {
+      if (!desiredIds.has((row as { id: string }).id)) await deleteSchedule((row as { id: string }).id);
     }
   } catch (err) {
     logger?.warn('syncSchedulesToDb failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
