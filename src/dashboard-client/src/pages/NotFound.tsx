@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { PageShell } from '../components/ui/PageShell';
 import { Button } from '../components/ui/Button';
 

@@ -27,7 +27,7 @@
     "test:db-pg": "DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena npm run db:migrate && DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena tsx --test tests/db/postgres-smoke.test.ts"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.22.0"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1092.0",

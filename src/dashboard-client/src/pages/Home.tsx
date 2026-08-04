@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { StatTile } from '../components/ui/StatTile';

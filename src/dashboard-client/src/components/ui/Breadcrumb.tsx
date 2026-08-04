@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/cn';
 

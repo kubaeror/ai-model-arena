@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
