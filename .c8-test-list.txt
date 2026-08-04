@@ -1,3 +1,4 @@
+tests/agent-loop/compaction.test.ts
 tests/agent-loop/loop-stop.test.ts
 tests/anomaly-detection/silent-failure.test.ts
 tests/auth/audit-safe.test.ts

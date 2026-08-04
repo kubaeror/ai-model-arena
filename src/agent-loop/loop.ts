@@ -43,9 +43,42 @@ export interface AgentLoopResult {
 }
 
 const MAX_TOOL_RESULT_CHARS = 60_000;
+/** Upper bound on the in-context message window; oldest turns get compacted. */
+const MAX_CONTEXT_CHARS = 150_000;
+/** Turns kept at the tail when compaction kicks in (current + recent). */
+const KEEP_TAIL_TURNS = 4;
 
 function truncate(s: string, max = MAX_TOOL_RESULT_CHARS): string {
   return s.length <= max ? s : s.slice(0, max) + '\n…[tool result truncated]';
+}
+
+/**
+ * Drop the oldest tool/assistant messages once the window exceeds
+ * MAX_CONTEXT_CHARS, keeping the system prompt, the initial task, and the
+ * most recent KEEP_TAIL_TURNS turns. Tool results dominate the size, so
+ * dropping the oldest of them keeps the model's context window bounded on
+ * long runs.
+ */
+/** Exported for tests. */
+export function compactMessages(messages: ChatMessage[], protectedTail: number): void {
+  let total = messages.reduce((acc, m) => acc + (m.content?.length ?? 0), 0);
+  if (total <= MAX_CONTEXT_CHARS || messages.length <= 2) return;
+
+  const keepHead = Math.min(2, messages.length - protectedTail);
+  const droppableStart = keepHead;
+  const droppableEnd = Math.max(keepHead, messages.length - protectedTail);
+
+  while (droppableEnd > droppableStart && total > MAX_CONTEXT_CHARS) {
+    let droppedChars = 0;
+    let dropped = 0;
+    for (let i = droppableStart; i < droppableEnd; i++) {
+      droppedChars += messages[i]?.content?.length ?? 0;
+      dropped++;
+      if (total - droppedChars <= MAX_CONTEXT_CHARS) break;
+    }
+    messages.splice(droppableStart, dropped);
+    total -= droppedChars;
+  }
 }
 
 /**
@@ -199,10 +232,22 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       }
     }
 
+    // Snapshot this turn's messages BEFORE compaction (it splices from the
+    // front and would shift the index slice).
+    const turnMessages = messages.slice(turnStartIndex);
+
+    // Bound the context window so long runs don't overflow the model's limit.
+    const prevLen = messages.length;
+    compactMessages(messages, KEEP_TAIL_TURNS);
+    if (messages.length < prevLen) {
+      logger.warn('Context window compacted', { turn, dropped: prevLen - messages.length });
+      conv.append({ type: 'info', turn, content: `⚠ Context window compacted: oldest ${prevLen - messages.length} messages dropped to stay under ${MAX_CONTEXT_CHARS} chars.` });
+    }
+
     // Persist this turn BEFORE the completion break so the final assistant
     // message survives a crash — checkpoint/resume depends on it.
     if (onTurnComplete) {
-      try { await onTurnComplete(turn, messages.slice(turnStartIndex), usage); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
+      try { await onTurnComplete(turn, turnMessages, usage); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
     }
 
     if (wantsComplete) {
