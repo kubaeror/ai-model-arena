@@ -66,6 +66,9 @@ spec:
                   fieldPath: metadata.name
             - name: ARENA_PROVIDER_FILTER
               value: openai-compat
+          ports:
+            - name: metrics
+              containerPort: 4001
           volumeMounts:
             - name: outputs
               mountPath: /var/arena/outputs

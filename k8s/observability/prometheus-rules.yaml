@@ -10,7 +10,7 @@ spec:
     - name: arena
       rules:
         - alert: HighErrorRate
-          expr: rate(arena_tasks_total{status="errored"}[5m]) / rate(arena_tasks_total[5m]) > 0.05
+          expr: rate(arena_tasks_total{status="failed"}[5m]) / rate(arena_tasks_total[5m]) > 0.05
           for: 5m
           labels:
             severity: warning
@@ -33,11 +33,3 @@ spec:
           annotations:
             summary: "Queue depth exceeds 100 for >10m"
             runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#queuebacklog"
-        - alert: Dashboard5xx
-          expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.01
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Dashboard 5xx rate >1% in 5m"
-            runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#dashboard5xx"

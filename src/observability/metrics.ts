@@ -48,3 +48,25 @@ export async function metricsHandler(_req: unknown, res: { set: (k: string, v: s
   res.set('Content-Type', register.contentType);
   res.end(await register.metrics());
 }
+
+/**
+ * Minimal /metrics HTTP server for processes without one (the runner).
+ * Prometheus scrapes RUNNER_METRICS_PORT (default 4001); without this the
+ * runner's prom-client counters were never exported anywhere.
+ */
+export function startMetricsServer(port = Number(process.env.RUNNER_METRICS_PORT ?? 4001)): void {
+  import('node:http').then(({ createServer }) => {
+    const server = createServer(async (req, res) => {
+      if (req.url !== '/metrics') {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
+      res.setHeader('Content-Type', register.contentType);
+      res.end(await register.metrics());
+    });
+    server.listen(port, () => {
+      console.error(`[ai-arena] Prometheus metrics on :${port}/metrics`);
+    });
+  }).catch(() => { /* metrics server is best-effort */ });
+}

@@ -26,7 +26,7 @@ import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js
 import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
 import { loadBudgetConfig, checkBudget, computeCost } from './cost-tracking/index.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled } from './orchestrator/run-lifecycle.js';
-import { activeTasks, taskCounter, taskDuration } from './observability/metrics.js';
+import { activeTasks, taskCounter, taskDuration, startMetricsServer } from './observability/metrics.js';
 import type { ToolExecutionContext, TokenUsage, ChatMessage } from './types.js';
 import type { StoredMessage } from './session/store.js';
 import { closeDb } from './db/index.js';
@@ -134,6 +134,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
   const root = findProjectRoot();
   initDb(dbPath());
+
+  // Expose this process's prom-client registry (task/queue metrics) so
+  // Prometheus can actually scrape runner counters.
+  startMetricsServer();
 
   // Load budget config for enforcement in the runner loop
   loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);

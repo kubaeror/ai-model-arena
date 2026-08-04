@@ -36,7 +36,7 @@ data:
           "title": "Error Rate",
           "type": "stat",
           "targets": [
-            { "expr": "rate(arena_tasks_total{status=\"errored\"}[5m]) / rate(arena_tasks_total[5m])" }
+            { "expr": "rate(arena_tasks_total{status=\"failed\"}[5m]) / rate(arena_tasks_total[5m])" }
           ]
         },
         {

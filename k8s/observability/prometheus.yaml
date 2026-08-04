@@ -103,7 +103,7 @@ data:
             regex: runner
           - source_labels: [__meta_kubernetes_pod_container_port_number]
             action: keep
-            regex: '4000'
+            regex: '4001'
         metrics_path: /metrics
         scrape_interval: 15s
 ---
