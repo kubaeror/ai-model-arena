@@ -3,10 +3,11 @@
 // can be imported (e.g. from tests or the CLI) without auto-starting.
 import { startRunner } from './runner.js';
 import { startOtel } from './observability/otel.js';
+import { loadFallbackChainFromEnv } from './providers/fallback.js';
 
 startOtel();
 
-startRunner().catch((err) => {
+startRunner({ fallbackChain: loadFallbackChainFromEnv() }).catch((err) => {
   console.error('Runner crashed', err);
   process.exit(1);
 });
