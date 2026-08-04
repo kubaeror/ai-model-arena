@@ -1,6 +1,6 @@
 # ── build stage ──
 FROM node:22-bookworm-slim AS build
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ libargon2-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3=3.11.2-1+b1 make=4.3-4.1 g++=4:12.2.0-3 libargon2-dev=0~20171227-0.3+deb12u1 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --include=dev
@@ -13,8 +13,7 @@ RUN npm run build
 # the CI gate in .github/workflows/pr-checks.yaml. Previously this was
 # `npm audit --production || true` which silently ignored every CVE including
 # critical ones in the shipped image.
-RUN npm audit --audit-level=high --production
-RUN npm prune --production
+RUN npm audit --audit-level=high --production && npm prune --production
 
 # ── dashboard client build ──
 FROM node:22-bookworm-slim AS client-build
@@ -26,7 +25,7 @@ RUN npm run build
 
 # ── runtime stage ──
 FROM node:22-bookworm-slim AS runtime
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libargon2-1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libargon2-1=0~20171227-0.3+deb12u1 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 RUN useradd -r -u 10001 -g users arena && \
@@ -38,6 +37,6 @@ COPY --from=build --chown=arena:users /app/drizzle ./drizzle
 COPY --from=build --chown=arena:users /app/configs ./configs
 COPY --from=build --chown=arena:users /app/package.json ./
 COPY --from=client-build --chown=arena:users /app/src/dashboard-client/dist ./src/dashboard-client/dist
-USER arena
+USER 10001
 ENV OUTPUT_ROOT=/var/arena/outputs
 CMD ["node", "dist/runner-entry.js"]
