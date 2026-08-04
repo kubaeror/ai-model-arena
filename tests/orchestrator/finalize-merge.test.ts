@@ -12,10 +12,11 @@ import {
   finalizeRun,
   finalizeRunByRunId,
   registerRun,
+  isRunComplete,
   type RunSpec,
   type PerModelSpec,
 } from '../../src/orchestrator/run-lifecycle.js';
-import { getRunRecord } from '../../src/orchestrator/run-index.js';
+import { getRunRecord, updateRun } from '../../src/orchestrator/run-index.js';
 import { writeJudgeResult } from '../../src/evaluation/judge.js';
 
 function makePerModel(runId: string, model: string, root: string, ts: string): PerModelSpec {
@@ -238,5 +239,35 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.strictEqual(parsed.model, 'alpha');
     assert.strictEqual(parsed.averageScore, 90);
+  });
+
+  it('isRunComplete is false when the run record is absent (registration failure)', async () => {
+    const runId = 'run_absent';
+    const alpha = makePerModel(runId, 'alpha', root, 't-absent');
+    const spec = buildSpec(runId, root, [alpha]);
+    assert.strictEqual(await isRunComplete(spec), false);
+  });
+
+  it('isRunComplete is false while a model is running or claimed', async () => {
+    const runId = 'run_inflight';
+    const alpha = makePerModel(runId, 'alpha', root, 't-inflight');
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+    assert.strictEqual(await isRunComplete(spec), false, 'running is not complete');
+    await updateRun(runId, (r) => { r.perModel[0]!.status = 'claimed'; });
+    assert.strictEqual(await isRunComplete(spec), false, 'claimed is not complete');
+  });
+
+  it('isRunComplete is true when every model reached a terminal status', async () => {
+    const runId = 'run_terminal';
+    const alpha = makePerModel(runId, 'alpha', root, 't-terminal');
+    const beta = makePerModel(runId, 'beta', root, 't-terminal');
+    const spec = buildSpec(runId, root, [alpha, beta]);
+    await registerRun(spec, 'cli');
+    await updateRun(runId, (r) => {
+      r.perModel.find((m) => m.model === 'alpha')!.status = 'completed';
+      r.perModel.find((m) => m.model === 'beta')!.status = 'failed';
+    });
+    assert.strictEqual(await isRunComplete(spec), true);
   });
 });

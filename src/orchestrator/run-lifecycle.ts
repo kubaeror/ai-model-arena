@@ -271,7 +271,11 @@ export async function checkRunStatus(spec: RunSpec): Promise<PerModelStatus[]> {
 
 export function isRunComplete(spec: RunSpec): Promise<boolean> {
   const statuses = checkRunStatus(spec);
-  return statuses.then(ss => ss.every((s: PerModelStatus) => !s.online));
+  return statuses.then((ss) => ss.every((s: PerModelStatus) =>
+    !s.online &&
+    (s.status === 'completed' || s.status === 'failed' || s.status === 'stopped' ||
+     s.status === 'dead' || s.status === 'errored'),
+  ));
 }
 
 /** True iff every model in a run is stopped (from the runs table). */
