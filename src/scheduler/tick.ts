@@ -15,8 +15,8 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
 
   for (const row of rows) {
     const scheduleId = row.id;
+    const nowMs = new Date(now).getTime();
     const next = computeNextRun(row.cron, new Date(now));
-    await updateScheduleRun(scheduleId, now, next);
 
     // Update scheduler state for observability
     const state = getScheduleState(scheduleId) ?? { id: scheduleId, status: 'idle', consecutiveFailures: 0, totalRuns: 0, totalFailures: 0 };
@@ -45,24 +45,30 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
       });
     }
 
+    // next_run advances only on success; a failed attempt backs off 1h so a
+    // persistently broken schedule does not hot-loop every tick.
     if (scheduleFailed) {
+      const backoff = new Date(nowMs + 3600000).toISOString();
+      await updateScheduleRun(scheduleId, now, backoff);
       scheduleFailures.inc({ schedule_id: scheduleId });
       failures.push(scheduleId);
+      const consecutiveFailures = (state.consecutiveFailures ?? 0) + 1;
       updateScheduleState(scheduleId, {
         status: 'error',
         lastError: 'Failed to enqueue one or more model tasks',
-        consecutiveFailures: (state.consecutiveFailures ?? 0) + 1,
+        consecutiveFailures,
         totalRuns: (state.totalRuns ?? 0) + 1,
         totalFailures: (state.totalFailures ?? 0) + 1,
       });
 
-      if ((state.consecutiveFailures ?? 0) >= 3) {
+      if (consecutiveFailures >= 3) {
         logger.error('Schedule has 3+ consecutive failures', {
           scheduleId,
-          consecutiveFailures: (state.consecutiveFailures ?? 0) + 1,
+          consecutiveFailures,
         });
       }
     } else {
+      await updateScheduleRun(scheduleId, now, next);
       ticked.push(scheduleId);
       updateScheduleState(scheduleId, {
         status: 'idle',

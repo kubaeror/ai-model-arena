@@ -54,6 +54,7 @@ tests/sandbox/escape.test.ts
 tests/sandbox/sandbox.test.ts
 tests/sandbox/workspace.test.ts
 tests/scheduler/sync-schedules.test.ts
+tests/scheduler/tick.test.ts
 tests/security/prompt-injection-wiring.test.ts
 tests/security/prompt-injection.test.ts
 tests/security/shell-secrets.test.ts
