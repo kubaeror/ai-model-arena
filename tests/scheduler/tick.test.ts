@@ -110,15 +110,28 @@ test('tickScheduler passes schedule options (timeoutMs, forceBudget) into startR
   const configPath = path.join(tmp, 'schedules.yaml');
   try {
     fs.writeFileSync(configPath, dump({
-      schedules: [{
-        id: 's-opt', scenario: 'express-rest', models: ['gpt-4o'],
-        cron: '* * * * *', enabled: true,
-        options: { forceBudget: true, timeoutMs: 12345 },
-      }],
+      schedules: [
+        {
+          id: 's-opt', scenario: 'express-rest', models: ['gpt-4o'],
+          cron: '* * * * *', enabled: true,
+          options: { forceBudget: true, timeoutMs: 12345 },
+        },
+        {
+          id: 's-false', scenario: 'express-rest', models: ['gpt-4o'],
+          cron: '* * * * *', enabled: true,
+          options: { forceBudget: false, timeoutMs: 54321 },
+        },
+        {
+          id: 's-plain', scenario: 'express-rest', models: ['gpt-4o'],
+          cron: '* * * * *', enabled: true,
+        },
+      ],
     }));
     loadSchedulesConfig(configPath);
     await syncSchedulesToDb(configPath);
-    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-opt');
+    for (const id of ['s-opt', 's-false', 's-plain']) {
+      getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), id);
+    }
 
     const calls: Array<Record<string, unknown>> = [];
     t.mock.module('../../src/orchestrator/run-lifecycle.js', {
@@ -130,21 +143,20 @@ test('tickScheduler passes schedule options (timeoutMs, forceBudget) into startR
       },
     });
 
-    let result = await tickScheduler();
-    assert.deepEqual(result.ticked, ['s-opt']);
-    assert.deepEqual(calls[0], {
+    const result = await tickScheduler();
+    assert.deepEqual(result.ticked.sort(), ['s-false', 's-opt', 's-plain']);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls.find((c) => c.timeoutMs === 12345), {
       scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
       forceBudget: true, timeoutMs: 12345,
     });
-
-    await insertSchedule({
-      id: 's-plain', scenario: 'express-rest', models: ['gpt-4o'],
-      cron: '* * * * *', enabled: true, createdAt: new Date().toISOString(),
+    assert.deepEqual(calls.find((c) => c.timeoutMs === 54321), {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+      forceBudget: false, timeoutMs: 54321,
     });
-    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-plain');
-    result = await tickScheduler();
-    assert.deepEqual(result.ticked, ['s-plain']);
-    assert.deepEqual(calls[1], { scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler' });
+    assert.deepEqual(calls.find((c) => c.timeoutMs === undefined), {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+    });
   } finally {
     resetSchedulesCache();
     closeDb();
@@ -178,6 +190,84 @@ test('tickScheduler backs off failures by SCHEDULER_FAILURE_BACKOFF_MS', async (
     assert.ok(nextMs < Date.now() + 60000, `expected env-derived backoff, got ${after.next_run}`);
   } finally {
     delete process.env.SCHEDULER_FAILURE_BACKOFF_MS;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('empty SCHEDULER_FAILURE_BACKOFF_MS falls back to the 1h default', async (t) => {
+  const tmp = freshDb();
+  process.env.SCHEDULER_FAILURE_BACKOFF_MS = '';
+  try {
+    await insertSchedule({
+      id: 's-empty', scenario: 'express-rest', models: ['gpt-4o'],
+      cron: '* * * * *', enabled: true, createdAt: new Date().toISOString(),
+    });
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-empty');
+
+    t.mock.module('../../src/orchestrator/run-lifecycle.js', {
+      exports: {
+        startRun: async () => { throw new Error('boom'); },
+      },
+    });
+
+    const result = await tickScheduler();
+    assert.deepEqual(result.ticked, []);
+    assert.deepEqual(result.failures, ['s-empty']);
+
+    const after = (await listSchedules()).find((s) => s.id === 's-empty')!;
+    const nextMs = new Date(after.next_run!).getTime();
+    assert.ok(nextMs > Date.now() + 30 * 60 * 1000, `expected ~1h default backoff for empty env, got ${after.next_run}`);
+  } finally {
+    delete process.env.SCHEDULER_FAILURE_BACKOFF_MS;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('scheduler-tick entrypoint loads schedules config before ticking (production path)', async (t) => {
+  const tmp = freshDb();
+  const configPath = path.join(tmp, 'schedules.yaml');
+  try {
+    fs.writeFileSync(configPath, dump({
+      schedules: [{
+        id: 's-entry', scenario: 'express-rest', models: ['gpt-4o'],
+        cron: '* * * * *', enabled: true,
+        options: { forceBudget: false, timeoutMs: 9876 },
+      }],
+    }));
+    loadSchedulesConfig(configPath);
+    await syncSchedulesToDb(configPath);
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-entry');
+    // Drop the warm cache: the entrypoint must (re)load the config itself,
+    // exactly as the k8s CronJob process does on every tick.
+    resetSchedulesCache();
+
+    const calls: Array<Record<string, unknown>> = [];
+    t.mock.module('../../src/orchestrator/run-lifecycle.js', {
+      exports: {
+        startRun: async (opts: Record<string, unknown>) => {
+          calls.push(opts);
+          return { runId: 'x', scenario: opts.scenario, ts: 't', startedAt: 'now', models: [] };
+        },
+      },
+    });
+
+    process.env.SCHEDULES_PATH = configPath;
+    try {
+      const { runSchedulerTick } = await import('../../src/scripts/scheduler-tick.js');
+      await runSchedulerTick();
+    } finally {
+      delete process.env.SCHEDULES_PATH;
+    }
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+      forceBudget: false, timeoutMs: 9876,
+    });
+  } finally {
+    resetSchedulesCache();
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
   }

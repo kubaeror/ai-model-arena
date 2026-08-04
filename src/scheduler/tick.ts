@@ -36,6 +36,9 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
       // not the DB row — join via the in-memory schedule record.
       const { startRun } = await import('../orchestrator/run-lifecycle.js');
       const schedule = getSchedule(scheduleId);
+      if (!schedule) {
+        logger.warn('Schedule due in DB but missing from loaded schedules config; options (timeoutMs/forceBudget) will not be applied', { scheduleId });
+      }
       const runOptions: RunStartOptions = {
         scenario: String(row.scenario),
         models,
@@ -57,7 +60,7 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
     // schedule does not hot-loop every tick.
     if (scheduleFailed) {
       const backoffMs = Number(process.env.SCHEDULER_FAILURE_BACKOFF_MS ?? 3_600_000);
-      const backoff = new Date(nowMs + (Number.isFinite(backoffMs) ? backoffMs : 3_600_000)).toISOString();
+      const backoff = new Date(nowMs + (Number.isFinite(backoffMs) && backoffMs > 0 ? backoffMs : 3_600_000)).toISOString();
       await updateScheduleRun(scheduleId, now, backoff);
       scheduleFailures.inc({ schedule_id: scheduleId });
       failures.push(scheduleId);

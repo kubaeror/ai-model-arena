@@ -15,6 +15,7 @@
 
 import { initDb as initSqlite, getDb as getSqlite, getDrizzleClient as getSqliteDrizzle, closeDb as closeSqlite } from './client.js';
 import { initPostgres, getPgClient, closePostgres } from './postgres.js';
+import { dbPath } from '../paths.js';
 import type { Database as SqliteDb } from 'better-sqlite3';
 import type { PgClient } from './postgres.js';
 
@@ -23,7 +24,7 @@ export type DrizzleClient = ReturnType<typeof getSqliteDrizzle> | PgClient;
 
 let _driver: 'sqlite' | 'postgres' = 'sqlite';
 
-export function initDb(dbPath?: string): DbClient {
+export function initDb(dbPathOverride?: string): DbClient {
   const driver = (process.env.DB_DRIVER ?? 'sqlite').toLowerCase();
   if (driver === 'postgres') {
     const url = process.env.DATABASE_URL;
@@ -40,7 +41,7 @@ export function initDb(dbPath?: string): DbClient {
     });
   }
   _driver = 'sqlite';
-  return initSqlite(dbPath!);
+  return initSqlite(dbPathOverride ?? dbPath());
 }
 
 export function getDb(): DbClient {
