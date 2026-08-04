@@ -117,8 +117,8 @@ function sanitizeErrorMessage(err: unknown): string {
     .replace(/\b(secret|token|password|key)\b\s*[:=]\s*\S+/gi, '$1=[REDACTED]');
 }
 
-main().catch((err) => {
-  console.error(`Webhook secret migration failed: ${sanitizeErrorMessage(err)}`);
+main().catch((_err) => {
+  console.error('Webhook secret migration failed.');
   try { closeDb(); } catch { /* already closed */ }
   process.exit(1);
 });
