@@ -291,7 +291,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
         taskDuration.observe((Date.now() - startedAt.getTime()) / 1000);
         taskCounted = true;
-        await queue.nack(task.taskId, `Model not found: ${modelName}`);
+        await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
         continue;
       }
 
