@@ -23,7 +23,7 @@ import { getProfile, getAllowedTools } from './profiles/definitions.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
-import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
+import { resolveFallback, resolveMaxFallbackHops, type FallbackConfig } from './providers/fallback.js';
 import { loadBudgetConfig, checkBudget, computeCost } from './cost-tracking/index.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled } from './orchestrator/run-lifecycle.js';
 import { activeTasks, taskCounter, taskDuration, startMetricsServer } from './observability/metrics.js';
@@ -382,7 +382,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         allowedTools: toolCtx.allowedTools,
       };
       let loopResult;
-      let maxFallbackHops = 3;
+      let maxFallbackHops = resolveMaxFallbackHops();
       // Cumulative spend of this run's tokens, so per-turn budget checks see
       // the current run (addSpend is only called during finalize otherwise).
       let prevRunCost = 0;

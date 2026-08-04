@@ -35,3 +35,21 @@ export function resolveFallback(
   if (idx < 0 || idx >= all.length - 1) return null;
   return all[idx + 1]!;
 }
+
+/** Default number of fallback hops when ARENA_MAX_FALLBACK_HOPS is unset. */
+export const DEFAULT_MAX_FALLBACK_HOPS = 3;
+
+/** Upper bound for ARENA_MAX_FALLBACK_HOPS. */
+export const MAX_FALLBACK_HOPS_CAP = 10;
+
+/**
+ * Resolve the fallback hop limit from ARENA_MAX_FALLBACK_HOPS.
+ * Parses the env value as an integer (default 3 on missing/empty/unparseable)
+ * and clamps it to [0, 10]. 0 disables fallback entirely.
+ */
+export function resolveMaxFallbackHops(raw: string | undefined = process.env.ARENA_MAX_FALLBACK_HOPS): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_MAX_FALLBACK_HOPS;
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed)) return DEFAULT_MAX_FALLBACK_HOPS;
+  return Math.min(MAX_FALLBACK_HOPS_CAP, Math.max(0, parsed));
+}

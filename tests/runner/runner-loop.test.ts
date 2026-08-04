@@ -9,6 +9,10 @@ import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import type { Task } from '../../src/queue/types.js';
 import { startRunner } from '../../src/runner.js';
 import { upsertRun } from '../../src/db/runs.js';
+import { ProviderRegistry } from '../../src/providers/index.js';
+import type { CreateAdapterOpts } from '../../src/providers/registry.js';
+import type { ModelAdapter } from '../../src/providers/adapters/base.js';
+import { CircuitBreaker } from '../../src/providers/circuit-breaker.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -224,6 +228,202 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
   } finally {
     ac.abort();
     await runnerDone;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+/**
+ * Fake adapter: returns a single `task_complete` tool call so the agent loop
+ * terminates after turn 1 without touching any real provider. Same shape as
+ * the happy-path test's fake — reused here so a fallback attempt completes.
+ */
+class FakeAdapter implements ModelAdapter {
+  calls = 0;
+
+  async sendMessage(): Promise<import('../../src/types.js').ModelResponse> {
+    this.calls++;
+    return {
+      text: 'I verified the work and I am done.',
+      toolCalls: [{ id: 'fake-tc-1', name: 'task_complete', arguments: { summary: 'finished by fake adapter' } }],
+      usage: { prompt: 12, completion: 6, total: 18 },
+      stopReason: 'tool_calls',
+    };
+  }
+
+  supportsReasoning(): boolean { return false; }
+  supportsPromptCaching(): boolean { return false; }
+}
+
+const FALLBACK_CHAIN = {
+  primary: { provider: 'openai', model: 'gpt-4o' },
+  fallbacks: [
+    { provider: 'anthropic', model: 'claude-sonnet-4' },
+    { provider: 'google', model: 'gemini-2.0-flash' },
+  ],
+};
+
+/**
+ * Drive the shared per-provider/model circuit breaker into its OPEN state so
+ * the runner's next breaker.exec throws CircuitOpenError immediately — the
+ * exact condition the fallback branch handles. Idempotent: re-seeding an
+ * already-open breaker is a no-op (exec throws without counting).
+ */
+async function seedOpenBreaker(provider: string, model: string): Promise<void> {
+  const cb = CircuitBreaker.for(provider, model);
+  for (let i = 0; i < 6; i++) {
+    try { await cb.exec(async () => { throw new Error('seed failure'); }); } catch { /* opening the breaker */ }
+  }
+}
+
+test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-fallback0-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ARENA_MAX_FALLBACK_HOPS = '0';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  await upsertRun({
+    runId: 'run-fb0', scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{ model: 'GPT-4o', runId: 'run-fb0', status: 'running' } as never],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  await seedOpenBreaker('openai', 'gpt-4o');
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal, fallbackChain: FALLBACK_CHAIN });
+
+  await queue.enqueue(makeTask({
+    taskId: 'fb0', sessionId: 'fb0-session',
+    model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: 'run-fb0', maxTurns: 5 },
+    attempts: 4,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.deadLetterSize()) === 1, 10000, 'task in DLQ');
+    assert.equal(await queue.deadLetterSize(), 1, 'hops=0 must fail the task, not requeue');
+    assert.equal(fake.calls, 0, 'hops=0 must not consult any fallback adapter');
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get('run-fb0', 'GPT-4o') as { status: string } | undefined;
+    assert.equal(row?.status, 'failed', 'run should be marked failed');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary circuit is open', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-fallback3-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ARENA_MAX_FALLBACK_HOPS = '3';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  await upsertRun({
+    runId: 'run-fb3', scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{ model: 'GPT-4o', runId: 'run-fb3', status: 'running' } as never],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  await seedOpenBreaker('openai', 'gpt-4o');
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal, fallbackChain: FALLBACK_CHAIN });
+
+  await queue.enqueue(makeTask({
+    taskId: 'fb3', sessionId: 'fb3-session',
+    model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: 'run-fb3', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+    assert.equal(await queue.deadLetterSize(), 0, 'fallback run must ack, not nack');
+    assert.equal(fake.calls, 1, 'the fallback provider should have been consulted exactly once');
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get('run-fb3', 'GPT-4o') as { status: string } | undefined;
+    assert.equal(row?.status, 'completed', 'run should complete via the fallback provider');
+    const resultPath = path.join(outputs, 'GPT-4o', 'run-fb3', 'result.json');
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean };
+    assert.equal(result.success, true);
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
     await queue.close();
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
