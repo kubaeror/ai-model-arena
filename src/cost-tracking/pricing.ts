@@ -10,7 +10,7 @@ export async function getModelPricing(modelId: string): Promise<{ input: number 
     const rows = await db.select({
       input: pricing.input, output: pricing.output,
       cache_read: pricing.cache_read, cache_write: pricing.cache_write,
-    }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} IS NULL`)).limit(1) as any[];
+    }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} = 0`)).limit(1) as any[];
     let direct = rows[0] as { input: number | null; output: number | null; cache_read: number | null; cache_write: number | null } | null;
     if (direct && (direct.input != null || direct.output != null)) return direct;
     // Fall back: treat `modelId` as a friendly name and resolve via the catalog.
@@ -19,7 +19,7 @@ export async function getModelPricing(modelId: string): Promise<{ input: number 
     const fallback = await db.select({
       input: pricing.input, output: pricing.output,
       cache_read: pricing.cache_read, cache_write: pricing.cache_write,
-    }).from(pricing).where(and(eq(pricing.model_id, modelRows[0].id), sql`${pricing.tier_size} IS NULL`)).limit(1) as any[];
+    }).from(pricing).where(and(eq(pricing.model_id, modelRows[0].id), sql`${pricing.tier_size} = 0`)).limit(1) as any[];
     return fallback[0] ?? null;
   } catch {
     return null;

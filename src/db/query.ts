@@ -438,7 +438,7 @@ export async function listModelsWithPricing(): Promise<any[]> {
     cache_read: pricing.cache_read, cache_write: pricing.cache_write,
   })
     .from(models)
-    .leftJoin(pricing, and(eq(pricing.model_id, models.id), sql`${pricing.tier_size} IS NULL`))
+    .leftJoin(pricing, and(eq(pricing.model_id, models.id), sql`${pricing.tier_size} = 0`))
     .orderBy(models.name) as any;
 }
 
@@ -738,7 +738,7 @@ export async function listCatalogModels(filters: {
     SELECT m.id, m.name, m.family, m.provider_id, m.release_date, m.attachment, m.reasoning, m.temperature,
       m.tool_call, m.context_limit, m.output_limit, m.status, m.reasoning_options,
       p.input, p.output, p.cache_read, p.cache_write
-    FROM models m LEFT JOIN pricing p ON p.model_id = m.id AND p.tier_size IS NULL
+    FROM models m LEFT JOIN pricing p ON p.model_id = m.id AND p.tier_size = 0
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
     ORDER BY ${sort}
   `), ...params);
@@ -880,7 +880,7 @@ export async function queryCacheLeaderboard(): Promise<any[]> {
       (SELECT AVG(r.latency_p50_ms) FROM model_runtime_stats r WHERE r.model_id = m.id) as arena_latency,
       (SELECT COUNT(*) FROM model_runtime_stats r WHERE r.model_id = m.id) as arena_runs
     FROM models m
-    LEFT JOIN pricing p ON p.model_id = m.id AND p.tier_size IS NULL
+    LEFT JOIN pricing p ON p.model_id = m.id AND p.tier_size = 0
     ORDER BY intelligence DESC
   `));
 }

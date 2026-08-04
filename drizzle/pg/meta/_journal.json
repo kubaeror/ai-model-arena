@@ -22,6 +22,13 @@
       "when": 1785791698581,
       "tag": "0002_low_zuras",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785849611143,
+      "tag": "0003_pricing_tier_sentinel",
+      "breakpoints": true
     }
   ]
 }

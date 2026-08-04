@@ -77,6 +77,30 @@ test('fetchSync upserts providers, models, model_providers, pricing from models.
   }
 });
 
+test('fetchSync does not duplicate pricing rows on repeated sync', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => FAKE_MODELS_DEV,
+    text: async () => JSON.stringify(FAKE_MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    const db = getDb();
+    const pricing = db.prepare('SELECT model_id, tier_size FROM pricing ORDER BY model_id').all() as Array<{ model_id: string; tier_size: number }>;
+    assert.equal(pricing.length, 2);
+    for (const p of pricing) assert.equal(p.tier_size, 0);
+    const models = db.prepare('SELECT COUNT(*) as c FROM models').get() as { c: number };
+    assert.equal(models.c, 2);
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
 test('fetchSync records error status on fetch failure', async () => {
   const cleanup = freshDb();
   const origFetch = globalThis.fetch;

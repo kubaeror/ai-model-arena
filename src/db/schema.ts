@@ -75,7 +75,7 @@ export const pricing = sqliteTable('pricing', {
   output: real('output'),
   cache_read: real('cache_read'),
   cache_write: real('cache_write'),
-  tier_size: integer('tier_size'),
+  tier_size: integer('tier_size').notNull().default(0),
   over_200k_input: real('over_200k_input'),
   over_200k_output: real('over_200k_output'),
   over_200k_cache_read: real('over_200k_cache_read'),
@@ -405,7 +405,7 @@ export interface PricingRow {
   output: number | null;
   cache_read: number | null;
   cache_write: number | null;
-  tier_size: number | null;
+  tier_size: number;
   over_200k_input: number | null;
   over_200k_output: number | null;
   over_200k_cache_read: number | null;
