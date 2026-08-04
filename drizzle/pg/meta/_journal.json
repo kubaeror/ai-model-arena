@@ -36,6 +36,13 @@
       "when": 1785849658928,
       "tag": "0004_runtime_ddl",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785851928103,
+      "tag": "0005_query_indexes",
+      "breakpoints": true
     }
   ]
 }
