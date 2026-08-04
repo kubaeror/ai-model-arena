@@ -27,7 +27,7 @@ import {
   cleanupArena,
 } from './orchestrator/orchestrator.js';
 import { loadSchedulesConfig, getSchedules, addSchedule, removeSchedule } from './scheduler/manager.js';
-import { getBudgetStatus } from './cost-tracking/index.js';
+import { getBudgetStatus, loadBudgetConfig } from './cost-tracking/index.js';
 import { readDiffPatch } from './sandbox/git.js';
 import type { Schedule } from './scheduler/types.js';
 
@@ -389,7 +389,9 @@ program
   .description('Show budget status.')
   .action(() => {
     const root = rootDir();
-    const status = getBudgetStatus(root);
+    const logger = createLogger('ai-arena:cli');
+    loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);
+    const status = getBudgetStatus(root, logger);
     console.log('\nBudget Status:\n');
     console.log(`  Global:`);
     console.log(`    Daily:   $${status.global.daily.spent.toFixed(2)} / ${status.global.daily.limit ?? 'unlimited'}`);
