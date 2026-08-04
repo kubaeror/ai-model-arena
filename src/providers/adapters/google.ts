@@ -1,5 +1,5 @@
 import type { ChatMessage, ModelResponse, ToolCall, TokenUsage, ToolDefinition } from '../../types.js';
-import type { ModelAdapter, SendOpts, StreamChunk } from './base.js';
+import type { ModelAdapter, SendOpts } from './base.js';
 import { BaseAdapter, HttpError } from './base.js';
 import type { ProviderDescriptor } from '../types.js';
 import type { CreateAdapterOpts } from '../registry.js';
@@ -23,17 +23,15 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
   }
 
-  supportsStreaming(): boolean { return true; }
+  supportsStreaming(): boolean { return false; }
   supportsReasoning(): boolean { return true; }
   supportsPromptCaching(): boolean { return true; }
-
-  buildCacheBreakpoints(messages: ChatMessage[]): ChatMessage[] { return messages; }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     return this.withRetry(async () => {
       const body = this.buildBody(messages, tools, opts);
       const url = `${this.baseUrl}/v1beta/models/${this.modelId}:generateContent?key=${this.apiKey ?? ''}`;
-      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await this.post(url, body);
       if (!res.ok) {
         const text = await res.text();
         throw new HttpError(res.status, text, `Google ${res.status}: ${text.slice(0, 200)}`);
@@ -41,46 +39,6 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
       const json = (await res.json()) as GeminiResponse;
       return this.parseResponse(json);
     }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
-  }
-
-  async *sendMessageStream(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): AsyncIterable<StreamChunk> {
-    const body = this.buildBody(messages, tools, opts);
-    const url = `${this.baseUrl}/v1beta/models/${this.modelId}:streamGenerateContent?alt=sse&key=${this.apiKey ?? ''}`;
-    const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    if (!res.ok || !res.body) {
-      const text = await res.text();
-      throw new HttpError(res.status, text, `Google stream ${res.status}`);
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        try {
-          const evt = JSON.parse(data) as GeminiResponse;
-          const candidate = evt.candidates?.[0];
-          for (const part of candidate?.content.parts ?? []) {
-            if (part.text) yield { text: part.text };
-            if (part.functionCall) yield { toolCallDelta: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args) } };
-          }
-          if (candidate?.finishReason) yield { finishReason: candidate.finishReason };
-          if (evt.usageMetadata) {
-            yield {
-              usage: { prompt: evt.usageMetadata.promptTokenCount, completion: evt.usageMetadata.candidatesTokenCount, total: evt.usageMetadata.totalTokenCount },
-              cacheReadTokens: evt.usageMetadata.cachedContentTokenCount,
-            };
-          }
-        } catch { /* skip */ }
-      }
-    }
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {

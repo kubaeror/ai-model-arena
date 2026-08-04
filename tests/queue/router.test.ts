@@ -33,3 +33,7 @@ test('dlqStreamKey suffixes with :dlq', () => {
 test('dlqStreamKey for anthropic', () => {
   assert.equal(dlqStreamKey('arena:tasks', 'anthropic'), 'arena:tasks:anthropic:dlq');
 });
+
+test('dlqStreamKey falls through for unknown provider', () => {
+  assert.equal(dlqStreamKey('prefix', 'unknown-provider'), 'prefix:unknown-provider:dlq');
+});

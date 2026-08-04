@@ -1,5 +1,5 @@
 import type { ChatMessage, ModelResponse, ToolCall, TokenUsage, ToolDefinition } from '../../types.js';
-import type { ModelAdapter, SendOpts, StreamChunk } from './base.js';
+import type { ModelAdapter, SendOpts } from './base.js';
 import { BaseAdapter, HttpError } from './base.js';
 import type { ProviderDescriptor } from '../types.js';
 import type { CreateAdapterOpts } from '../registry.js';
@@ -24,14 +24,9 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
   }
 
-  supportsStreaming(): boolean { return true; }
+  supportsStreaming(): boolean { return false; }
   supportsReasoning(): boolean { return true; }
   supportsPromptCaching(): boolean { return true; }
-
-  buildCacheBreakpoints(messages: ChatMessage[]): ChatMessage[] {
-    // cache_control markers are applied inside buildBody; this method satisfies the interface contract.
-    return messages;
-  }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     return this.withRetry(async () => {
@@ -44,47 +39,6 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
       const json = (await res.json()) as AnthropicResponse;
       return this.parseResponse(json);
     }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
-  }
-
-  async *sendMessageStream(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): AsyncIterable<StreamChunk> {
-    const body = this.buildBody(messages, tools, opts, true);
-    const res = await this.fetchEndpoint('/v1/messages', body);
-    if (!res.ok || !res.body) {
-      const text = await res.text();
-      throw new HttpError(res.status, text, `Anthropic stream ${res.status}`);
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const events = buf.split('\n');
-      buf = events.pop() ?? '';
-      for (const line of events) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        try {
-          const evt = JSON.parse(data) as {
-            type?: string;
-            delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: string };
-            message?: { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
-          };
-          if (evt.type === 'content_block_delta' && evt.delta?.text) yield { text: evt.delta.text };
-          if (evt.type === 'message_delta' && evt.delta?.stop_reason) yield { finishReason: evt.delta.stop_reason };
-          if (evt.type === 'message_start' && evt.message?.usage) {
-            const u = evt.message.usage;
-            yield {
-              usage: { prompt: u.input_tokens, completion: u.output_tokens },
-              cacheReadTokens: u.cache_read_input_tokens,
-              cacheWriteTokens: u.cache_creation_input_tokens,
-            };
-          }
-        } catch { /* skip */ }
-      }
-    }
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined, stream: boolean): Record<string, unknown> {
@@ -141,10 +95,9 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
   }
 
   private async fetchEndpoint(path: string, body: Record<string, unknown>): Promise<Response> {
-    const url = `${this.baseUrl}${path}`;
-    const headers: Record<string, string> = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' };
+    const headers: Record<string, string> = { 'anthropic-version': '2023-06-01' };
     if (this.apiKey) headers['x-api-key'] = this.apiKey;
-    return fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60_000) });
+    return this.post(`${this.baseUrl}${path}`, body, headers);
   }
 
   private parseResponse(json: AnthropicResponse): ModelResponse {

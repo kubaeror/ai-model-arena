@@ -1,14 +1,14 @@
 import { Router } from 'express';
 import { listModelsWithPricing } from '../../db/query.js';
 import { upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
-import { audit, requireRole } from '../../auth/rbac.js';
+import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { z } from 'zod';
 import type { AuthedRequest } from '../auth.js';
 
 export function createModelsRouter(): Router {
   const router = Router();
 
-  // GET /api/models - list catalog models
+  // GET /api/models - list catalog models (config-consumer shape: { models })
   router.get('/', async (_req, res) => {
     const rows = await listModelsWithPricing();
     res.json({ models: rows });
@@ -30,16 +30,16 @@ export function createModelsRouter(): Router {
     }
     const id = parsed.data.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
     await upsertCustomProvider({ id, name: parsed.data.name, apiBase: parsed.data.apiBase, authScheme: parsed.data.authScheme, envVar: parsed.data.envVar, adapter: parsed.data.adapter });
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter }).catch(() => {});
-    res.status(201).json({ ok: true, id });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter });
+    res.status(201).json({ models: await listModelsWithPricing() });
   });
 
   // DELETE /api/models/:name - remove a custom provider by id
   router.delete('/:name', requireRole('editor'), async (req, res) => {
     const name = String(req.params.name);
     await deleteCustomProvider(name);
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'model.delete', { type: 'model', id: name }).catch(() => {});
-    res.json({ ok: true });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'model.delete', { type: 'model', id: name });
+    res.json({ models: await listModelsWithPricing() });
   });
 
   return router;

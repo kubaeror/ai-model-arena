@@ -55,8 +55,6 @@ function wrapAdapter(
     supportsStreaming: () => adapter.supportsStreaming(),
     supportsReasoning: () => adapter.supportsReasoning(),
     supportsPromptCaching: () => adapter.supportsPromptCaching(),
-    ...(adapter.buildCacheBreakpoints ? { buildCacheBreakpoints: (m: ChatMessage[]) => adapter.buildCacheBreakpoints!(m) } : {}),
-    ...(adapter.sendMessageStream ? { sendMessageStream: (m: ChatMessage[], t: ToolDefinition[]) => adapter.sendMessageStream!(m, t) } : {}),
   };
 }
 

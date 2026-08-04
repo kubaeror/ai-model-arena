@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
 import type { AuthedRequest } from '../auth.js';
-import { audit } from '../../auth/rbac.js';
+import { auditSafe } from '../../auth/rbac.js';
 import { secretStore, type SecretEntry } from '../../secrets/store.js';
 import { isKubernetes, getKubeNamespace, getKubeSecretName } from '../../env/detect.js';
 import type { Request, Response } from 'express';
@@ -112,11 +112,11 @@ export function createSecretsRouter(): Router {
           }
         }
 
-        audit((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar }).catch(() => {});
+        auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar });
         res.json({ ok: true, envVar, message: 'Secret updated — kubelet will refresh mounts within ~60s' });
       } else {
         await secretStore.set(envVar, value);
-        audit((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar }).catch(() => {});
+        auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar });
         res.json({ ok: true, envVar });
       }
     } catch {
@@ -153,11 +153,11 @@ export function createSecretsRouter(): Router {
           throw err;
         }
 
-        audit((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar }).catch(() => {});
+        auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar });
         res.json({ ok: true, envVar, message: 'Secret removed — kubelet will refresh mounts within ~60s' });
       } else {
         await secretStore.delete(envVar);
-        audit((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar }).catch(() => {});
+        auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar });
         res.json({ ok: true, envVar });
       }
     } catch {

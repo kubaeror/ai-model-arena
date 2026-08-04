@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { promises as fsp } from 'node:fs';
 import { listRuns } from '../../orchestrator/orchestrator.js';
-import { extractToolCallsFromConversation } from '../../logger/conversation-parser.js';
+import { extractToolCallsFromConversation, detectTurnLoops, type LoopIncident } from '../../logger/conversation-parser.js';
 import { getDrizzleDb } from '../../db/index.js';
 import { tool_call_stats, run_models } from '../../db/schema.js';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -46,13 +46,6 @@ interface ModelToolStat {
   success_rate: number;
 }
 
-interface LoopIncident {
-  runId: string;
-  model: string;
-  turn: number;
-  tools: string[];
-}
-
 interface ToolAnalyticsResponse {
   model: string | null;
   totalRuns: number;
@@ -82,30 +75,6 @@ async function readResultFile(resultPath: string): Promise<Record<string, unknow
 
 async function readConversationFile(convPath: string): Promise<Record<string, unknown> | null> {
   try { return JSON.parse(await fsp.readFile(convPath, 'utf8')); } catch { return null; }
-}
-
-function detectLoopsInConversation(conv: Record<string, unknown>): LoopIncident[] {
-  const entries = (conv.entries as Array<Record<string, unknown>>) ?? [];
-  const incidents: LoopIncident[] = [];
-  const turnTools = new Map<number, string[]>();
-  for (const entry of entries) {
-    if (entry.type === 'tool_call') {
-      const turn = (entry.turn as number) ?? 0;
-      const toolName = entry.toolName as string;
-      if (!turnTools.has(turn)) turnTools.set(turn, []);
-      turnTools.get(turn)!.push(toolName);
-    }
-  }
-  const turns = Array.from(turnTools.keys()).sort((a, b) => a - b);
-  for (let i = 0; i < turns.length - 2; i++) {
-    const t1 = turnTools.get(turns[i]!) ?? [];
-    const t2 = turnTools.get(turns[i + 1]!) ?? [];
-    const t3 = turnTools.get(turns[i + 2]!) ?? [];
-    if (t1.length > 0 && JSON.stringify(t1) === JSON.stringify(t2) && JSON.stringify(t2) === JSON.stringify(t3)) {
-      incidents.push({ runId: (conv.runId as string) ?? '', model: (conv.meta as Record<string, unknown>)?.model as string ?? '', turn: turns[i]!, tools: t1 });
-    }
-  }
-  return incidents;
 }
 
 export function createAnalyticsRouter(): Router {
@@ -185,7 +154,7 @@ export function createAnalyticsRouter(): Router {
         const result = await readResultFile(perModel.resultPath);
         const conv = await readConversationFile(perModel.conversationPath);
         if (conv) {
-          const loops = detectLoopsInConversation(conv);
+          const loops = detectTurnLoops(conv);
           allLoops.push(...loops);
         }
         const toolCalls = conv ? extractToolCallsFromConversation(conv) : [];
@@ -321,42 +290,58 @@ export function createAnalyticsRouter(): Router {
     res.json(trends);
   });
 
-  // ── GET /cost — Cost leaderboard ───────────────────────────────────────
+  // ── GET /cost — Cost leaderboard (cost_ledger + run_models, no file reads) ──
 
   router.get('/cost', async (req, res) => {
-    const runs = await listRuns();
-    const filterModel = req.query.model as string | undefined;
+    const db = getDrizzleDb();
+    const filterModel = typeof req.query.model === 'string' && req.query.model ? req.query.model : undefined;
+    const params = filterModel ? [filterModel] : [];
 
-    const modelStats = new Map<string, { runs: number; successes: number; totalCost: number; totalTokens: number }>();
+    const costRows = await db.all(sql.raw(`
+      SELECT model,
+        SUM(cost_usd) AS total_cost,
+        SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) AS total_tokens
+      FROM cost_ledger
+      ${filterModel ? 'WHERE model = ?' : ''}
+      GROUP BY model
+    `), ...params);
 
-    for (const run of runs) {
-      for (const perModel of run.perModel) {
-        if (filterModel && perModel.model !== filterModel) continue;
+    const runRows = await db.all(sql.raw(`
+      SELECT model,
+        COUNT(DISTINCT run_id) AS runs,
+        COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) AS successes
+      FROM run_models
+      ${filterModel ? 'WHERE model = ?' : ''}
+      GROUP BY model
+    `), ...params);
 
-        const result = await readResultFile(perModel.resultPath);
-        if (!result) continue;
-
-        const modelName = perModel.model;
-        const stats = modelStats.get(modelName) ?? { runs: 0, successes: 0, totalCost: 0, totalTokens: 0 };
-        stats.runs++;
-        if (result.success === true) stats.successes++;
-        stats.totalCost += (result.costUsd as number) ?? 0;
-        const tokenUsage = result.tokenUsage as Record<string, number> | undefined;
-        stats.totalTokens += (tokenUsage?.prompt ?? 0) + (tokenUsage?.completion ?? 0);
-        modelStats.set(modelName, stats);
-      }
+    const byModel = new Map<string, Record<string, number>>();
+    for (const c of costRows) {
+      byModel.set(c.model, { totalCost: Number(c.total_cost ?? 0), totalTokens: Number(c.total_tokens ?? 0) });
+    }
+    for (const r of runRows) {
+      const entry = byModel.get(r.model) ?? { totalCost: 0, totalTokens: 0 };
+      entry.runs = Number(r.runs ?? 0);
+      entry.successes = Number(r.successes ?? 0);
+      byModel.set(r.model, entry);
     }
 
-    const leaderboard = Array.from(modelStats.entries()).map(([model, stats]) => ({
-      model,
-      runs: stats.runs,
-      successes: stats.successes,
-      successRate: stats.runs > 0 ? stats.successes / stats.runs : 0,
-      totalCost: stats.totalCost,
-      costPerSuccess: stats.successes > 0 ? stats.totalCost / stats.successes : 0,
-      avgCostPerRun: stats.runs > 0 ? stats.totalCost / stats.runs : 0,
-      totalTokens: stats.totalTokens,
-    })).sort((a, b) => a.costPerSuccess - b.costPerSuccess);
+    const leaderboard = Array.from(byModel.entries()).map(([model, s]) => {
+      const runs = s.runs ?? 0;
+      const successes = s.successes ?? 0;
+      const totalCost = s.totalCost ?? 0;
+      const totalTokens = s.totalTokens ?? 0;
+      return {
+        model,
+        runs,
+        successes,
+        successRate: runs > 0 ? successes / runs : 0,
+        totalCost,
+        costPerSuccess: successes > 0 ? totalCost / successes : 0,
+        avgCostPerRun: runs > 0 ? totalCost / runs : 0,
+        totalTokens,
+      };
+    }).sort((a, b) => b.totalCost - a.totalCost);
 
     res.json({ leaderboard });
   });

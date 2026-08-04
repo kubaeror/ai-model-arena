@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { insertWebhook, listWebhooks, deleteWebhook, type NewWebhook } from '../../anomaly-detection/db.js';
-import { audit } from '../../auth/rbac.js';
+import { auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { INTERNAL_ERROR } from '../error-sanitizer.js';
 
@@ -31,7 +31,7 @@ export function createWebhooksRouter(): Router {
     try {
       const input: NewWebhook = { url, events, secret };
       const result = await insertWebhook(input);
-      audit((req as AuthedRequest).user?.sub ?? 'system', 'webhook.create', { type: 'webhook', id: String(result.id) }, undefined, { url, events }).catch(() => {});
+      auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'webhook.create', { type: 'webhook', id: String(result.id) }, undefined, { url, events });
       res.status(201).json({ webhook: result });
     } catch {
       res.status(500).json({ error: INTERNAL_ERROR });
@@ -50,7 +50,7 @@ export function createWebhooksRouter(): Router {
         res.status(404).json({ error: `Webhook ${id} not found` });
         return;
       }
-      audit((req as AuthedRequest).user?.sub ?? 'system', 'webhook.delete', { type: 'webhook', id: String(id) }).catch(() => {});
+      auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'webhook.delete', { type: 'webhook', id: String(id) });
       res.status(204).send();
     } catch {
       res.status(500).json({ error: INTERNAL_ERROR });

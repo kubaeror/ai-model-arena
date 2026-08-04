@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { audit, requireRole } from '../../auth/rbac.js';
+import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { z } from 'zod';
 import {
@@ -48,7 +48,7 @@ export function createOutputMappingsRouter(): Router {
       createdAt: timestamp, updatedAt: timestamp,
     });
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.create', { type: 'output_mapping', id }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.create', { type: 'output_mapping', id });
     res.status(201).json({ id, ...parsed.data, created_at: timestamp, updated_at: timestamp });
   });
 
@@ -82,7 +82,7 @@ export function createOutputMappingsRouter(): Router {
       updatedAt: timestamp,
     });
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.update', { type: 'output_mapping', id: mappingId }, existing, parsed.data).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.update', { type: 'output_mapping', id: mappingId }, existing, parsed.data);
     res.json({ id: mappingId, ...parsed.data });
   });
 
@@ -97,7 +97,7 @@ export function createOutputMappingsRouter(): Router {
 
     await deleteOutputMapping(deleteId);
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.delete', { type: 'output_mapping', id: deleteId }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.delete', { type: 'output_mapping', id: deleteId });
     res.json({ ok: true });
   });
 

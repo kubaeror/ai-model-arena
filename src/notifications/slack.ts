@@ -1,14 +1,19 @@
 import type { DispatchEvent, NotificationResult } from './types.js';
 import type { Logger } from '../types.js';
 
-export async function sendSlackNotification(
-  webhookUrl: string,
-  event: DispatchEvent,
-  logger?: Logger
-): Promise<NotificationResult> {
-  const timestamp = new Date().toISOString();
-  
-  const formatPayload = (evt: DispatchEvent): object => {
+function regressionSummary(data: Record<string, unknown>): string {
+  const regressions = data.regressions;
+  if (Array.isArray(regressions)) {
+    return regressions.map((r) => {
+      const x = r as { metric?: string; baseline?: number; current?: number };
+      return `${x.metric}`;
+    }).join(', ');
+  }
+  if (regressions == null) return 'n/a';
+  return JSON.stringify(regressions);
+}
+
+export function formatSlackPayload(evt: DispatchEvent): object {
     const { type, data } = evt;
     
     switch (type) {
@@ -28,15 +33,35 @@ export async function sendSlackNotification(
       }
       
       case 'onBudgetThreshold': {
-        const warnEmoji = data.threshold === '100%' ? '🚨' : '⚠️';
+        const percentUsed = Number(data.percentUsed ?? 0);
+        const spent = Number(data.spentUsd ?? data.spent ?? 0);
+        const limit = Number(data.limitUsd ?? data.limit ?? 0);
+        const warnEmoji = percentUsed >= 100 ? '🚨' : '⚠️';
+        const thresholdLabel = data.threshold != null ? String(data.threshold) : `${Math.min(percentUsed, 100)}%`;
         return {
-          text: `${warnEmoji} Budget Alert: ${data.threshold} threshold reached`,
+          text: `${warnEmoji} Budget Alert: ${thresholdLabel} threshold reached`,
           attachments: [{
             color: 'warning',
             fields: [
               { title: 'Model', value: String(data.model ?? 'global'), short: true },
-              { title: 'Spent', value: `$${Number(data.spent ?? 0).toFixed(2)}`, short: true },
-              { title: 'Limit', value: `$${Number(data.limit ?? 0).toFixed(2)}`, short: true },
+              { title: 'Spent', value: `$${spent.toFixed(2)}`, short: true },
+              { title: 'Limit', value: `$${limit.toFixed(2)}`, short: true },
+            ],
+          }],
+        };
+      }
+      
+      case 'onAnomalyDetected': {
+        return {
+          text: '⚠️ Anomaly Detected',
+          attachments: [{
+            color: 'warning',
+            fields: [
+              { title: 'Type', value: String(data.type ?? 'n/a'), short: true },
+              { title: 'Severity', value: String(data.severity ?? 'n/a'), short: true },
+              { title: 'Model', value: String(data.model ?? 'n/a'), short: true },
+              { title: 'Run', value: String(data.runId ?? 'n/a'), short: false },
+              { title: 'Description', value: String(data.description ?? 'n/a'), short: false },
             ],
           }],
         };
@@ -50,7 +75,7 @@ export async function sendSlackNotification(
             fields: [
               { title: 'Suite', value: String(data.suite ?? 'n/a'), short: true },
               { title: 'Model', value: String(data.model ?? 'n/a'), short: true },
-              { title: 'Regressions', value: String(data.regressions ?? 'n/a'), short: false },
+              { title: 'Regressions', value: regressionSummary(data), short: false },
             ],
           }],
         };
@@ -59,13 +84,20 @@ export async function sendSlackNotification(
       default:
         return { text: JSON.stringify(data) };
     }
-  };
+  }
+
+export async function sendSlackNotification(
+  webhookUrl: string,
+  event: DispatchEvent,
+  logger?: Logger
+): Promise<NotificationResult> {
+  const timestamp = new Date().toISOString();
   
   try {
     const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formatPayload(event)),
+      body: JSON.stringify(formatSlackPayload(event)),
     });
     
     if (!response.ok) {

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { audit } from '../../auth/rbac.js';
+import { auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { z } from 'zod';
 import {
@@ -87,7 +87,7 @@ export function createUsersRouter(): Router {
 
     await insertUser({ id, username: parsed.data.username, passwordHash: hash, createdAt: timestamp });
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'user.create', { type: 'user', id }, undefined, { username: parsed.data.username }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.create', { type: 'user', id }, undefined, { username: parsed.data.username });
     res.status(201).json({ id, username: parsed.data.username, created_at: timestamp, roles: [] });
   });
 
@@ -123,7 +123,7 @@ export function createUsersRouter(): Router {
       await updateUser(req.params.id, { passwordHash: hash });
     }
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'user.update', { type: 'user', id: req.params.id }, { username: existing.username }, parsed.data).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.update', { type: 'user', id: req.params.id }, { username: existing.username }, parsed.data);
     res.json({ ok: true });
   });
 
@@ -145,7 +145,7 @@ export function createUsersRouter(): Router {
 
     await deleteUserById(req.params.id);
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'user.delete', { type: 'user', id: req.params.id }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.delete', { type: 'user', id: req.params.id });
     res.json({ ok: true });
   });
 
@@ -183,7 +183,7 @@ export function createUsersRouter(): Router {
 
     await assignUserRole(req.params.id, parsed.data.roleId);
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'user.role.assign', { type: 'user', id: req.params.id }, undefined, { roleId: parsed.data.roleId }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.role.assign', { type: 'user', id: req.params.id }, undefined, { roleId: parsed.data.roleId });
     res.status(201).json({ ok: true });
   });
 
@@ -207,7 +207,7 @@ export function createUsersRouter(): Router {
 
     await unassignUserRole(req.params.id, req.params.roleId);
 
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'user.role.remove', { type: 'user', id: req.params.id }, undefined, { roleId: req.params.roleId }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.role.remove', { type: 'user', id: req.params.id }, undefined, { roleId: req.params.roleId });
     res.json({ ok: true });
   });
 

@@ -1,6 +1,6 @@
 import type { ProviderRow } from '../db/schema.js';
 import { getDrizzleDb } from '../db/index.js';
-import { providers, provider_versions } from '../db/schema.js';
+import { providers, provider_versions, model_providers } from '../db/schema.js';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import crypto from 'node:crypto';
 
@@ -85,6 +85,8 @@ export async function listCustomProviders(): Promise<ProviderRow[]> {
 
 export async function deleteCustomProvider(id: string): Promise<void> {
   const db = getDrizzleDb();
+  await db.delete(provider_versions).where(eq(provider_versions.provider_id, id));
+  await db.delete(model_providers).where(eq(model_providers.provider_id, id));
   await db.delete(providers).where(and(eq(providers.id, id), eq(providers.is_builtin, 0)));
 }
 

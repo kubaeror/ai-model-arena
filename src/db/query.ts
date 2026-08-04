@@ -14,25 +14,26 @@
  * The runtime API is identical — Drizzle handles the dialect differences.
  */
 
-import { eq, and, desc, sql, count, sum, max } from 'drizzle-orm';
+import { eq, and, desc, asc, sql, count, sum, max, inArray } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { getDrizzleDb } from './index.js';
 import {
   sessions, messages, model_calls,
-  runs, run_models, cost_ledger,
+  run_models, cost_ledger,
   files, audit_log, output_mappings,
   anomalies, webhooks,
   prompts, prompt_versions,
   users, roles, user_roles,
   providers, models, model_providers, pricing, pricing_snapshots,
-  model_runtime_stats, schedules, tool_call_stats,
+  schedules,
 } from './schema.js';
 import type {
   DbSession, DbMessage, DbModelCall,
-  DbRun, DbRunModel,
+  DbRunModel,
   DbAnomaly, DbWebhook,
   DbPrompt, DbPromptVersion,
   DbUser, DbRole,
-  DbProvider, DbPricing,
+  DbProvider,
   DbOutputMapping, DbSchedule, DbModel,
 } from './schema.js';
 
@@ -130,38 +131,10 @@ export async function getModelCallBySessionAndTurn(sessionId: string, turn: numb
 
 // ── Runs ──────────────────────────────────────────────────────────────────
 
-export async function getRunById(runId: string): Promise<DbRun | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(runs).where(eq(runs.run_id, runId)).limit(1);
-  return rows[0] ?? null;
-}
-
-export async function listRuns(): Promise<DbRun[]> {
-  const db = getDrizzleDb();
-  return db.select().from(runs).orderBy(desc(runs.started_at)) as any;
-}
-
 export async function listRunModels(runId?: string): Promise<DbRunModel[]> {
   const db = getDrizzleDb();
   if (runId) return db.select().from(run_models).where(eq(run_models.run_id, runId)) as any;
   return db.select().from(run_models).orderBy(run_models.run_id) as any;
-}
-
-export async function upsertRun(data: {
-  runId: string; scenario: string; models: string; startedAt: string;
-  finishedAt: string | null; status: string; source: string;
-  comparisonMdPath: string | null; comparisonJsonPath: string | null; createdBy?: string | null;
-}): Promise<void> {
-  const db = getDrizzleDb();
-  await db.insert(runs).values({
-    run_id: data.runId, scenario: data.scenario, models: data.models,
-    started_at: data.startedAt, finished_at: data.finishedAt, status: data.status, source: data.source,
-    comparison_md_path: data.comparisonMdPath, comparison_json_path: data.comparisonJsonPath,
-    created_by: data.createdBy ?? null,
-  }).onConflictDoUpdate({
-    target: runs.run_id,
-    set: { scenario: data.scenario, models: data.models, started_at: data.startedAt, finished_at: data.finishedAt, status: data.status, source: data.source, comparison_md_path: data.comparisonMdPath, comparison_json_path: data.comparisonJsonPath, created_by: data.createdBy ?? null },
-  });
 }
 
 export async function upsertRunModel(data: {
@@ -210,7 +183,7 @@ export async function transitionTaskState(
 ): Promise<void> {
   const db = getDrizzleDb();
   const now = new Date().toISOString();
-  const updates: Record<string, any> = { status: newStatus };
+  const updates: Partial<typeof run_models.$inferInsert> = { status: newStatus };
 
   switch (newStatus) {
     case 'claimed':
@@ -227,10 +200,9 @@ export async function transitionTaskState(
       break;
   }
 
-  // Use raw SQL for cross-driver compatibility with update + where clause
-  await db.run(
-    `UPDATE run_models SET ${Object.keys(updates).map(k => `${k} = ?`).join(', ')} WHERE run_id = ? AND model = ?`,
-    ...Object.values(updates), runId, model,
+  // Drizzle update — works on both SQLite and Postgres dialects.
+  await db.update(run_models).set(updates).where(
+    and(eq(run_models.run_id, runId), eq(run_models.model, model)),
   );
 }
 
@@ -342,32 +314,17 @@ export async function insertAnomaly(data: {
   return result[0] as DbAnomaly;
 }
 
-export async function getAnomalyById(id: number): Promise<DbAnomaly | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(anomalies).where(eq(anomalies.id, id)).limit(1);
-  return rows[0] ?? null;
-}
-
-export async function listAnomaliesByRun(runId: string): Promise<DbAnomaly[]> {
-  const db = getDrizzleDb();
-  return db.select().from(anomalies).where(eq(anomalies.run_id, runId)).orderBy(desc(anomalies.detected_at)) as any;
-}
-
-export async function resolveAnomalyQuery(id: number, resolvedAs: string): Promise<void> {
-  const db = getDrizzleDb();
-  await db.update(anomalies).set({
-    resolved: 1, resolved_at: new Date().toISOString(), resolved_as: resolvedAs,
-  }).where(eq(anomalies.id, id));
-}
-
 // ── Webhooks ──────────────────────────────────────────────────────────────
 
 export async function insertWebhook(data: {
   url: string; events: string; secret?: string | null; createdAt: string;
 }): Promise<DbWebhook> {
   const db = getDrizzleDb() as any;
+  // Encrypt the HMAC secret at rest (H5) — mirror anomaly-detection/db.ts.
+  const { encryptWebhookSecret } = await import('../security/webhook-secret-crypto.js');
+  const encryptedSecret = encryptWebhookSecret(data.secret ?? null);
   const result = await db.insert(webhooks).values({
-    url: data.url, events: data.events, secret: data.secret ?? null,
+    url: data.url, events: data.events, secret: encryptedSecret,
     created_at: data.createdAt, active: 1,
   }).returning();
   return result[0] as DbWebhook;
@@ -379,27 +336,7 @@ export async function listWebhooks(activeOnly = false): Promise<DbWebhook[]> {
   return db.select().from(webhooks).orderBy(desc(webhooks.created_at)) as any;
 }
 
-export async function getWebhookById(id: number): Promise<DbWebhook | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(webhooks).where(eq(webhooks.id, id)).limit(1);
-  return rows[0] ?? null;
-}
-
-export async function deleteWebhookById(id: number): Promise<boolean> {
-  const db = getDrizzleDb();
-  const result = await db.delete(webhooks).where(eq(webhooks.id, id));
-  return (result as any).changes > 0;
-}
-
 // ── Pricing ───────────────────────────────────────────────────────────────
-
-export async function getPricingByModelId(modelId: string): Promise<DbPricing | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(pricing)
-    .where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} IS NULL`))
-    .limit(1);
-  return rows[0] ?? null;
-}
 
 export async function getLatestPricingVersion(): Promise<string | null> {
   const db = getDrizzleDb();
@@ -422,6 +359,35 @@ export async function listDueSchedules(now: string): Promise<DbSchedule[]> {
 export async function updateScheduleRun(id: string, lastRun: string, nextRun: string): Promise<void> {
   const db = getDrizzleDb();
   await db.update(schedules).set({ last_run: lastRun, next_run: nextRun }).where(eq(schedules.id, id));
+}
+
+export interface ScheduleInput {
+  id: string;
+  scenario: string;
+  models: string[];
+  cron: string;
+  enabled: boolean;
+  createdAt?: string;
+}
+
+export async function insertSchedule(s: ScheduleInput): Promise<void> {
+  const db = getDrizzleDb();
+  const existing = await db.select({ id: schedules.id }).from(schedules).where(eq(schedules.id, s.id)).limit(1);
+  if (existing.length > 0) return;
+  await db.insert(schedules).values({
+    id: s.id, scenario: s.scenario, models: JSON.stringify(s.models),
+    cron: s.cron, enabled: s.enabled ? 1 : 0, created_at: s.createdAt ?? new Date().toISOString(),
+  });
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  const db = getDrizzleDb();
+  await db.delete(schedules).where(eq(schedules.id, id));
+}
+
+export async function listSchedules(): Promise<DbSchedule[]> {
+  const db = getDrizzleDb();
+  return db.select().from(schedules) as any;
 }
 
 // ── Providers (custom) ────────────────────────────────────────────────────
@@ -524,64 +490,6 @@ export async function countRoles(): Promise<number> {
   return rows[0]?.cnt ?? 0;
 }
 
-// ── Config table queries (raw-style for dynamic WHERE) ────────────────────
-
-export async function queryTable(
-  tableName: string,
-  whereClauses: string[],
-  params: Record<string, unknown>,
-  orderBy?: string,
-  limit?: number,
-  offset?: number,
-): Promise<Record<string, unknown>[]> {
-  const db = getDrizzleDb() as any;
-  let query = `SELECT * FROM ${tableName}`;
-  if (whereClauses.length) query += ` WHERE ${whereClauses.join(' AND ')}`;
-  if (orderBy) query += ` ORDER BY ${orderBy}`;
-  if (limit != null) query += ` LIMIT ${limit}`;
-  if (offset != null) query += ` OFFSET ${offset}`;
-  return db.run(query).values(params) as any;
-}
-
-// ── Model runtime stats ───────────────────────────────────────────────────
-
-export async function upsertModelRuntimeStat(data: {
-  modelId: string; runId: string; latencyP50Ms: number | null;
-  latencyP95Ms: number | null; tps: number | null;
-  cacheHitRate: number | null; cacheReadTokens: number | null;
-  cacheWriteTokens: number | null; costUsd: number | null;
-  success: number; measuredAt: string;
-}): Promise<void> {
-  const db = getDrizzleDb();
-  await db.insert(model_runtime_stats).values({
-    model_id: data.modelId, run_id: data.runId,
-    latency_p50_ms: data.latencyP50Ms, latency_p95_ms: data.latencyP95Ms,
-    tps: data.tps, cache_hit_rate: data.cacheHitRate,
-    cache_read_tokens: data.cacheReadTokens, cache_write_tokens: data.cacheWriteTokens,
-    cost_usd: data.costUsd, success: data.success, measured_at: data.measuredAt,
-  }).onConflictDoUpdate({
-    target: [model_runtime_stats.model_id, model_runtime_stats.run_id],
-    set: {
-      latency_p50_ms: data.latencyP50Ms, latency_p95_ms: data.latencyP95Ms,
-      tps: data.tps, cache_hit_rate: data.cacheHitRate,
-      cache_read_tokens: data.cacheReadTokens, cache_write_tokens: data.cacheWriteTokens,
-      cost_usd: data.costUsd, success: data.success, measured_at: data.measuredAt,
-    },
-  });
-}
-
-export async function insertToolCallStat(data: {
-  runId: string; model: string; toolName: string;
-  total: number; successCount: number; failCount: number; recordedAt: string;
-}): Promise<void> {
-  const db = getDrizzleDb();
-  await db.insert(tool_call_stats).values({
-    run_id: data.runId, model: data.model, tool_name: data.toolName,
-    total: data.total, success_count: data.successCount,
-    fail_count: data.failCount, recorded_at: data.recordedAt,
-  });
-}
-
 // ── Anomaly counts ────────────────────────────────────────────────────────
 
 export async function anomalyCountsByModel(): Promise<Array<{ model: string; total: number; unresolved: number }>> {
@@ -607,31 +515,72 @@ function providersTable() {
 // ── Dashboard: generic paginated query helpers ────────────────────────────
 
 /**
- * Run a parametrized raw-SQL select with COUNT, then SELECT with LIMIT/OFFSET.
- * Safe for both SQLite and Postgres — uses Drizzle's sql template literal
- * so dialect differences are handled per-driver.
+ * Resolve an `orderBy` string against a per-table column map, returning Drizzle
+ * order expressions. Never interpolates raw identifiers into SQL. Each
+ * comma-separated segment must be a key of `columns` (optionally suffixed with
+ * ` ASC`/` DESC`); segments without an explicit direction use `dir` (or asc).
  */
-export async function paginatedQuery(opts: {
-  table: string;
-  select?: string;
-  whereClause: string;
-  params: unknown[];
-  orderBy: string;
-  limit: number;
-  offset: number;
-}): Promise<{ rows: any[]; total: number }> {
+function resolveOrderBy(
+  columns: Record<string, SQL>,
+  orderBy: string | undefined,
+  dir: 'asc' | 'desc' | undefined,
+): SQL[] {
+  const segments = (orderBy ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (segments.length === 0) {
+    const first = Object.keys(columns)[0]!;
+    return [dir === 'desc' ? desc(columns[first]!) : asc(columns[first]!)];
+  }
+  const out: SQL[] = [];
+  for (const segment of segments) {
+    const m = /^(.+?)\s+(ASC|DESC)$/i.exec(segment);
+    const key = (m ? m[1]! : segment).trim();
+    const column = columns[key];
+    if (!column) {
+      throw new Error(`Refusing to sort by unknown column: ${JSON.stringify(key)}`);
+    }
+    const d = m ? m[2]!.toLowerCase() as 'asc' | 'desc' : (dir ?? 'asc');
+    out.push(d === 'desc' ? desc(column) : asc(column));
+  }
+  return out;
+}
+
+/**
+ * Paginate a table with Drizzle: total `count(*)` + `SELECT ... LIMIT/OFFSET`.
+ *
+ * `orderBy` is whitelisted against `columns` (no raw identifiers in SQL).
+ * `offset` takes precedence over `page` when both are provided (route callers
+ * speak limit/offset; tests speak page/pageSize).
+ */
+export async function paginate<T extends Record<string, unknown>>(
+  table: any,
+  columns: Record<string, any>,
+  q: {
+    page?: number;
+    pageSize: number;
+    offset?: number;
+    orderBy?: string;
+    dir?: 'asc' | 'desc';
+    where?: SQL;
+  },
+): Promise<{ rows: T[]; total: number }> {
   const db = getDrizzleDb();
-  const cols = opts.select ?? '*';
-  const countRows: any[] = await db.all(
-    sql.raw(`SELECT COUNT(*) AS total FROM ${opts.table} WHERE ${opts.whereClause}`),
-    ...opts.params,
-  );
-  const total = Number(countRows[0]?.total ?? 0);
-  const rows = await db.all(
-    sql.raw(`SELECT ${cols} FROM ${opts.table} WHERE ${opts.whereClause} ORDER BY ${opts.orderBy} LIMIT ? OFFSET ?`),
-    ...opts.params, opts.limit, opts.offset,
-  );
-  return { rows, total };
+  const pageSize = Math.max(q.pageSize, 1);
+  const page = Math.max(q.page ?? 1, 1);
+  const offset = q.offset ?? (page - 1) * pageSize;
+  const conds = q.where;
+  const countRows = await db.select({ count: count() }).from(table).where(conds);
+  const total = (countRows[0]?.count ?? 0) as number;
+  const order = resolveOrderBy(columns, q.orderBy, q.dir);
+  const rows = await db.select()
+    .from(table)
+    .where(conds)
+    .orderBy(...order)
+    .limit(pageSize)
+    .offset(offset);
+  return { rows: rows as T[], total };
 }
 
 // ── Dashboard: prompts helpers ────────────────────────────────────────────
@@ -745,7 +694,7 @@ export async function getUserRolesByUserId(userId: string): Promise<any[]> {
 
 export async function assignUserRole(userId: string, roleId: string): Promise<void> {
   const db = getDrizzleDb();
-  await db.run(sql.raw('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)'), userId, roleId);
+  await db.insert(user_roles).values({ user_id: userId, role_id: roleId }).onConflictDoNothing();
 }
 
 export async function unassignUserRole(userId: string, roleId: string): Promise<void> {
@@ -767,14 +716,14 @@ export async function countUserRoles(roleId?: string, userId?: string): Promise<
 
 export async function insertRole(data: { id: string; description: string }): Promise<void> {
   const db = getDrizzleDb();
-  await db.run(sql.raw('INSERT OR IGNORE INTO roles (id, description) VALUES (?, ?)'), data.id, data.description);
+  await db.insert(roles).values({ id: data.id, description: data.description }).onConflictDoNothing();
 }
 
 // ── Dashboard: catalog + model helpers ────────────────────────────────────
 
 export async function listCatalogModels(filters: {
   provider?: string; reasoning?: boolean; toolCall?: boolean;
-  minContext?: number; sort?: string;
+  minContext?: number; sort?: string; q?: string;
 }): Promise<any[]> {
   const db = getDrizzleDb();
   const where: string[] = [];
@@ -783,6 +732,7 @@ export async function listCatalogModels(filters: {
   if (filters.reasoning) where.push('m.reasoning = 1');
   if (filters.toolCall) where.push('m.tool_call = 1');
   if (filters.minContext != null) { where.push('m.context_limit >= ?'); params.push(filters.minContext); }
+  if (filters.q) { where.push('lower(m.name) LIKE ?'); params.push(`%${filters.q.toLowerCase()}%`); }
   const sort = filters.sort === 'context' ? 'm.context_limit DESC' : 'm.name ASC';
   return db.all(sql.raw(`
     SELECT m.id, m.name, m.family, m.provider_id, m.release_date, m.attachment, m.reasoning, m.temperature,
@@ -810,7 +760,7 @@ export async function getCostSummary(groupBy: 'model' | 'day', model?: string): 
   const params: any[] = [];
   let query: string;
   if (groupBy === 'day') {
-    query = `SELECT date(recorded_at) AS period, model, SUM(cost_usd) AS total_cost, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, COUNT(*) AS entry_count FROM cost_ledger WHERE ${model ? 'model = ?' : '1=1'} GROUP BY period, model ORDER BY period DESC, model ASC`;
+    query = `SELECT substr(recorded_at, 1, 10) AS period, model, SUM(cost_usd) AS total_cost, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, COUNT(*) AS entry_count FROM cost_ledger WHERE ${model ? 'model = ?' : '1=1'} GROUP BY period, model ORDER BY period DESC, model ASC`;
   } else {
     query = `SELECT model, SUM(cost_usd) AS total_cost, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, COUNT(*) AS entry_count FROM cost_ledger WHERE ${model ? 'model = ?' : '1=1'} GROUP BY model ORDER BY total_cost DESC`;
   }
@@ -859,22 +809,39 @@ export async function listSessionsWithCounts(opts: {
   status?: string; model?: string; limit: number; offset: number;
 }): Promise<{ sessions: any[]; total: number }> {
   const db = getDrizzleDb();
-  const where: string[] = ['1=1'];
-  const params: any[] = [];
-  if (opts.status) { where.push('s.status = ?'); params.push(opts.status); }
-  if (opts.model) { where.push('s.model = ?'); params.push(opts.model); }
-  const w = where.join(' AND ');
-  const countRows = await db.all(sql.raw(`SELECT COUNT(*) AS total FROM sessions s WHERE ${w}`), ...params);
-  const rows = await db.all(sql.raw(`
-    SELECT s.id, s.prompt_id, s.prompt_version, s.model, s.status, s.created_at, s.updated_at,
-      (SELECT COUNT(*) FROM messages WHERE session_id = s.id) AS message_count,
-      (SELECT COUNT(*) FROM model_calls WHERE session_id = s.id) AS call_count
-    FROM sessions s
-    WHERE ${w}
-    ORDER BY s.created_at DESC
-    LIMIT ? OFFSET ?
-  `), ...params, opts.limit, opts.offset);
-  return { sessions: rows, total: Number(countRows[0]?.total ?? 0) };
+  const conds: SQL[] = [];
+  if (opts.status) conds.push(eq(sessions.status, opts.status));
+  if (opts.model) conds.push(eq(sessions.model, opts.model));
+  const where = conds.length ? and(...conds) : undefined;
+
+  const { rows, total } = await paginate(sessions, {
+    id: sessions.id,
+    model: sessions.model,
+    status: sessions.status,
+    created_at: sessions.created_at,
+    updated_at: sessions.updated_at,
+  }, {
+    orderBy: 'created_at',
+    dir: 'desc',
+    pageSize: opts.limit,
+    offset: opts.offset,
+    where,
+  });
+
+  const ids = (rows as Array<{ id: string }>).map(r => r.id);
+  const groups = async (table: any, col: any) =>
+    ids.length
+      ? db.select({ sessionId: col, c: count() }).from(table).where(inArray(col, ids)).groupBy(col)
+      : [];
+  const msgCounts = new Map((await groups(messages, messages.session_id)).map((g: any) => [g.sessionId, g.c]));
+  const callCounts = new Map((await groups(model_calls, model_calls.session_id)).map((g: any) => [g.sessionId, g.c]));
+
+  const result = (rows as Array<{ id: string }>).map(r => ({
+    ...r,
+    message_count: msgCounts.get(r.id) ?? 0,
+    call_count: callCounts.get(r.id) ?? 0,
+  }));
+  return { sessions: result, total };
 }
 
 export async function getSessionWithCounts(sessionId: string): Promise<any | null> {

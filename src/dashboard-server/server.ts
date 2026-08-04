@@ -44,7 +44,6 @@ import { createOutputMappingsRouter } from './routes/output-mappings.js';
 import { createSessionsRouter } from './routes/sessions.js';
 import { createUsersRouter } from './routes/users.js';
 import { createAuditRouter } from './routes/audit.js';
-import { createCostRouter } from './routes/cost.js';
 import { createFilesRouter } from './routes/files.js';
 import { attachStreamWs } from './routes/stream.js';
 import { mountOpenApi } from './openapi.js';
@@ -58,19 +57,13 @@ function clientDist(): string {
 async function start(): Promise<void> {
   startOtel();
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
+  // loadAuthConfig() throws in production if DASHBOARD_PASSWORD is unset, and
+  // writes a generated dev password to <OUTPUT_ROOT>/.admin-password in dev.
+  // The plaintext password is never printed to stderr (where log aggregators
+  // would capture it).
   const auth = loadAuthConfig();
   if (auth.generatedPassword) {
-    process.stderr.write(
-      '\n' +
-      '╔══════════════════════════════════════════════════════════════════╗\n' +
-      '║  WARNING: No DASHBOARD_PASSWORD set — generated a one-time      ║\n' +
-      '║  admin password. This password will NOT be shown again and is   ║\n' +
-      '║  NOT written to logs. Save it now or set DASHBOARD_PASSWORD in  ║\n' +
-      '║  your environment to a known value.                              ║\n' +
-      `║  Password: ${auth.generatedPassword.padEnd(48)}║\n` +
-      '╚══════════════════════════════════════════════════════════════════╝\n\n',
-    );
-    logger.warn('No DASHBOARD_PASSWORD set — a one-time password was generated (see stderr output). It will not be shown again.');
+    logger.warn('No DASHBOARD_PASSWORD set — generated a one-time admin password written to <OUTPUT_ROOT>/.admin-password. Set DASHBOARD_PASSWORD explicitly.');
   }
   const root = findProjectRoot();
   const allowedOrigins = (process.env.DASHBOARD_CORS_ORIGIN ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -88,6 +81,12 @@ async function start(): Promise<void> {
     }
   }
   startCatalogCron(logger);
+
+  // Boot: mirror YAML schedules into the `schedules` DB table so the
+  // scheduler CronJob ticks real rows. Non-fatal — the job self-heals by
+  // re-syncing on add/remove, and a missing/empty YAML sync is a warning.
+  const { syncSchedulesToDb } = await import('../scheduler/manager.js');
+  await syncSchedulesToDb(path.join(root, 'configs', 'schedules.yaml'), logger);
 
   const app = express();
   const corsOrigins = allowedOrigins.length
@@ -257,7 +256,6 @@ async function start(): Promise<void> {
   app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
 
   // ── Cost ledger (viewer for reads) ────────────────────────────────────
-  app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
 
   // ── Files listing (viewer for reads) ─────────────────────────────────
   app.use('/api/files', requireAuth(auth), requireRole('viewer'), createFilesRouter());
@@ -304,7 +302,6 @@ async function start(): Promise<void> {
   app.use('/api/v1/budget', requireApiKey(['budget:read']), createBudgetRouter());
   app.use('/api/v1/schedules', requireApiKey(['schedules:read']), createSchedulesRouter());
   app.use('/api/v1/regression', requireApiKey(['regression:execute']), createRegressionRouter());
-  app.use('/api/v1/cost', requireApiKey(['cost:read']), createCostRouter());
   app.use('/api/v1/files', requireApiKey(['files:read']), createFilesRouter());
   app.use('/api/v1/sessions', requireApiKey(['sessions:read']), createSessionsRouter());
   app.use('/api/v1/prompts', requireApiKey(['prompts:read']), createPromptsRouter());
@@ -335,8 +332,9 @@ async function start(): Promise<void> {
   }
 
   const server = http.createServer(app);
-  // Session-scoped stream WebSocket (runner ↔ dashboard relay)
-  attachStreamWs(server);
+  // Session-scoped stream WebSocket (runner ↔ dashboard relay). Authenticated
+  // via verifyClient — mirrors LiveHub's auth pattern.
+  attachStreamWs(server, auth);
   // WebSocket gateway (auth via token in Sec-WebSocket-Protocol).
   const hub = new LiveHub(server, auth);
 

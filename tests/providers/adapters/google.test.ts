@@ -58,8 +58,8 @@ test('GoogleAdapter.sendMessage parses functionCall', async () => {
   }
 });
 
-test('GoogleAdapter.supportsStreaming returns true', () => {
+test('GoogleAdapter.supportsStreaming returns false without a stream implementation', () => {
   const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
-  assert.equal(adapter.supportsStreaming(), true);
+  assert.equal(adapter.supportsStreaming(), false);
   assert.equal(adapter.supportsPromptCaching(), true);
 });

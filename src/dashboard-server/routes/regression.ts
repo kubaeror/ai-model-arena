@@ -9,6 +9,7 @@ import { listRuns } from '../../orchestrator/orchestrator.js';
 import { RegressionSuiteConfigSchema, type RegressionSuiteConfig } from '../../evaluation/regression-config.js';
 import { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath } from '../../evaluation/regression.js';
 import { initDb } from '../../db/index.js';
+import { isWithin } from '../../sandbox/sandbox.js';
 
 function regressionDir(): string {
   return path.join(findProjectRoot(), 'configs', 'regression');
@@ -20,8 +21,32 @@ function listSuites(): string[] {
   return fs.readdirSync(dir).filter((f) => f.endsWith('.yaml') || f.endsWith('.yml')).map((f) => f.replace(/\.(yaml|yml)$/, ''));
 }
 
+/**
+ * Resolve a bare suite name to a safe filesystem path inside regressionDir.
+ *
+ * Previously loadSuiteConfig() did `path.join(regressionDir(), \`${suiteName}.yaml\`)`
+ * with no validation on suiteName. Express URL-decodes route params, so a
+ * request like `GET /api/regression/suites/..%2F..%2Fapi-keys` would resolve
+ * to `configs/api-keys.yaml` — letting any viewer-role user read arbitrary
+ * YAML files under the project root (including configs/api-keys.yaml with
+ * API-key definitions and HMAC secrets).
+ *
+ * This helper enforces a bare alphanumeric suite name and isWithin() on the
+ * resolved path, matching the scenarios.ts resolveAndValidate pattern.
+ *
+ * @returns the validated path, or null if the name is invalid or escapes
+ *          regressionDir.
+ */
+export function resolveSuitePath(suiteName: string): string | null {
+  if (!/^[a-zA-Z0-9_-]+$/.test(suiteName)) return null;
+  const resolved = path.join(regressionDir(), `${suiteName}.yaml`);
+  if (!isWithin(regressionDir(), resolved)) return null;
+  return resolved;
+}
+
 function loadSuiteConfig(suiteName: string): RegressionSuiteConfig | null {
-  const p = path.join(regressionDir(), `${suiteName}.yaml`);
+  const p = resolveSuitePath(suiteName);
+  if (!p) return null;
   if (!fs.existsSync(p)) return null;
   try {
     return RegressionSuiteConfigSchema.parse(load(fs.readFileSync(p, 'utf8')));

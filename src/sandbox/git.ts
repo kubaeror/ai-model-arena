@@ -134,25 +134,6 @@ export class SandboxGit {
     }
   }
   
-  async getLog(): Promise<Array<{ hash: string; message: string; author: string; date: string }>> {
-    if (!this.initialized) return [];
-    
-    try {
-      const result = await this.git(['log', '--pretty=format:%H|%s|%an|%cd', '--date=iso']);
-      return result.stdout.trim().split('\n').filter(Boolean).map(line => {
-        const parts = line.split('|');
-        return {
-          hash: parts[0] ?? '',
-          message: parts[1] ?? '',
-          author: parts[2] ?? '',
-          date: parts[3] ?? '',
-        };
-      });
-    } catch {
-      return [];
-    }
-  }
-  
   getInitialCommitHash(): string | null {
     return this.initialCommitHash;
   }

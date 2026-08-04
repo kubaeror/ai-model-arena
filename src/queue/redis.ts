@@ -4,6 +4,7 @@ import type { Task, TaskQueue } from './types.js';
 import type { RedisQueueConfig } from './redis-config.js';
 import { parseTask, safeParseTask } from './task-schema.js';
 import { streamKey, dlqStreamKey } from './router.js';
+import { queueDepth } from '../observability/metrics.js';
 
 export class RedisStreamQueue implements TaskQueue {
   private redis: Redis;
@@ -19,8 +20,18 @@ export class RedisStreamQueue implements TaskQueue {
       },
       connectTimeout: 10_000,
       lazyConnect: false,
+      protocol: 2,
     });
     this.startReclaimLoop();
+  }
+
+  private async setQueueDepthGauge(): Promise<void> {
+    const provider = this.config.providerFilter;
+    if (!provider) return;
+    const stream = streamKey(this.config.streamPrefix, provider);
+    try {
+      queueDepth.set({ provider }, await this.redis.xlen(stream));
+    } catch { /* best-effort — never fail queue ops */ }
   }
 
   private startReclaimLoop(): void {
@@ -128,6 +139,7 @@ export class RedisStreamQueue implements TaskQueue {
     const fields: (string | number)[] = ['task', JSON.stringify(task)];
     if (task._traceparent) fields.push('traceparent', task._traceparent);
     await this.redis.xadd(stream, '*', ...fields);
+    void this.setQueueDepthGauge();
   }
 
   async dequeue(timeoutMs = 30000): Promise<Task | null> {
@@ -169,6 +181,7 @@ export class RedisStreamQueue implements TaskQueue {
     if (!provider) return;
     const stream = streamKey(this.config.streamPrefix, provider);
     await this.redis.xack(stream, this.config.consumerGroup, taskId);
+    void this.setQueueDepthGauge();
   }
 
   async nack(taskId: string, reason?: string): Promise<void> {
@@ -262,6 +275,7 @@ export class RedisStreamQueue implements TaskQueue {
         await this.redis.xdel(stream, taskId);
       }
     }
+    void this.setQueueDepthGauge();
   }
 
   async size(): Promise<number> {
@@ -321,6 +335,7 @@ export class RedisStreamQueue implements TaskQueue {
 
     // Delete from DLQ
     await this.redis.xdel(dlqStream, taskId);
+    void this.setQueueDepthGauge();
   }
 
   async close(): Promise<void> {

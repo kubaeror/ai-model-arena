@@ -1,6 +1,7 @@
 import { getDrizzleDb } from '../db/index.js';
 import { anomalies, webhooks } from '../db/schema.js';
 import { eq, and, desc, sql, count, sum } from 'drizzle-orm';
+import { encryptWebhookSecret, decryptWebhookSecret } from '../security/webhook-secret-crypto.js';
 
 export type AnomalyType =
   | 'latency'
@@ -144,8 +145,12 @@ export interface NewWebhook {
 export async function insertWebhook(input: NewWebhook): Promise<WebhookRecord> {
   const db = getDrizzleDb();
   const createdAt = new Date().toISOString();
+  // Encrypt the HMAC secret at rest (H5). Previously stored in plaintext,
+  // readable by anyone with DB read access (or via the S5 regression
+  // path-traversal before that fix).
+  const encryptedSecret = encryptWebhookSecret(input.secret ?? null);
   const result = await db.insert(webhooks).values({
-    url: input.url, events: input.events.join(','), secret: input.secret ?? null,
+    url: input.url, events: input.events.join(','), secret: encryptedSecret,
     created_at: createdAt, active: 1,
   }).returning();
   return webhookRowToRecord(result[0]);
@@ -165,7 +170,10 @@ function webhookRowToRecord(row: Record<string, unknown>): WebhookRecord {
 export async function getWebhookSecret(id: number): Promise<string | null> {
   const db = getDrizzleDb();
   const rows = await db.select({ secret: webhooks.secret }).from(webhooks).where(eq(webhooks.id, id)).limit(1);
-  return (rows[0]?.secret as string) ?? null;
+  const stored = (rows[0]?.secret as string | null) ?? null;
+  // Decrypt at read time (H5). Accepts both v1: ciphertext and legacy
+  // plaintext (no prefix) for backward compatibility.
+  return decryptWebhookSecret(stored);
 }
 
 export async function listWebhooks(activeOnly = false): Promise<WebhookRecord[]> {

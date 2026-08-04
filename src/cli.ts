@@ -5,7 +5,6 @@
  * Commands:
  *   ai-arena run --scenario <name> --models gpt-4o,claude-3.7
  *   ai-arena status
- *   ai-arena logs --model <name> [--lines N]
  *   ai-arena cleanup
  *   ai-arena regress --suite <name>
  *   ai-arena schedule create/list/remove
@@ -25,7 +24,6 @@ import { listRuns, getRunRecord } from './orchestrator/run-index.js';
 import {
   runScenarioForModels,
   printStatus,
-  tailLogs,
   cleanupArena,
 } from './orchestrator/orchestrator.js';
 import { loadSchedulesConfig, getSchedules, addSchedule, removeSchedule } from './scheduler/manager.js';
@@ -47,7 +45,7 @@ function rootDir(): string {
 // ── run ────────────────────────────────────────────────────────────────────
 program
   .command('run')
-  .description('Run a scenario against one or more models concurrently (one PM2 worker each).')
+  .description('Run a scenario against one or more models concurrently (one queued task each).')
   .requiredOption('-s, --scenario <name>', 'Scenario name (configs/scenarios/<name>.yaml) or a .yaml path')
   .requiredOption('-m, --models <list>', 'Comma-separated model names from configs/models.yaml')
   .option('--models-config <path>', 'Path to models.yaml (default: configs/models.yaml)')
@@ -115,21 +113,6 @@ program
       await printStatus();
     } catch (err) {
       console.error(`status failed: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  });
-
-// ── logs ────────────────────────────────────────────────────────────────────
-program
-  .command('logs')
-  .description('Show the latest PM2 log file for a model.')
-  .requiredOption('-m, --model <name>', 'Model name whose logs to tail')
-  .option('-n, --lines <n>', 'Number of trailing lines to show (default: 200)', (v) => Number(v))
-  .action(async (opts) => {
-    try {
-      await tailLogs(opts.model, opts.lines ?? 200);
-    } catch (err) {
-      console.error(`logs failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
   });
@@ -264,7 +247,7 @@ scheduleCmd
   .requiredOption('-c, --cron <expr>', 'Cron expression')
   .option('--id <id>', 'Schedule ID (auto-generated if not provided)')
   .option('--disabled', 'Create as disabled', false)
-  .action((opts) => {
+  .action(async (opts) => {
     const root = rootDir();
     const configPath = path.join(root, 'configs', 'schedules.yaml');
     const models = String(opts.models).split(',').map((m: string) => m.trim()).filter(Boolean);
@@ -279,7 +262,7 @@ scheduleCmd
     };
     
     try {
-      addSchedule(configPath, schedule);
+      await addSchedule(configPath, schedule);
       console.log(`\nSchedule created: ${id}`);
       console.log(`  Scenario: ${opts.scenario}`);
       console.log(`  Models: ${models.join(', ')}`);
@@ -294,10 +277,10 @@ scheduleCmd
   .command('remove')
   .description('Remove a scheduled job.')
   .requiredOption('-i, --id <id>', 'Schedule ID')
-  .action((opts) => {
+  .action(async (opts) => {
     const root = rootDir();
     const configPath = path.join(root, 'configs', 'schedules.yaml');
-    if (removeSchedule(configPath, opts.id)) {
+    if (await removeSchedule(configPath, opts.id)) {
       console.log(`\nSchedule removed: ${opts.id}\n`);
     } else {
       console.error(`Schedule not found: ${opts.id}`);

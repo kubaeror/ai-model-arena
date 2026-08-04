@@ -1,5 +1,3 @@
-import path from 'node:path';
-import { findProjectRoot } from '../paths.js';
 import { getDrizzleDb } from './index.js';
 import { runs, run_models } from './schema.js';
 import { eq, desc } from 'drizzle-orm';
@@ -80,15 +78,9 @@ function dbToPm(row: any): RunIndexModelEntry {
   };
 }
 
-export function indexPath(): string {
-  return path.join(findProjectRoot(), 'outputs', 'runs-index.json');
-}
-
 export async function loadRunIndex(): Promise<RunIndexFile> {
   return { runs: await listRuns() };
 }
-
-export function saveRunIndex(_idx: RunIndexFile): void {}
 
 export async function listRuns(): Promise<RunIndexRecord[]> {
   const db = getDrizzleDb();

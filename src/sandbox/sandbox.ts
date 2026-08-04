@@ -27,11 +27,6 @@ export class Sandbox {
       dereference: true,
     });
   }
-
-  /** Resolve a (relative) path inside the sandbox, throwing on escape. */
-  resolvePath(relativePath: string): string {
-    return safeResolve(this.dir, relativePath);
-  }
 }
 
 /**

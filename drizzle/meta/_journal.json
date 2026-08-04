@@ -59,17 +59,17 @@
       "breakpoints": true
     },
     {
-      "idx": 8,
-      "version": "6",
-      "when": 1784674100000,
-      "tag": "0009_pricing_snapshots",
-      "breakpoints": true
-    },
-    {
       "idx": 9,
       "version": "6",
       "when": 1785273549223,
       "tag": "0009_panoramic_spiral",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785760642270,
+      "tag": "0010_outgoing_maddog",
       "breakpoints": true
     }
   ]

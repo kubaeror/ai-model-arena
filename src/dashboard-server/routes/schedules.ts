@@ -43,7 +43,7 @@ export function createSchedulesRouter(): Router {
     res.json({ ...schedule, state: state ?? null });
   });
 
-  router.post('/', requireRole('admin'), (req, res) => {
+  router.post('/', requireRole('admin'), async (req, res) => {
     const { id, scenario, models, cron, enabled, options } = req.body ?? {};
     if (!scenario || !Array.isArray(models) || !cron) {
       res.status(400).json({ error: 'scenario (string), models (string[]), and cron (string) are required' });
@@ -51,7 +51,7 @@ export function createSchedulesRouter(): Router {
     }
     try {
       const scheduleId = id || `schedule-${Date.now()}`;
-      addSchedule(configPath(), {
+      await addSchedule(configPath(), {
         id: scheduleId,
         scenario: String(scenario),
         models: models.filter((m: unknown): m is string => typeof m === 'string'),
@@ -65,8 +65,8 @@ export function createSchedulesRouter(): Router {
     }
   });
 
-  router.delete('/:id', requireRole('admin'), (req, res) => {
-    const ok = removeSchedule(configPath(), req.params.id as string, logger);
+  router.delete('/:id', requireRole('admin'), async (req, res) => {
+    const ok = await removeSchedule(configPath(), req.params.id as string, logger);
     if (!ok) {
       res.status(404).json({ error: 'Schedule not found' });
       return;

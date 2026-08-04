@@ -1,5 +1,16 @@
 import { Router } from 'express';
-import { paginatedQuery } from '../../db/query.js';
+import { and, eq } from 'drizzle-orm';
+import { paginate } from '../../db/query.js';
+import { files } from '../../db/schema.js';
+
+const fileColumns = {
+  id: files.id,
+  run_id: files.run_id,
+  prompt_id: files.prompt_id,
+  model: files.model,
+  produced_at: files.produced_at,
+  produced_by_tool: files.produced_by_tool,
+};
 
 export function createFilesRouter(): Router {
   const router = Router();
@@ -13,20 +24,17 @@ export function createFilesRouter(): Router {
     const promptId = typeof req.query.promptId === 'string' ? req.query.promptId : undefined;
     const tool = typeof req.query.tool === 'string' ? req.query.tool : undefined;
 
-    const clauses: string[] = ['1=1'];
-    const params: unknown[] = [];
+    const conds = [];
+    if (model) conds.push(eq(files.model, model));
+    if (runId) conds.push(eq(files.run_id, runId));
+    if (promptId) conds.push(eq(files.prompt_id, promptId));
+    if (tool) conds.push(eq(files.produced_by_tool, tool));
 
-    if (model) { clauses.push('model = ?'); params.push(model); }
-    if (runId) { clauses.push('run_id = ?'); params.push(runId); }
-    if (promptId) { clauses.push('prompt_id = ?'); params.push(promptId); }
-    if (tool) { clauses.push('produced_by_tool = ?'); params.push(tool); }
-
-    const { rows, total } = await paginatedQuery({
-      table: 'files',
-      whereClause: clauses.join(' AND '),
-      params,
-      orderBy: 'produced_at DESC',
-      limit,
+    const { rows, total } = await paginate(files, fileColumns, {
+      where: conds.length ? and(...conds) : undefined,
+      orderBy: 'produced_at',
+      dir: 'desc',
+      pageSize: limit,
       offset,
     });
 

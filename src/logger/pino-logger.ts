@@ -28,8 +28,7 @@ const REDACT_PATHS: string[] = [
 
 /**
  * Create a structured (JSON) logger backed by pino, writing to stdout.
- * PM2 captures the worker's stdout/stderr into per-run log files, so this
- * also satisfies the "structured logging with pino" requirement.
+ * Meets the "structured logging with pino" requirement for the runner.
  */
 export function createLogger(name: string, level?: string): Logger {
   const p = pino({

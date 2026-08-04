@@ -1,8 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { initDb, getDb, closeDb } from '../src/db/client.js';
 import { createSessionStore } from '../src/session/store.js';
-import { computeTaskId } from '../src/runner/idempotency.js';
+
+// Mirrors the deleted src/runner/idempotency.ts legacy key derivation for backfill compatibility.
+function computeTaskId(opts: {
+  promptId: string;
+  promptVersion: number;
+  model: string;
+  configHash: string;
+  runId: string;
+}): string {
+  const input = `${opts.promptId}|${opts.promptVersion}|${opts.model}|${opts.configHash}|${opts.runId}`;
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
 
 function findConversationFiles(root: string): string[] {
   const results: string[] = [];

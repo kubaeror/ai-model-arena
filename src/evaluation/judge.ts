@@ -7,24 +7,20 @@ import { resolveModelForRun } from '../db/model-resolver.js';
 import type { EvaluationConfig, JudgeResult, JudgeScore, Rubric } from './types.js';
 import { EvaluationConfigSchema } from './types.js';
 
-let evalConfig: EvaluationConfig | null = null;
-
 export function loadEvaluationConfig(configPath: string, logger?: Logger): EvaluationConfig {
-  if (evalConfig) return evalConfig;
-  
   const resolvedPath = path.resolve(configPath);
   if (!fs.existsSync(resolvedPath)) {
     const fallback = EvaluationConfigSchema.parse({});
     logger?.warn(`Evaluation config not found at ${resolvedPath}, using defaults`);
-    evalConfig = fallback;
     return fallback;
   }
-  
   const content = fs.readFileSync(resolvedPath, 'utf8');
   const parsed = load(content);
-  const validated = EvaluationConfigSchema.parse(parsed);
-  evalConfig = validated;
-  return validated;
+  return EvaluationConfigSchema.parse(parsed);
+}
+
+export function clampScore(n: number): number {
+  return Math.min(100, Math.max(0, n));
 }
 
 function buildJudgePrompt(rubric: Rubric | undefined, task: string, files: Record<string, string>): string {
@@ -104,7 +100,9 @@ export async function runJudgeScoring(
     
     const parsed = JSON.parse(jsonMatch[0]);
     const scores: JudgeScore[] = parsed.scores ?? [];
-    const averageScore = scores.reduce((sum: number, s: JudgeScore) => sum + s.score, 0) / Math.max(scores.length, 1);
+    const averageScore = clampScore(
+      scores.reduce((sum: number, s: JudgeScore) => sum + s.score, 0) / Math.max(scores.length, 1)
+    );
     
     const result: JudgeResult = {
       model,

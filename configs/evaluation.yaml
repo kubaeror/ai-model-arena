@@ -38,14 +38,3 @@ regression:
     timeIncrease: 0.5
   # Whether to fail CI on regression
   failOnRegression: true
-
-rollback:
-  # Whether to inject test failures for rollback tests
-  enabled: false
-  # Default prompt for injecting failure
-  failPrompt: |
-    A test is now failing. The test file and output are below:
-    
-    {test_output}
-    
-    Please fix the failing test.

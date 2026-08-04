@@ -1,4 +1,5 @@
 import type { Task, TaskQueue } from './types.js';
+import { queueDepth } from '../observability/metrics.js';
 
 interface Waiter {
   resolve: (t: Task | null) => void;
@@ -20,11 +21,16 @@ export class InMemoryQueue implements TaskQueue {
     if (t) {
       if (w.timer) clearTimeout(w.timer);
       this.inFlight.set(t.taskId, t);
+      this.syncQueueDepth();
       w.resolve(t);
     } else {
       // nothing to give, re-queue the waiter
       this.waiters.unshift(w);
     }
+  }
+
+  private syncQueueDepth(): void {
+    queueDepth.set({ provider: 'in-memory' }, this.pending.length);
   }
 
   async enqueue(task: Task): Promise<void> {
@@ -35,6 +41,7 @@ export class InMemoryQueue implements TaskQueue {
       this.dedupKeys.set(task.idempotencyKey, Date.now());
     }
     this.pending.push(task);
+    this.syncQueueDepth();
     this._notifyNext();
   }
 
@@ -42,6 +49,7 @@ export class InMemoryQueue implements TaskQueue {
     const t = this.pending.shift();
     if (t) {
       this.inFlight.set(t.taskId, t);
+      this.syncQueueDepth();
       return t;
     }
     return new Promise<Task | null>((resolve) => {
@@ -61,6 +69,7 @@ export class InMemoryQueue implements TaskQueue {
 
   async ack(taskId: string): Promise<void> {
     this.inFlight.delete(taskId);
+    this.syncQueueDepth();
   }
 
   async nack(taskId: string, _reason?: string): Promise<void> {
@@ -70,9 +79,11 @@ export class InMemoryQueue implements TaskQueue {
       t.attempts += 1;
       if (t.attempts >= 5) {
         this.dead.push(t);
+        this.syncQueueDepth();
         return;
       }
       this.pending.unshift(t);
+      this.syncQueueDepth();
       this._notifyNext();
     }
   }

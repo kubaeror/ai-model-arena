@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { getRunRecord } from '../../orchestrator/run-index.js';
 import { readTraceMeta, type TraceMeta } from '../../observability/trace-meta.js';
+import { allowIfRunOwner } from '../run-ownership.js';
+import type { AuthedRequest } from '../auth.js';
 
 /**
  * GET /api/v1/traces/:runId — stored span metadata tree for a run.
@@ -14,12 +16,10 @@ export function createTracesRouter(): Router {
 
   router.get('/:runId', async (req, res) => {
     const runId = String(req.params.runId);
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, runId, `Run not found: ${runId}`))) return;
     const modelFilter = typeof req.query.model === 'string' ? String(req.query.model) : undefined;
     const rec = await getRunRecord(runId);
-    if (!rec) {
-      res.status(404).json({ error: `Run not found: ${runId}` });
-      return;
-    }
+    if (!rec) return;
 
     const traces = rec.perModel
       .filter((pm) => !modelFilter || pm.model === modelFilter)

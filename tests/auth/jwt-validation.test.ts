@@ -46,9 +46,36 @@ test('loadAuthConfig throws without JWT_SECRET', () => {
   process.env.DASHBOARD_JWT_SECRET = testSecret;
 });
 
+test('loadAuthConfig hard-fails in production when DASHBOARD_PASSWORD unset', () => {
+  const prevNodeEnv = process.env.NODE_ENV;
+  const prevPassword = process.env.DASHBOARD_PASSWORD;
+  process.env.NODE_ENV = 'production';
+  delete process.env.DASHBOARD_PASSWORD;
+  try {
+    assert.throws(() => loadAuthConfig(), /DASHBOARD_PASSWORD/);
+  } finally {
+    process.env.NODE_ENV = prevNodeEnv;
+    if (prevPassword !== undefined) process.env.DASHBOARD_PASSWORD = prevPassword;
+    else delete process.env.DASHBOARD_PASSWORD;
+  }
+});
+
 test('signToken default role is admin', () => {
   const cfg = loadAuthConfig();
   const token = signToken(cfg, 'testuser');
   const decoded = verifyToken(cfg, token);
   assert.equal(decoded!.role, 'admin');
+});
+
+test('verifyToken rejects a token signed with a different algorithm (HS384)', () => {
+  const cfg = loadAuthConfig();
+  // Sign with HS384 instead of HS256 — verifyToken pins algorithms to HS256.
+  const token = jwt.sign({ sub: 'user', role: 'admin' }, testSecret, { algorithm: 'HS384', expiresIn: '1h' });
+  assert.equal(verifyToken(cfg, token), null);
+});
+
+test('verifyToken rejects a token signed with a different algorithm (HS512)', () => {
+  const cfg = loadAuthConfig();
+  const token = jwt.sign({ sub: 'user', role: 'admin' }, testSecret, { algorithm: 'HS512', expiresIn: '1h' });
+  assert.equal(verifyToken(cfg, token), null);
 });

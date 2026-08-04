@@ -2,9 +2,9 @@ import type { ProviderRow } from './schema.js';
 import { getModelByNameOrId } from './query.js';
 
 /**
- * A model resolved from the SQLite catalog, ready to be used by a worker run.
- * Extracted from worker.ts so that orchestrator and evaluation layers do not
- * need to import the PM2 entry-point script (which has top-level side-effects).
+ * A model resolved from the SQLite catalog, ready to be used by a runner.
+ * Extracted from runner.ts so that orchestrator and evaluation layers do not
+ * need to import the runner entry-point script (which has top-level side-effects).
  */
 export interface ResolvedModel {
   canonicalId: string;

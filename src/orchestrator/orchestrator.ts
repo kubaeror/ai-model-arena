@@ -9,9 +9,7 @@ import {
   startRun,
   isRunComplete,
   finalizeRun,
-  ensureBuilt,
   createRunSpec,
-  spawnRunWorkers,
   registerRun,
   checkRunStatus,
   isRunCompleteByRunId,
@@ -26,9 +24,7 @@ import {
 
 // ── Canonical re-export surface for the dashboard server ────────────────────
 export {
-  ensureBuilt,
   createRunSpec,
-  spawnRunWorkers,
   registerRun,
   startRun,
   checkRunStatus,
@@ -140,12 +136,6 @@ export async function printStatus(): Promise<void> {
   const sep = widths.map((w) => '-'.repeat(w)).join('-+-');
   const body = rows.map((r) => cols.map((c, i) => String(r[c] ?? '').padEnd(widths[i]!)).join(' | ')).join('\n');
   console.log('\n' + header + '\n' + sep + '\n' + body + '\n');
-}
-
-/** Tail logs from pino output for a given model (CLI `logs` command). */
-export async function tailLogs(_model: string, _lines = 200): Promise<void> {
-  console.log('Logs are written to stdout during runner execution.');
-  console.log('For structured logs, check the pino output or container logs (kubectl logs).');
 }
 
 /** Cancel in-flight tasks and clean expired artifacts. */

@@ -1,5 +1,16 @@
 import { Router } from 'express';
-import { paginatedQuery } from '../../db/query.js';
+import { and, eq, gte, lte } from 'drizzle-orm';
+import { paginate } from '../../db/query.js';
+import { audit_log } from '../../db/schema.js';
+
+const auditColumns = {
+  id: audit_log.id,
+  actor: audit_log.actor,
+  action: audit_log.action,
+  entity_type: audit_log.entity_type,
+  entity_id: audit_log.entity_id,
+  at: audit_log.at,
+};
 
 export function createAuditRouter(): Router {
   const router = Router();
@@ -15,22 +26,19 @@ export function createAuditRouter(): Router {
     const from = typeof req.query.from === 'string' ? req.query.from : undefined;
     const to = typeof req.query.to === 'string' ? req.query.to : undefined;
 
-    const clauses: string[] = ['1=1'];
-    const params: unknown[] = [];
+    const conds = [];
+    if (actor) conds.push(eq(audit_log.actor, actor));
+    if (action) conds.push(eq(audit_log.action, action));
+    if (entityType) conds.push(eq(audit_log.entity_type, entityType));
+    if (entityId) conds.push(eq(audit_log.entity_id, entityId));
+    if (from) conds.push(gte(audit_log.at, from));
+    if (to) conds.push(lte(audit_log.at, to));
 
-    if (actor) { clauses.push('actor = ?'); params.push(actor); }
-    if (action) { clauses.push('action = ?'); params.push(action); }
-    if (entityType) { clauses.push('entity_type = ?'); params.push(entityType); }
-    if (entityId) { clauses.push('entity_id = ?'); params.push(entityId); }
-    if (from) { clauses.push('"at" >= ?'); params.push(from); }
-    if (to) { clauses.push('"at" <= ?'); params.push(to); }
-
-    const { rows, total } = await paginatedQuery({
-      table: 'audit_log',
-      whereClause: clauses.join(' AND '),
-      params,
-      orderBy: '"at" DESC',
-      limit,
+    const { rows, total } = await paginate(audit_log, auditColumns, {
+      where: conds.length ? and(...conds) : undefined,
+      orderBy: 'at',
+      dir: 'desc',
+      pageSize: limit,
       offset,
     });
 

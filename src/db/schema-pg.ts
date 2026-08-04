@@ -192,12 +192,47 @@ export const run_models = pgTable('run_models', {
   report_path: text('report_path'),
   log_file: text('log_file'),
   status: text('status').notNull(),
+  claimed_at: text('claimed_at'),
+  started_at: text('started_at'),
+  completed_at: text('completed_at'),
+  runner_id: text('runner_id'),
   success: integer('success'),
   turns_used: integer('turns_used'),
   total_tool_calls: integer('total_tool_calls'),
   stop_reason: text('stop_reason'),
   duration_ms: integer('duration_ms'),
 });
+
+export const provider_versions = pgTable('provider_versions', {
+  id: text('id').primaryKey(),
+  provider_id: text('provider_id').notNull().references(() => providers.id),
+  version: integer('version').notNull(),
+  name: text('name').notNull(),
+  api_base: text('api_base'),
+  auth_scheme: text('auth_scheme').notNull(),
+  env_var: text('env_var'),
+  adapter: text('adapter').notNull(),
+  header_name: text('header_name'),
+  created_by: text('created_by').notNull(),
+  created_at: text('created_at').notNull(),
+}, (table) => [
+  index('idx_provider_versions_provider').on(table.provider_id),
+]);
+
+export const tool_call_stats = pgTable('tool_call_stats', {
+  id: serial('id').primaryKey(),
+  run_id: text('run_id').notNull().references(() => runs.run_id),
+  model: text('model').notNull(),
+  tool_name: text('tool_name').notNull(),
+  total: integer('total').notNull().default(0),
+  success_count: integer('success_count').notNull().default(0),
+  fail_count: integer('fail_count').notNull().default(0),
+  recorded_at: text('recorded_at').notNull(),
+}, (table) => [
+  index('idx_tool_stats_run').on(table.run_id),
+  index('idx_tool_stats_model_tool').on(table.model, table.tool_name),
+  index('idx_tool_stats_recorded').on(table.recorded_at),
+]);
 
 export const sessions = pgTable('sessions', {
   id: text('id').primaryKey(),

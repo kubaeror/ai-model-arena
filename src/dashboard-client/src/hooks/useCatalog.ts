@@ -47,7 +47,7 @@ export function useCatalogModels(filters: CatalogModelFilters = {}) {
       if (filters.min_context) params.set('min_context', String(filters.min_context));
       if (filters.sort) params.set('sort', filters.sort);
       if (filters.q) params.set('q', filters.q);
-      const res = await apiFetchJson<{ data: CatalogModel[] }>(`/api/models?${params.toString()}`);
+      const res = await apiFetchJson<{ data: CatalogModel[] }>(`/api/catalog/models?${params.toString()}`);
       return res.data;
     },
     refetchInterval: 60_000,
@@ -96,7 +96,7 @@ export function useCatalogModel(id: string) {
   return useQuery({
     queryKey: ['catalog', 'model', id],
     queryFn: async () => {
-      const res = await apiFetchJson<ModelDetailResponse>(`/api/models/${encodeURIComponent(id)}`);
+      const res = await apiFetchJson<ModelDetailResponse>(`/api/catalog/models/${encodeURIComponent(id)}`);
       return res;
     },
     enabled: !!id,
@@ -129,7 +129,7 @@ export function usePricing(model?: string) {
   return useQuery({
     queryKey: ['catalog', 'pricing', model],
     queryFn: async () => {
-      const url = model ? `/api/pricing?model=${encodeURIComponent(model)}` : '/api/pricing';
+      const url = model ? `/api/catalog/pricing?model=${encodeURIComponent(model)}` : '/api/catalog/pricing';
       const res = await apiFetchJson<{ data: Array<Record<string, unknown>> }>(url);
       return res.data;
     },

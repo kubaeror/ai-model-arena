@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { readFile, writeFile, listFiles, runShellCommand, editFile, globFiles } from '../../src/tools/executors.js';
-import { globToRegex } from '../../src/tools/glob-matcher.js';
 import type { ToolExecutionContext } from '../../src/types.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-exec-'));
@@ -155,35 +154,52 @@ describe('editFile', () => {
   });
 });
 
-// ── globFiles ─────────────────────────────────────────────────────────────
+// ── globFiles (integration against a real fs tree) ─────────────────────────
+
+const TS_FILES = [
+  'src/index.ts',
+  'src/utils.ts',
+  'src/utils.test.ts',
+  'src/deep/nested.ts',
+  'chars/file-1.ts',
+  'chars/file-ab.ts',
+  'chars/file-a.ts',
+  'chars/file-b.ts',
+];
 
 describe('globFiles', () => {
   before(() => {
     fs.mkdirSync(sandbox, { recursive: true });
-    fs.mkdirSync(path.join(sandbox, 'src'), { recursive: true });
-    fs.mkdirSync(path.join(sandbox, 'lib'), { recursive: true });
+    for (const rel of ['src/deep', 'src', 'lib', 'chars', 'node_modules/pkg', '.git', '.hidden']) {
+      fs.mkdirSync(path.join(sandbox, rel), { recursive: true });
+    }
     fs.writeFileSync(path.join(sandbox, 'src', 'index.ts'), '// index');
     fs.writeFileSync(path.join(sandbox, 'src', 'utils.ts'), '// utils');
     fs.writeFileSync(path.join(sandbox, 'src', 'utils.test.ts'), '// test');
+    fs.writeFileSync(path.join(sandbox, 'src', 'deep', 'nested.ts'), '// nested');
     fs.writeFileSync(path.join(sandbox, 'lib', 'helper.js'), '// helper');
+    fs.writeFileSync(path.join(sandbox, 'chars', 'file-1.ts'), '');
+    fs.writeFileSync(path.join(sandbox, 'chars', 'file-ab.ts'), '');
+    fs.writeFileSync(path.join(sandbox, 'chars', 'file-a.ts'), '');
+    fs.writeFileSync(path.join(sandbox, 'chars', 'file-b.ts'), '');
     fs.writeFileSync(path.join(sandbox, 'README.md'), '# readme');
+    fs.writeFileSync(path.join(sandbox, 'node_modules', 'pkg', 'bundle.js'), '// excluded');
+    fs.writeFileSync(path.join(sandbox, '.git', 'config'), '# excluded');
+    fs.writeFileSync(path.join(sandbox, '.hidden', 'dot.ts'), '// hidden dot');
+    fs.writeFileSync(path.join(sandbox, '.gitignore'), '');
   });
   after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
   it('matches all .ts files with **/*.ts', async () => {
     const r = await globFiles({ pattern: '**/*.ts' }, ctx);
     assert.strictEqual(r.isError, false);
-    const matches = r.content.split('\n');
-    assert.ok(matches.includes('src/index.ts'));
-    assert.ok(matches.includes('src/utils.ts'));
-    assert.ok(matches.includes('src/utils.test.ts'));
-    assert.strictEqual(matches.length, 3);
+    assert.deepStrictEqual(r.content.split('\n').sort(), [...TS_FILES].sort());
   });
 
   it('matches .js files only', async () => {
     const r = await globFiles({ pattern: '**/*.js' }, ctx);
     assert.strictEqual(r.isError, false);
-    assert.strictEqual(r.content, 'lib/helper.js');
+    assert.deepStrictEqual(r.content.split('\n').sort(), ['lib/helper.js']);
   });
 
   it('restricts search to a subdirectory with path', async () => {
@@ -193,6 +209,59 @@ describe('globFiles', () => {
     assert.ok(matches.includes('src/index.ts'));
     assert.ok(matches.includes('src/utils.ts'));
     assert.ok(matches.includes('src/utils.test.ts'));
+    assert.strictEqual(matches.length, 3);
+  });
+
+  it('matches brace expansion {a,b} natively', async () => {
+    const r = await globFiles({ pattern: '**/*.{ts,js}' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.deepStrictEqual(r.content.split('\n').sort(), [...TS_FILES, 'lib/helper.js'].sort());
+  });
+
+  it('matches nested braces with a wildcard', async () => {
+    const r = await globFiles({ pattern: 'src/**/*.{test,spec}.ts' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.deepStrictEqual(r.content.split('\n').sort(), ['src/utils.test.ts']);
+  });
+
+  it('matches ? as a single character', async () => {
+    const r = await globFiles({ pattern: 'chars/file-?.ts' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.deepStrictEqual(r.content.split('\n').sort(), ['chars/file-1.ts', 'chars/file-a.ts', 'chars/file-b.ts']);
+  });
+
+  it('matches character class [abc]', async () => {
+    const r = await globFiles({ pattern: 'chars/file-[ab].ts' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.deepStrictEqual(r.content.split('\n').sort(), ['chars/file-a.ts', 'chars/file-b.ts']);
+  });
+
+  it('excludes node_modules and .git subtrees', async () => {
+    const r = await globFiles({ pattern: '**/*' }, ctx);
+    assert.strictEqual(r.isError, false);
+    const matches = r.content.split('\n');
+    assert.ok(!matches.includes('node_modules/pkg/bundle.js'));
+    assert.ok(!matches.includes('.git/config'));
+  });
+
+  it('does not match dotfiles/dot-dirs with * or ** wildcards', async () => {
+    const dot = await globFiles({ pattern: '**/*.ts' }, ctx);
+    assert.ok(!dot.content.split('\n').includes('.hidden/dot.ts'));
+    const all = await globFiles({ pattern: '*' }, ctx);
+    assert.ok(!all.content.split('\n').includes('.gitignore'));
+  });
+
+  it('matches dotfiles when the pattern names the dot explicitly', async () => {
+    const gi = await globFiles({ pattern: '.gitignore' }, ctx);
+    assert.deepStrictEqual(gi.content.split('\n'), ['.gitignore']);
+    const hid = await globFiles({ pattern: '.hidden/*.ts' }, ctx);
+    assert.deepStrictEqual(hid.content.split('\n'), ['.hidden/dot.ts']);
+  });
+
+  it('does not return directories, only regular files', async () => {
+    const r = await globFiles({ pattern: '*' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.deepStrictEqual(r.content.split('\n'), ['README.md']);
   });
 
   it('returns empty when no files match', async () => {
@@ -204,52 +273,5 @@ describe('globFiles', () => {
   it('rejects missing directories', async () => {
     const r = await globFiles({ pattern: '*.ts', path: 'nonexistent' }, ctx);
     assert.strictEqual(r.isError, true);
-  });
-});
-
-// ── globToRegex ───────────────────────────────────────────────────────────
-
-describe('globToRegex', () => {
-  it('matches simple pattern', () => {
-    const re = globToRegex('*.ts');
-    assert.ok(re.test('file.ts'));
-    assert.ok(!re.test('file.js'));
-    assert.ok(!re.test('src/file.ts'));
-  });
-
-  it('matches ** pattern', () => {
-    const re = globToRegex('**/*.ts');
-    assert.ok(re.test('src/index.ts'));
-    assert.ok(re.test('deeply/nested/file.ts'));
-    assert.ok(!re.test('file.js'));
-  });
-
-  it('matches ? pattern', () => {
-    const re = globToRegex('file-?.ts');
-    assert.ok(re.test('file-a.ts'));
-    assert.ok(re.test('file-1.ts'));
-    assert.ok(!re.test('file-ab.ts'));
-  });
-
-  it('matches character class [abc]', () => {
-    const re = globToRegex('file-[abc].ts');
-    assert.ok(re.test('file-a.ts'));
-    assert.ok(re.test('file-b.ts'));
-    assert.ok(re.test('file-c.ts'));
-    assert.ok(!re.test('file-d.ts'));
-  });
-
-  it('matches brace expansion {a,b}', () => {
-    const re = globToRegex('*.{ts,js}');
-    assert.ok(re.test('file.ts'));
-    assert.ok(re.test('file.js'));
-    assert.ok(!re.test('file.py'));
-  });
-
-  it('handles nested brace + wildcard', () => {
-    const re = globToRegex('src/**/*.{test,spec}.ts');
-    assert.ok(re.test('src/foo/bar.test.ts'));
-    assert.ok(re.test('src/baz.spec.ts'));
-    assert.ok(!re.test('src/foo/bar.ts'));
   });
 });

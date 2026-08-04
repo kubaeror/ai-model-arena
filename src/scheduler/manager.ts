@@ -54,7 +54,7 @@ export function updateScheduleState(id: string, update: Partial<ScheduleState>):
   scheduleStates.set(id, { ...current, ...update });
 }
 
-export function addSchedule(configPath: string, schedule: Schedule, logger?: Logger): void {
+export async function addSchedule(configPath: string, schedule: Schedule, logger?: Logger): Promise<void> {
   const config = loadSchedulesConfig(configPath, logger);
   const existing = config.schedules.find(s => s.id === schedule.id);
   if (existing) {
@@ -69,9 +69,11 @@ export function addSchedule(configPath: string, schedule: Schedule, logger?: Log
   }
   fs.writeFileSync(resolvedPath, dump(config));
   scheduleStates.set(schedule.id, { id: schedule.id, status: 'idle', consecutiveFailures: 0, totalRuns: 0, totalFailures: 0 });
+
+  await syncSchedulesToDb(configPath, logger).catch(() => undefined);
 }
 
-export function removeSchedule(configPath: string, id: string, logger?: Logger): boolean {
+export async function removeSchedule(configPath: string, id: string, logger?: Logger): Promise<boolean> {
   const config = loadSchedulesConfig(configPath, logger);
   const index = config.schedules.findIndex(s => s.id === id);
   if (index === -1) return false;
@@ -81,8 +83,33 @@ export function removeSchedule(configPath: string, id: string, logger?: Logger):
   const resolvedPath = path.resolve(configPath);
   fs.writeFileSync(resolvedPath, dump(config));
   scheduleStates.delete(id);
+
+  try {
+    const { deleteSchedule } = await import('../db/query.js');
+    await deleteSchedule(id);
+  } catch (err) {
+    logger?.warn('deleteSchedule failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+  }
   
   return true;
+}
+
+export async function syncSchedulesToDb(configPath: string, logger?: Logger): Promise<void> {
+  try {
+    const config = loadSchedulesConfig(configPath, logger);
+    const { insertSchedule, listSchedules, deleteSchedule } = await import('../db/query.js');
+
+    const desiredIds = new Set(config.schedules.map((s) => s.id));
+    for (const s of config.schedules) {
+      await insertSchedule({ id: s.id, scenario: s.scenario, models: s.models, cron: s.cron, enabled: s.enabled ?? true });
+    }
+
+    for (const row of await listSchedules()) {
+      if (!desiredIds.has((row as { id: string }).id)) await deleteSchedule((row as { id: string }).id);
+    }
+  } catch (err) {
+    logger?.warn('syncSchedulesToDb failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 export function resetSchedulesCache(): void {

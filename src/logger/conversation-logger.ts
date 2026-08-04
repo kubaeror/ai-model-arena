@@ -2,6 +2,9 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Role, ToolCall, TokenUsage } from '../types.js';
+import { createLogger } from './pino-logger.js';
+
+const logger = createLogger('ai-arena:conversation-logger');
 
 export type ConversationEntryType =
   | 'system'
@@ -97,7 +100,13 @@ export class ConversationLogger {
         tokenOutput: entry.usage?.completion ?? null,
         createdAt: entry.timestamp ?? new Date().toISOString(),
       };
-      this.dbSink.appendMessage(this.sessionId, msg).catch(() => {});
+      this.dbSink.appendMessage(this.sessionId, msg).catch((err: unknown) => {
+        // Best-effort write — do not block the agent loop. But log the
+        // failure so dropped conversation messages are observable (previously
+        // this was `.catch(() => {})` which hid all failures).
+        const detail = err instanceof Error ? { message: err.message } : { error: String(err) };
+        logger.error('conversation-logger: appendMessage failed', { sessionId: this.sessionId, ...detail });
+      });
     }
 
     this.flush();

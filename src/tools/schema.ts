@@ -226,14 +226,3 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 
 /** Name of the tool the agent calls to stop the loop. */
 export const TASK_COMPLETE_TOOL = 'task_complete';
-
-/**
- * MCP-style representation: { name, description, inputSchema }.
- * If you later expose these tools via a real MCP server, this is the shape
- * MCP expects for `tools/list`.
- */
-export const MCP_TOOLS = TOOL_DEFINITIONS.map((t) => ({
-  name: t.name,
-  description: t.description,
-  inputSchema: t.parameters,
-}));

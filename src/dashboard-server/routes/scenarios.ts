@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dump } from 'js-yaml';
-import { audit, requireRole } from '../../auth/rbac.js';
+import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import {
   loadScenario,
@@ -12,6 +12,7 @@ import {
 } from '../../config.js';
 import { findProjectRoot } from '../../paths.js';
 import { isWithin } from '../../sandbox/sandbox.js';
+import { walkFiles } from '../../fs/walk.js';
 
 function scenariosDir(): string {
   return path.join(findProjectRoot(), 'configs', 'scenarios');
@@ -55,19 +56,10 @@ function listStarterFiles(scenario: ScenarioConfig): StarterFile[] {
   if (!scenario.starterFiles) return [];
   const dir = path.join(scenariosDir(), scenario.starterFiles);
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
-  const out: StarterFile[] = [];
-  const walk = (d: string) => {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (e.name === 'node_modules' || e.name === '.git') continue;
-      const full = path.join(d, e.name);
-      if (e.isDirectory()) walk(full);
-      else if (e.isFile()) {
-        out.push({ path: path.relative(dir, full).replace(/\\/g, '/'), content: fs.readFileSync(full, 'utf8') });
-      }
-    }
-  };
-  walk(dir);
-  return out;
+  return walkFiles(dir).map((full) => ({
+    path: path.relative(dir, full).replace(/\\/g, '/'),
+    content: fs.readFileSync(full, 'utf8'),
+  }));
 }
 
 function writeScenarioYaml(filePath: string, config: ScenarioConfig): ScenarioConfig {
@@ -131,7 +123,17 @@ export function createScenariosRouter(): Router {
       starterFiles = writeStarterFiles(name, body.starterFilesContent);
     }
     const parsed = ScenarioConfigSchema.parse({ ...body, starterFiles });
-    const p = resolveScenarioPath(scenariosDir(), parsed.name);
+    // Validate the scenario name BEFORE resolving the path. The body `name`
+    // was previously passed straight to resolveScenarioPath(), which accepted
+    // absolute paths and `../` traversal — allowing an editor to write a YAML
+    // file to arbitrary filesystem locations (e.g. overwrite configs/api-keys.yaml
+    // to register an admin API key). resolveAndValidate() enforces a bare
+    // alphanumeric name and isWithin(scenariosDir()) on the resolved path.
+    const p = resolveAndValidate(parsed.name);
+    if (!p) {
+      res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
+      return;
+    }
     if (fs.existsSync(p)) {
       res.status(409).json({ error: 'Scenario already exists; use PUT to edit' });
       return;
@@ -156,7 +158,14 @@ export function createScenariosRouter(): Router {
     const existing = loadScenario(p);
     const body = req.body ?? {};
     const newName = String(body.name ?? existing.name);
-    const target = newName !== existing.name ? resolveScenarioPath(scenariosDir(), newName) : p;
+    // Validate the rename target the same way as POST: bare alphanumeric name,
+    // resolved path must stay within scenariosDir(). Without this, a PUT with
+    // body.name = "/etc/cron.d/evil.yaml" could write outside scenariosDir().
+    const target = newName !== existing.name ? resolveAndValidate(newName) : p;
+    if (!target) {
+      res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
+      return;
+    }
 
     let starterFiles = body.starterFiles ?? existing.starterFiles;
     if (Array.isArray(body.starterFilesContent) && body.starterFilesContent.length) {
@@ -165,7 +174,7 @@ export function createScenariosRouter(): Router {
     const parsed = ScenarioConfigSchema.parse({ ...existing, ...body, name: newName, starterFiles });
     writeScenarioYaml(target, parsed);
     if (target !== p && fs.existsSync(p)) fs.unlinkSync(p);
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'scenario.update', { type: 'scenario', id: newName }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'scenario.update', { type: 'scenario', id: newName });
     res.json({ scenario: parsed });
   });
 
@@ -182,7 +191,7 @@ export function createScenariosRouter(): Router {
     if (scenario.starterFiles) {
       fs.rmSync(path.join(scenariosDir(), scenario.starterFiles), { recursive: true, force: true });
     }
-    audit((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: req.params.name as string }).catch(() => {});
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: req.params.name as string });
     res.json({ deleted: req.params.name as string });
   });
 

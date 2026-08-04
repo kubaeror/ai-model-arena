@@ -1,15 +1,17 @@
 const SECRET_PATTERNS: Array<{ name: string; regex: RegExp }> = [
-  // API keys (common patterns)
-  { name: 'openai_key', regex: /sk-[A-Za-z0-9-_]{20,}/g },
+  // More specific patterns first — a loose pattern (e.g. openai's `sk-…`) would
+  // otherwise masquerade as a different secret (e.g. anthropic `sk-ant-…`) and
+  // broad generic patterns would swallow Bearer tokens. Order is load-bearing.
   { name: 'anthropic_key', regex: /sk-ant-[A-Za-z0-9-_]{20,}/g },
+  { name: 'openai_key', regex: /sk-[A-Za-z0-9-_]{20,}/g },
   { name: 'github_token', regex: /gh[pousr]_[A-Za-z0-9_]{20,}/g },
   { name: 'aws_access_key', regex: /AKIA[0-9A-Z]{16}/g },
   { name: 'aws_secret_key', regex: /[A-Za-z0-9/+=]{40}/g },
   { name: 'jwt_token', regex: /eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g },
   { name: 'private_key_header', regex: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g },
-  { name: 'generic_api_key', regex: /[A-Za-z0-9-_]{20,64}\b/g },
-  { name: 'db_connection_string', regex: /(?:postgres|mysql|mongodb|redis):\/\/[^\s"']+/gi },
   { name: 'bearer_token', regex: /Bearer\s+[A-Za-z0-9-._~+/]+=*/gi },
+  { name: 'db_connection_string', regex: /(?:postgres|mysql|mongodb|redis):\/\/[^\s"']+/gi },
+  { name: 'generic_api_key', regex: /[A-Za-z0-9-_]{20,64}\b/g },
 ];
 
 /**
