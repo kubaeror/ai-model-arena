@@ -56,9 +56,10 @@ export class LiveHub {
       // and /lobby servers in routes/stream.ts use the same cap.)
       maxPayload: 1_048_576,
       verifyClient: (info: ClientInfo, cb) => {
-        const result = verifyWsRequest(info, auth);
-        (info.req as IncomingMessage & { _wsUser?: { sub: string; role: string } })._wsUser = result ?? undefined;
-        cb(result !== null);
+        void verifyWsRequest(info, auth).then((result) => {
+          (info.req as IncomingMessage & { _wsUser?: { sub: string; role: string } })._wsUser = result ?? undefined;
+          cb(result !== null);
+        });
       },
     });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));

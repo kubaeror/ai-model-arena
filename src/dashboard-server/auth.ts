@@ -147,6 +147,9 @@ async function isRevoked(token: string): Promise<boolean> {
   return true;
 }
 
+/** Public wrapper for WebSocket auth (ws-auth.ts) — same fail-closed semantics. */
+export { isRevoked };
+
 // Periodic purge of expired entries from the in-memory blacklist
 setInterval(() => {
   const now = Date.now() / 1000;
