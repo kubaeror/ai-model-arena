@@ -369,6 +369,13 @@ async function buildPerModelEntries(
 async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: Logger): Promise<{ mdPath: string; jsonPath: string }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
+  // Idempotency guard: the CLI and the dashboard watcher can both finalize a
+  // run (watcher polls every 3s). A second pass would duplicate cost_ledger
+  // and tool_call_stats rows and re-fire notifications.
+  if (rec.status === 'completed') {
+    logger.info('Run already finalized — skipping', { runId });
+    return { mdPath: rec.comparisonMdPath ?? '', jsonPath: rec.comparisonJsonPath ?? '' };
+  }
   const root = pm2h.projectRoot();
   const { mdPath, jsonPath } = aggregate(root, {
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
