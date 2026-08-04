@@ -337,6 +337,12 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         logger: logger.child('subagent'),
         tools: subagentTools,
         executors: subagentExecutors,
+        shellTimeoutMs: toolCtx.shellTimeoutMs,
+        maxShellOutputBytes: toolCtx.maxShellOutputBytes,
+        shellPolicy: toolCtx.shellPolicy,
+        webAccess: toolCtx.webAccess,
+        executionProfile: toolCtx.executionProfile,
+        allowedTools: toolCtx.allowedTools,
       };
       let loopResult;
       let maxFallbackHops = 3;

@@ -96,8 +96,19 @@ export interface SubagentConfig {
   logger: Logger;
   /** Available tools for the subagent (stripped of task + todo tools). */
   tools: ToolDefinition[];
-  /** Tool executors for the subagent. */
-  executors: ToolExecutorMap;
+  /** Tool executors for the subagent. */  executors: ToolExecutorMap;
+  /** Shell timeout (ms) inherited from the parent context. */
+  shellTimeoutMs: number;
+  /** Max shell output bytes inherited from the parent context. */
+  maxShellOutputBytes: number;
+  /** Shell policy inherited from the parent context. */
+  shellPolicy?: 'strict' | 'permissive';
+  /** Web access inherited from the parent context. */
+  webAccess?: boolean;
+  /** Execution profile name inherited from the parent context. */
+  executionProfile?: string;
+  /** Allowed tool set inherited from the parent context. */
+  allowedTools?: Set<string>;
 }
 
 export type ToolExecutor = (

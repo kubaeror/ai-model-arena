@@ -89,8 +89,12 @@ async function runSubagent(
           const res = await executor(tc.arguments, {
             sandboxDir,
             logger: sub.logger,
-            shellTimeoutMs: 30000,
-            maxShellOutputBytes: 524288,
+            shellTimeoutMs: sub.shellTimeoutMs,
+            maxShellOutputBytes: sub.maxShellOutputBytes,
+            shellPolicy: sub.shellPolicy,
+            webAccess: sub.webAccess,
+            executionProfile: sub.executionProfile,
+            allowedTools: sub.allowedTools,
           });
           content = res.content;
           isError = res.isError;
