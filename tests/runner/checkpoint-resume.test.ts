@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import { initDb, closeDb } from '../../src/db/client.js';
 import { createSessionStore } from '../../src/session/store.js';
 import { resumeFrom } from '../../src/runner/checkpoint.js';
+import { runAgentLoop } from '../../src/agent-loop/loop.js';
+import type { ModelAdapter, ChatMessage } from '../../src/types.js';
+import type { ConversationLogger } from '../../src/logger/conversation-logger.js';
+
+function stubLogger() {
+  return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => stubLogger() } as any;
+}
+
+function stubToolCtx() {
+  return { sandboxDir: '/tmp', logger: stubLogger(), shellTimeoutMs: 10000, maxShellOutputBytes: 524288 };
+}
 
 test('resumeFrom returns empty messages + lastCompletedTurn -1 for fresh session', async () => {
   initDb(':memory:');
@@ -95,4 +106,47 @@ test('resumeFrom handles multi-turn with mixed completed turns', async () => {
   assert.equal(result.messages.length, 3);
   assert.equal(result.lastCompletedTurn, 2);
   closeDb();
+});
+
+test('runAgentLoop resumed from checkpoint does not duplicate system+user entries in the conversation', async () => {
+  const systemPrompt = 'You are a coding agent.';
+  const task = 'Build a feature.';
+
+  // Messages as resumeFrom() would return them: the initial pair plus one completed turn.
+  const initialMessages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: task },
+    { role: 'assistant', content: null, toolCalls: [{ id: 'tc1', name: 'list_files', arguments: {} }] },
+    { role: 'tool', toolCallId: 'tc1', name: 'list_files', content: '[]' },
+  ];
+
+  // Conversation already persisted by the original run (system+user pair).
+  const entries: any[] = [
+    { type: 'system', role: 'system', content: systemPrompt },
+    { type: 'user', role: 'user', content: task },
+  ];
+  const conv = {
+    append: (e: any) => entries.push({ ...e, timestamp: e.timestamp ?? new Date().toISOString() }),
+    flush: () => {},
+    setEnded: () => {},
+  } as unknown as ConversationLogger;
+
+  const adapter: ModelAdapter = {
+    sendMessage: async () => ({ text: 'done', toolCalls: [], usage: { prompt: 10, completion: 5 }, stopReason: 'no_tool_calls' }),
+    supportsReasoning: () => false,
+    supportsPromptCaching: () => false,
+  };
+
+  await runAgentLoop({
+    adapter, tools: [], executors: {},
+    systemPrompt, task, maxTurns: 5,
+    toolCtx: stubToolCtx(), conv, logger: stubLogger(),
+    initialMessages,
+  });
+
+  const systemPromptEntries = entries.filter((e) => e.role === 'system' && e.content === systemPrompt);
+  const taskEntries = entries.filter((e) => e.role === 'user' && e.content === task);
+  assert.equal(systemPromptEntries.length, 1, `system prompt duplicated on resume: ${systemPromptEntries.length} entries`);
+  assert.equal(taskEntries.length, 1, `task duplicated on resume: ${taskEntries.length} entries`);
+  assert.ok(entries.some((e) => e.content === '[resumed from checkpoint]'), 'expected "[resumed from checkpoint]" marker entry');
 });

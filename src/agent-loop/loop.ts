@@ -117,8 +117,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     }
   }
 
-  conv.append({ type: 'system', role: 'system', content: systemPrompt });
-  conv.append({ type: 'user', role: 'user', content: task });
+  if (opts.initialMessages && opts.initialMessages.length > 0) {
+    conv.append({ type: 'system', role: 'system', content: '[resumed from checkpoint]' });
+  } else {
+    conv.append({ type: 'system', role: 'system', content: systemPrompt });
+    conv.append({ type: 'user', role: 'user', content: task });
+  }
 
   const usage: TokenUsage = {};
   const toolCounts = new Map<string, number>();
