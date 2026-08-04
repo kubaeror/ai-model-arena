@@ -35,6 +35,9 @@ jobs:
             docker exec pg pg_isready -U arena && break; sleep 1;
           done
           npm run test:db-pg
+          # Free port 5432 for the compose smoke test — the PG container
+          # otherwise leaks and the next step fails to bind.
+          docker rm -f pg
       - run: npm ci --prefix src/dashboard-client
       - run: npm --prefix src/dashboard-client run test
       - run: npm run build
