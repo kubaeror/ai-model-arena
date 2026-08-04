@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';

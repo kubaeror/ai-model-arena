@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useLive } from '../hooks/useLive.js';
 import { listRuns } from '../lib/api.js';
 import { PageShell } from '../components/ui/PageShell';

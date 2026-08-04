@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink } from 'react-router';
 import { Menu, X, ChevronDown } from 'lucide-react';
 import { useSettings } from '../providers/SettingsProvider';
 import { CacheStatePill } from './CacheStatePill';
