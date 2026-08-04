@@ -327,7 +327,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       if (!resolved) {
         logger.error('Model not found', { model: modelName });
         taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-        taskDuration.observe((Date.now() - startedAt.getTime()) / 1000);
+        taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
         taskCounted = true;
         await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
         continue;
@@ -348,7 +348,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           logger.warn('Failed to write failed state', { error: String(e) }),
         );
         taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-        taskDuration.observe((Date.now() - startedAt.getTime()) / 1000);
+        taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
         taskCounted = true;
         await queue.ack(task!._redisId ?? task!.taskId);
         continue;
@@ -562,7 +562,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
 
       taskCounter.inc({ model: modelName, scenario: scenarioName, status: finalStatus });
-      taskDuration.observe((finishedAt.getTime() - startedAt.getTime()) / 1000);
+      taskDuration.observe({ model: modelName, scenario: scenarioName }, (finishedAt.getTime() - startedAt.getTime()) / 1000);
       taskCounted = true;
 
       logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed, success });
@@ -586,7 +586,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         });
         if (!taskCounted) {
           taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
-          if (taskStartedAt) taskDuration.observe((Date.now() - taskStartedAt.getTime()) / 1000);
+          if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
         }
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
