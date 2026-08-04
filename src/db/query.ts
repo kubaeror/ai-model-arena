@@ -14,7 +14,7 @@
  * The runtime API is identical — Drizzle handles the dialect differences.
  */
 
-import { eq, and, desc, asc, sql, count, sum, max, inArray } from 'drizzle-orm';
+import { eq, and, desc, asc, sql, count, sum, max, inArray, gte, lte, like, getTableColumns } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { getDrizzleDb } from './index.js';
 import {
@@ -24,7 +24,7 @@ import {
   anomalies,
   prompts, prompt_versions,
   users, roles, user_roles,
-  providers, models, model_providers, pricing,
+  providers, models, model_providers, pricing, model_runtime_stats,
   schedules,
 } from './schema.js';
 import type {
@@ -569,11 +569,10 @@ export async function deleteUserById(id: string): Promise<void> {
 
 export async function getUserRolesByUserId(userId: string): Promise<any[]> {
   const db = getDrizzleDb();
-  return db.all(sql.raw(`
-    SELECT r.* FROM roles r
-    INNER JOIN user_roles ur ON ur.role_id = r.id
-    WHERE ur.user_id = ?
-  `), userId);
+  return db.select({ id: roles.id, description: roles.description })
+    .from(roles)
+    .innerJoin(user_roles, eq(user_roles.role_id, roles.id))
+    .where(eq(user_roles.user_id, userId)) as any;
 }
 
 export async function assignUserRole(userId: string, roleId: string): Promise<void> {
@@ -590,11 +589,11 @@ export async function unassignUserRole(userId: string, roleId: string): Promise<
 
 export async function countUserRoles(roleId?: string, userId?: string): Promise<number> {
   const db = getDrizzleDb();
-  let q = `SELECT COUNT(*) AS cnt FROM user_roles`;
-  const params: any[] = [];
-  if (roleId && userId) { q += ' WHERE role_id = ? AND user_id = ?'; params.push(roleId, userId); }
-  else if (roleId) { q += ' WHERE role_id = ?'; params.push(roleId); }
-  const rows = await db.all(sql.raw(q), ...params);
+  const conds: SQL[] = [];
+  if (roleId) conds.push(eq(user_roles.role_id, roleId));
+  if (userId) conds.push(eq(user_roles.user_id, userId));
+  const rows = await db.select({ cnt: count() }).from(user_roles)
+    .where(conds.length ? and(...conds) : undefined);
   return Number(rows[0]?.cnt ?? 0);
 }
 
@@ -610,31 +609,39 @@ export async function listCatalogModels(filters: {
   minContext?: number; sort?: string; q?: string;
 }): Promise<any[]> {
   const db = getDrizzleDb();
-  const where: string[] = [];
-  const params: any[] = [];
-  if (filters.provider) { where.push('m.provider_id = ?'); params.push(filters.provider); }
-  if (filters.reasoning) where.push('m.reasoning = 1');
-  if (filters.toolCall) where.push('m.tool_call = 1');
-  if (filters.minContext != null) { where.push('m.context_limit >= ?'); params.push(filters.minContext); }
-  if (filters.q) { where.push('lower(m.name) LIKE ?'); params.push(`%${filters.q.toLowerCase()}%`); }
-  const sort = filters.sort === 'context' ? 'm.context_limit DESC' : 'm.name ASC';
-  return db.all(sql.raw(`
-    SELECT m.id, m.name, m.family, m.provider_id, m.release_date, m.attachment, m.reasoning, m.temperature,
-      m.tool_call, m.context_limit, m.output_limit, m.status, m.reasoning_options,
-      p.input, p.output, p.cache_read, p.cache_write
-    FROM models m LEFT JOIN pricing p ON p.model_id = m.id AND p.tier_size = 0
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY ${sort}
-  `), ...params);
+  const conds: SQL[] = [];
+  if (filters.provider) conds.push(eq(models.provider_id, filters.provider));
+  if (filters.reasoning) conds.push(eq(models.reasoning, 1));
+  if (filters.toolCall) conds.push(eq(models.tool_call, 1));
+  if (filters.minContext != null) conds.push(gte(models.context_limit, filters.minContext));
+  if (filters.q) conds.push(like(sql`lower(${models.name})`, `%${filters.q.toLowerCase()}%`));
+  const order = filters.sort === 'context' ? desc(models.context_limit) : asc(models.name);
+  return db.select({
+    id: models.id, name: models.name, family: models.family, provider_id: models.provider_id,
+    release_date: models.release_date, attachment: models.attachment, reasoning: models.reasoning,
+    temperature: models.temperature, tool_call: models.tool_call,
+    context_limit: models.context_limit, output_limit: models.output_limit,
+    status: models.status, reasoning_options: models.reasoning_options,
+    input: pricing.input, output: pricing.output,
+    cache_read: pricing.cache_read, cache_write: pricing.cache_write,
+  })
+    .from(models)
+    .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
+    .where(conds.length ? and(...conds) : undefined)
+    .orderBy(order) as any;
 }
 
 export async function getModelDetail(modelId: string): Promise<any[]> {
   const db = getDrizzleDb();
-  return db.all(sql.raw(`
-    SELECT m.*, p.input, p.output, p.cache_read, p.cache_write, p.tier_size
-    FROM models m LEFT JOIN pricing p ON p.model_id = m.id
-    WHERE m.id = ?
-  `), modelId);
+  return db.select({
+    ...getTableColumns(models),
+    input: pricing.input, output: pricing.output,
+    cache_read: pricing.cache_read, cache_write: pricing.cache_write,
+    tier_size: pricing.tier_size,
+  })
+    .from(models)
+    .leftJoin(pricing, eq(pricing.model_id, models.id))
+    .where(eq(models.id, modelId)) as any;
 }
 
 // ── Dashboard: cost analytics ─────────────────────────────────────────────
@@ -658,17 +665,15 @@ export async function queryModelRuntimeStats(opts: {
   modelId?: string; from?: string; to?: string; limit?: number;
 }): Promise<any[]> {
   const db = getDrizzleDb();
-  const where: string[] = [];
-  const params: any[] = [];
-  if (opts.modelId) { where.push('model_id = ?'); params.push(opts.modelId); }
-  if (opts.from) { where.push('measured_at >= ?'); params.push(opts.from); }
-  if (opts.to) { where.push('measured_at <= ?'); params.push(opts.to); }
+  const conds: SQL[] = [];
+  if (opts.modelId) conds.push(eq(model_runtime_stats.model_id, opts.modelId));
+  if (opts.from) conds.push(gte(model_runtime_stats.measured_at, opts.from));
+  if (opts.to) conds.push(lte(model_runtime_stats.measured_at, opts.to));
   const limit = Math.min(opts.limit ?? 100, 1000);
-  return db.all(sql.raw(`
-    SELECT * FROM model_runtime_stats
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY measured_at DESC LIMIT ${limit}
-  `), ...params);
+  return db.select().from(model_runtime_stats)
+    .where(conds.length ? and(...conds) : undefined)
+    .orderBy(desc(model_runtime_stats.measured_at))
+    .limit(limit) as any;
 }
 
 export async function queryTpsLeaderboard(): Promise<any[]> {
@@ -730,13 +735,17 @@ export async function listSessionsWithCounts(opts: {
 
 export async function getSessionWithCounts(sessionId: string): Promise<any | null> {
   const db = getDrizzleDb();
-  const rows = await db.all(sql.raw(`
-    SELECT s.*,
-      (SELECT COUNT(*) FROM messages WHERE session_id = s.id) AS message_count,
-      (SELECT COUNT(*) FROM model_calls WHERE session_id = s.id) AS call_count
-    FROM sessions s WHERE s.id = ?
-  `), sessionId);
-  return rows[0] ?? null;
+  const rows = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  if (!rows[0]) return null;
+  const [msgCount, callCount] = await Promise.all([
+    db.select({ c: count() }).from(messages).where(eq(messages.session_id, sessionId)),
+    db.select({ c: count() }).from(model_calls).where(eq(model_calls.session_id, sessionId)),
+  ]);
+  return {
+    ...rows[0],
+    message_count: msgCount[0]?.c ?? 0,
+    call_count: callCount[0]?.c ?? 0,
+  };
 }
 
 export async function listModelCallsForSession(sessionId: string): Promise<any[]> {
