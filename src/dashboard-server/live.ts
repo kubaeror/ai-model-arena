@@ -41,6 +41,8 @@ export class LiveHub {
   private clients = new Map<WebSocket, { sub: string; role: string }>();
   private convSeen = new Map<string, number>();
   private convMtime = new Map<string, number>();
+  private logOffset = new Map<string, number>();
+  private logMtime = new Map<string, number>();
   private logger = createLogger('ai-arena:live');
   private timers: NodeJS.Timeout[] = [];
   private pollTimer: NodeJS.Timeout | null = null;
@@ -177,6 +179,36 @@ export class LiveHub {
             this.broadcastToSubscribers(runId, { type: 'conversation_update', runId, model: m.model, entry });
           }
         }
+
+        if (m.logFile) {
+          try {
+            const logStat = await fsp.stat(m.logFile);
+            if (this.logMtime.get(key) !== logStat.mtimeMs) {
+              const offset = this.logOffset.get(key) ?? 0;
+              const fd = await fsp.open(m.logFile, 'r');
+              try {
+                const { bytesRead, buffer } = await fd.read(
+                  Buffer.alloc(logStat.size - offset),
+                  0,
+                  logStat.size - offset,
+                  offset,
+                );
+                if (bytesRead > 0) {
+                  this.logOffset.set(key, offset + bytesRead);
+                  this.logMtime.set(key, logStat.mtimeMs);
+                  const lines = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/).filter(Boolean);
+                  if (lines.length > 0) {
+                    this.broadcastToSubscribers(runId, { type: 'log_line', runId, model: m.model, lines });
+                  }
+                } else {
+                  this.logMtime.set(key, logStat.mtimeMs);
+                }
+              } finally {
+                await fd.close();
+              }
+            }
+          } catch { /* log tailing is best-effort */ }
+        }
       }
     }
   }
@@ -192,6 +224,8 @@ export class LiveHub {
             if (key.startsWith(rec.runId)) {
               this.convSeen.delete(key);
               this.convMtime.delete(key);
+              this.logOffset.delete(key);
+              this.logMtime.delete(key);
             }
           }
         }
@@ -203,6 +237,19 @@ export class LiveHub {
     const runs = await this.getRunStatusList();
     if (runs.length > 0) {
       this.broadcast({ type: 'run_status', runs });
+      this.broadcast({
+        type: 'process_status',
+        processes: runs.flatMap((r) => r.models.map((m) => ({
+          name: `${r.runId}:${m.model}`,
+          runId: r.runId,
+          model: m.model,
+          scenario: r.scenario,
+          status: m.status,
+          pid: null,
+          exitCode: null,
+          online: m.status === 'running',
+        }))),
+      });
     }
   }
 
