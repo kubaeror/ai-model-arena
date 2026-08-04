@@ -10,6 +10,7 @@ tests/catalog/benchmarks.test.ts
 tests/catalog/cache.test.ts
 tests/catalog/match.test.ts
 tests/catalog/sync.test.ts
+tests/cost-tracking/pricing.test.ts
 tests/dashboard/auth.test.ts
 tests/dashboard/mask-secrets.test.ts
 tests/dashboard/regression-path-traversal.test.ts
@@ -38,8 +39,8 @@ tests/providers/url-validator.test.ts
 tests/queue/factory.test.ts
 tests/queue/in-memory-extended.test.ts
 tests/queue/in-memory.test.ts
-tests/queue/redis.test.ts
 tests/queue/redis-config.test.ts
+tests/queue/redis.test.ts
 tests/queue/router.test.ts
 tests/queue/task-schema.test.ts
 tests/runner/checkpoint-resume.test.ts
