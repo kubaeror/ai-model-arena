@@ -11,9 +11,9 @@ export class RedisStreamQueue implements TaskQueue {
   private config: RedisQueueConfig;
   private reclaimTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(config: RedisQueueConfig) {
+  constructor(config: RedisQueueConfig, client?: Redis) {
     this.config = config;
-    this.redis = new Redis(config.url, {
+    this.redis = client ?? new Redis(config.url, {
       maxRetriesPerRequest: 3,
       retryStrategy(times: number) {
         return Math.min(times * 200, 3_000);
