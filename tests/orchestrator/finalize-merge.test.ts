@@ -23,7 +23,6 @@ function makePerModel(runId: string, model: string, root: string, ts: string): P
   return {
     model,
     providerId: 'test',
-    procName: `arena-${model}-${ts}`,
     outputDir,
     sandboxDir: path.join(outputDir, 'files'),
     resultPath: path.join(outputDir, 'result.json'),

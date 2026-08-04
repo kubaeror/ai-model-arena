@@ -43,6 +43,13 @@
       "when": 1785851928103,
       "tag": "0005_query_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785882839214,
+      "tag": "0006_wet_morgan_stark",
+      "breakpoints": true
     }
   ]
 }

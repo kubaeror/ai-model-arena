@@ -6,7 +6,7 @@ import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing } from '../cost-tracking/index.js';
-import { ARENA_PREFIX, projectRoot, timestamp, sanitizeName } from './utils.js';
+import { projectRoot, timestamp } from './utils.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/index.js';
@@ -35,7 +35,6 @@ let statsWritebackFailures = 0;
 export interface PerModelSpec {
   model: string;
   providerId: string;
-  procName: string;
   outputDir: string;
   sandboxDir: string;
   resultPath: string;
@@ -72,13 +71,7 @@ export interface RunStartOptions {
 
 export interface PerModelStatus {
   model: string;
-  procName: string;
   status: string;
-  pid: number | null;
-  cpu?: number;
-  memory?: number;
-  uptime?: number;
-  restarts?: number;
   exitCode: number | null;
   online: boolean;
 }
@@ -99,14 +92,12 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   const runId = `${opts.scenario}_${ts}`;
   const perModel: PerModelSpec[] = await Promise.all(opts.models.map(async (model) => {
     const resolved = await resolveModelForRun(model);
-    const procName = sanitizeName(`${ARENA_PREFIX}${model}-${opts.scenario}-${ts}`);
     const outputDir = path.join(outputRoot(), model, runId);
     const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
     fs.mkdirSync(pm2LogDir, { recursive: true });
     return {
       model,
       providerId: resolved?.providerId ?? 'unknown',
-      procName,
       outputDir,
       sandboxDir: path.join(outputDir, 'files'),
       resultPath: path.join(outputDir, 'result.json'),
@@ -131,7 +122,7 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
 /** Register a run (status=running) in the index. */
 export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli', createdBy?: string): Promise<void> {
   const perModel: RunIndexModelEntry[] = spec.models.map((m) => ({
-    model: m.model, runId: spec.runId, procName: m.procName, outputDir: m.outputDir,
+    model: m.model, runId: spec.runId, outputDir: m.outputDir,
     sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
     reportPath: m.reportPath, logFile: m.logFile, status: 'running',
   }));
@@ -261,11 +252,8 @@ export async function checkRunStatus(spec: RunSpec): Promise<PerModelStatus[]> {
   return spec.models.map((m) => {
     const pm = rec?.perModel.find((x) => x.model === m.model);
     return {
-      model: m.model, procName: m.procName,
+      model: m.model,
       status: pm?.status ?? (rec ? 'completed' : 'absent'),
-      pid: null,
-      cpu: undefined, memory: undefined,
-      uptime: undefined, restarts: 0,
       exitCode: null, online: pm?.status === 'running',
     };
   });
@@ -339,7 +327,7 @@ async function buildPerModelEntries(
   return Promise.all(rec!.perModel.map(async (m) => {
     const r = entries.find((x) => x.model === m.model)?.result;
     const base = {
-      model: m.model, runId, procName: m.procName, outputDir: m.outputDir,
+      model: m.model, runId, outputDir: m.outputDir,
       sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
       reportPath: m.reportPath, logFile: m.logFile,
     };

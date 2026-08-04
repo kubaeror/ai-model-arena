@@ -36,7 +36,7 @@ vi.mock('../../src/lib/api', async () => {
         scenario: 'express-rest',
         status: 'completed',
         perModel: [
-          { model: 'gpt-4o', runId: 'test-run-1', status: 'completed', procName: 'p1', outputDir: '/o', sandboxDir: '/s', resultPath: '/r', conversationPath: '/c', reportPath: '/m', logFile: '/l' },
+          { model: 'gpt-4o', runId: 'test-run-1', status: 'completed', outputDir: '/o', sandboxDir: '/s', resultPath: '/r', conversationPath: '/c', reportPath: '/m', logFile: '/l' },
         ],
       },
     }),

@@ -184,7 +184,6 @@ export const cost_ledger = pgTable('cost_ledger', {
 export const run_models = pgTable('run_models', {
   run_id: text('run_id').notNull().references(() => runs.run_id),
   model: text('model').notNull(),
-  proc_name: text('proc_name'),
   output_dir: text('output_dir'),
   sandbox_dir: text('sandbox_dir'),
   result_path: text('result_path'),

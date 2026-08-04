@@ -40,7 +40,6 @@ export type RunStatus = 'running' | 'completed' | 'stopped' | 'errored' | 'unkno
 export interface RunIndexModelEntry {
   model: string;
   runId: string;
-  procName: string;
   status: RunStatus;
   success?: boolean;
   turnsUsed?: number;

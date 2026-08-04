@@ -35,10 +35,25 @@ test('listRuns returns newest first', async () => {
 test('upsertRun with perModel entries round-trips', async () => {
   initDb(':memory:');
   const r = mkRun('r2');
-  r.perModel = [{ model: 'gpt-4o', runId: 'r2', procName: 'p', outputDir: '/o', sandboxDir: '/s', resultPath: '/r', conversationPath: '/c', reportPath: '/m', logFile: '/l', status: 'running' }];
+  r.perModel = [{ model: 'gpt-4o', runId: 'r2', outputDir: '/o', sandboxDir: '/s', resultPath: '/r', conversationPath: '/c', reportPath: '/m', logFile: '/l', status: 'running' }];
   await upsertRun(r);
   const rec = await getRunRecord('r2');
   assert.equal(rec?.perModel.length, 1);
   assert.equal(rec?.perModel[0]!.model, 'gpt-4o');
+  closeDb();
+});
+
+test('round-tripped perModel entries carry no PM2-era fields', async () => {
+  initDb(':memory:');
+  const r = mkRun('r3');
+  r.perModel = [{ model: 'gpt-4o', runId: 'r3', outputDir: '/o', sandboxDir: '/s', resultPath: '/r', conversationPath: '/c', reportPath: '/m', logFile: '/l', status: 'running' }];
+  await upsertRun(r);
+  const rec = await getRunRecord('r3');
+  assert.equal('procName' in rec!.perModel[0]!, false);
+  assert.equal('pid' in rec!.perModel[0]!, false);
+  const all = await listRuns();
+  const listed = all.find((x) => x.runId === 'r3');
+  assert.equal('procName' in listed!.perModel[0]!, false);
+  assert.equal('pid' in listed!.perModel[0]!, false);
   closeDb();
 });
