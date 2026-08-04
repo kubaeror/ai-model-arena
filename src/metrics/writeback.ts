@@ -7,7 +7,7 @@ import { extractCacheMetrics } from './cache-metrics.js';
 import { matchModelToCanonical, type CatalogEntry } from '../catalog/match.js';
 
 interface TraceMeta {
-  spans: Array<{ spanId?: string; name: string; startTime: number; endTime: number; attributes?: Record<string, unknown> }>;
+  spans: Array<{ spanId?: string; name: string; startedAt: number; endedAt: number; durationMs?: number | null; attributes?: Record<string, unknown> }>;
 }
 
 interface RunResult {

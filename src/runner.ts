@@ -20,7 +20,7 @@ import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
 import { generateManifest, writeManifest } from './sandbox/artifact-manifest.js';
 import { getProfile, getAllowedTools } from './profiles/definitions.js';
-import { runAgentLoop } from './agent-loop/loop.js';
+import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
 import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
@@ -379,7 +379,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       while (maxFallbackHops >= 0) {
         const breaker = CircuitBreaker.for(currentProvider, currentModel);
         try {
-          loopResult = await breaker.exec(() => runAgentLoop({
+          const traced = await breaker.exec(() => runAgentLoopTraced({
             adapter,
             tools: TOOL_DEFINITIONS,
             executors,
@@ -393,6 +393,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             conv,
             logger: logger.child('loop'),
             initialMessages: resumedMessages,
+            provider: currentProvider,
+            model: currentModel,
+            temperature: 0,
+            maxTokens: 0,
+            scenario: scenarioName,
+            runId: modelRunId,
+            modelConfig: modelName,
+            outputDir: runOutputDir,
             onTurnComplete: async (turn, newMessages, usage) => {
               // Persist the real conversation so checkpoint/resume replays
               // actual content instead of empty stubs.
@@ -437,6 +445,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               return true;
             },
           }));
+          loopResult = traced.result;
           break;
         } catch (err) {
           if (err instanceof CircuitOpenError && opts.fallbackChain) {

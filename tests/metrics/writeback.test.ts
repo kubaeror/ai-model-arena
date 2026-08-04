@@ -44,10 +44,10 @@ test('writeRunStats upserts model_runtime_stats row from trace-meta + result.jso
     }));
     fs.writeFileSync(path.join(modelDir, 'trace-meta.json'), JSON.stringify({
       traceId: 't1', spans: [
-        { spanId: 's1', name: 'chat', kind: 'internal', startTime: 0, endTime: 1500, attributes: { model: 'gpt-4o' } },
-        { spanId: 's2', name: 'chat', kind: 'internal', startTime: 1500, endTime: 3000, attributes: { model: 'gpt-4o' } },
-        { spanId: 's3', name: 'execute_tool', kind: 'internal', startTime: 3000, endTime: 3500, attributes: { tool: 'read_file' } },
-        { spanId: 's4', name: 'chat', kind: 'internal', startTime: 3500, endTime: 5000, attributes: { model: 'gpt-4o' } },
+        { spanId: 's1', name: 'chat', type: 'chat', startedAt: 0, endedAt: 1500, durationMs: 1500, status: 'ok', attributes: { model: 'gpt-4o' } },
+        { spanId: 's2', name: 'chat', type: 'chat', startedAt: 1500, endedAt: 3000, durationMs: 1500, status: 'ok', attributes: { model: 'gpt-4o' } },
+        { spanId: 's3', name: 'execute_tool', type: 'execute_tool', startedAt: 3000, endedAt: 3500, durationMs: 500, status: 'ok', attributes: { tool: 'read_file' } },
+        { spanId: 's4', name: 'chat', type: 'chat', startedAt: 3500, endedAt: 5000, durationMs: 1500, status: 'ok', attributes: { model: 'gpt-4o' } },
       ],
     }));
 
