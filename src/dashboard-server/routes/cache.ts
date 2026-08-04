@@ -3,6 +3,7 @@ import { queryCacheLeaderboard } from '../../db/query.js';
 import { getCacheStates } from '../../catalog/cache.js';
 import type { ApiKeyRequest } from '../auth-api-types.js';
 import { INTERNAL_ERROR } from '../error-sanitizer.js';
+import { requireRole } from '../../auth/rbac.js';
 
 export function createCacheRouter(): Router {
   const router = Router();
@@ -16,7 +17,8 @@ export function createCacheRouter(): Router {
     res.json({ data: rows });
   });
 
-  router.post('/refresh', async (req, res) => {
+  // Write operation: a viewer must not be able to force catalog re-syncs.
+  router.post('/refresh', requireRole('editor'), async (req, res) => {
     const apiKeyCtx = (req as ApiKeyRequest).apiKey;
     if (apiKeyCtx && !apiKeyCtx.permissions.includes('cache:write')) {
       res.status(403).json({ error: 'Missing permission: cache:write' });

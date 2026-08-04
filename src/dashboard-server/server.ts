@@ -153,19 +153,32 @@ async function start(): Promise<void> {
     legacyHeaders: false,
   });
   const metricsToken = process.env.METRICS_TOKEN;
-  app.get('/metrics', metricsLimiter, (req: AuthedRequest, res) => {
-    if (metricsToken) {
-      const authHeader = req.headers.authorization ?? '';
-      const match = /^Bearer\s+(.+)$/i.exec(authHeader);
-      if (!match || match[1] !== metricsToken) {
+  app.get('/metrics', metricsLimiter,
+    (req: AuthedRequest, res, next) => {
+      // Without METRICS_TOKEN, /metrics must not be left unauthenticated —
+      // require JWT (admin) instead. Prometheus scrapes use the token in prod.
+      if (!metricsToken) {
+        requireAuth(auth)(req, res, next);
+        return;
+      }
+      next();
+    },
+    (req: AuthedRequest, res) => {
+      if (metricsToken) {
+        const authHeader = req.headers.authorization ?? '';
+        const match = /^Bearer\s+(.+)$/i.exec(authHeader);
+        if (!match || match[1] !== metricsToken) {
+          res.status(401).json({ error: 'Authentication required' });
+          return;
+        }
+      } else if (req.user?.role !== 'admin') {
         res.status(401).json({ error: 'Authentication required' });
         return;
       }
-    }
-    metricsHandler(req, res).catch(() => {
-      res.status(500).send('metrics error');
+      metricsHandler(req, res).catch(() => {
+        res.status(500).send('metrics error');
+      });
     });
-  });
 
   // ── Global rate limiter ──────────────────────────────────────────────────
   const apiLimiter = rateLimit({
@@ -176,6 +189,12 @@ async function start(): Promise<void> {
     legacyHeaders: false,
   });
   app.use('/api/', apiLimiter);
+
+  // Behind a reverse proxy, req.ip is the proxy address unless trust proxy is
+  // set — every user would share one rate-limit bucket (global lockout
+  // vector). Default: 1 hop in production; override with TRUST_PROXY_HOPS.
+  const trustHops = Number(process.env.TRUST_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? 1 : 0));
+  if (Number.isInteger(trustHops) && trustHops > 0) app.set('trust proxy', trustHops);
 
   loadApiKeysConfig(path.join(root, 'configs', 'api-keys.yaml'), logger);
 
