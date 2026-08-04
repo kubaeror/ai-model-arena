@@ -20,6 +20,7 @@ export class RedisStreamQueue implements TaskQueue {
       },
       connectTimeout: 10_000,
       lazyConnect: false,
+      protocol: 2,
     });
     this.startReclaimLoop();
   }
