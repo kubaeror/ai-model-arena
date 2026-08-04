@@ -35,6 +35,7 @@ services:
       DATABASE_URL: postgres://arena:arena@postgres:5432/arena
       QUEUE_DRIVER: redis
       REDIS_URL: redis://redis:6379
+      ARENA_PROVIDER_FILTER: openai-compat
       OUTPUT_ROOT: /var/arena/outputs
     depends_on:
       postgres:
