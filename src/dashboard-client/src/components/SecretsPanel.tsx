@@ -42,7 +42,7 @@ async function fetchSecrets(): Promise<SecretsResponse> {
 }
 
 async function setSecret(envVar: string, value: string): Promise<{ ok: boolean }> {
-  const res = await api.patch(`/api/secrets/${encodeURIComponent(envVar)}`, {
+  const res = await api.put(`/api/secrets/${encodeURIComponent(envVar)}`, {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value }),
   });
