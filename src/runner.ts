@@ -136,8 +136,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   initDb(dbPath());
 
   // Expose this process's prom-client registry (task/queue metrics) so
-  // Prometheus can actually scrape runner counters.
-  startMetricsServer();
+  // Prometheus can actually scrape runner counters. Disable in tests.
+  if (process.env.RUNNER_METRICS_ENABLED !== 'false') {
+    startMetricsServer();
+  }
 
   // Load budget config for enforcement in the runner loop
   loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);
@@ -202,7 +204,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const cleanupInterval = setInterval(() => {
     CircuitBreaker.cleanup();
   }, 300_000);
-  void cleanupInterval; // keep interval alive, never unref
+  cleanupInterval.unref();
 
   while (!signal.aborted) {
     if (isKillSwitchActive()) {
@@ -216,7 +218,17 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
     let taskStartedAt: Date | null = null;
     let taskCounted = false;
     try {
-      task = await queue.dequeue(30000);
+      // Race the dequeue against the abort signal so shutdown does not wait
+      // out a 30s blocked XREADGROUP/XREAD.
+      let abortCleanup: () => void = () => {};
+      const abortWait = new Promise<Task | null>((resolve) => {
+        if (signal.aborted) { resolve(null); return; }
+        const onAbort = () => resolve(null);
+        signal.addEventListener('abort', onAbort, { once: true });
+        abortCleanup = () => signal.removeEventListener('abort', onAbort);
+      });
+      task = await Promise.race([queue.dequeue(30000), abortWait]);
+      abortCleanup();
       if (!task) continue;
       runningTask = task;
       taskStartedAt = new Date();

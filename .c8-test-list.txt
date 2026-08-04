@@ -46,6 +46,7 @@ tests/queue/router.test.ts
 tests/queue/task-schema.test.ts
 tests/runner/checkpoint-resume.test.ts
 tests/runner/checkpoint.test.ts
+tests/runner/runner-loop.test.ts
 tests/runner/runner.test.ts
 tests/runner/success-criteria.test.ts
 tests/sandbox/artifact-manifest.test.ts
