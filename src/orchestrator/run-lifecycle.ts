@@ -29,6 +29,16 @@ function makeIdempotencyKey(scenario: string, models: string[]): string {
 /** Per-run budget reservations (runId -> model -> reserved USD). */
 const runReservations = new Map<string, Map<string, number>>();
 
+/**
+ * Tokens per turn used for the up-front cost estimate. Configurable via
+ * RUN_COST_ESTIMATE_TOKENS (integer, fallback 8000, clamped to >= 1).
+ */
+function costEstimateTokensPerTurn(): number {
+  const raw = Number.parseInt(process.env.RUN_COST_ESTIMATE_TOKENS ?? '', 10);
+  if (Number.isNaN(raw)) return 8000;
+  return Math.max(1, raw);
+}
+
 let anomalyAnalysisFailures = 0;
 let statsWritebackFailures = 0;
 
@@ -167,7 +177,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     // Estimate cost: assume maxTurns tokens × worst-case pricing
     const resolved = await resolveModelForRun(modelName);
     const maxTurns = resolved?.maxTurns ?? 20;
-    const estTokensPerTurn = 8000; // conservative estimate
+    const estTokensPerTurn = costEstimateTokensPerTurn();
     const pricingData = await getPricing(modelName);
     const inputPrice = pricingData?.input ?? 0;
     const outputPrice = pricingData?.output ?? 0;
