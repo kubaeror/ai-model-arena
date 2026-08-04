@@ -6,8 +6,9 @@ import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
 import { insertSchedule, listSchedules } from '../../src/db/query.js';
 import { tickScheduler } from '../../src/scheduler/tick.js';
-import { getScheduleState } from '../../src/scheduler/manager.js';
+import { getScheduleState, loadSchedulesConfig, syncSchedulesToDb, resetSchedulesCache } from '../../src/scheduler/manager.js';
 import { fetchSync } from '../../src/catalog/sync.js';
+import { dump } from 'js-yaml';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -99,6 +100,84 @@ test('tickScheduler ticks a due schedule and advances next_run', async () => {
     assert.equal(state?.consecutiveFailures, 0);
     assert.equal(state?.totalRuns, 1);
   } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('tickScheduler passes schedule options (timeoutMs, forceBudget) into startRun', async (t) => {
+  const tmp = freshDb();
+  const configPath = path.join(tmp, 'schedules.yaml');
+  try {
+    fs.writeFileSync(configPath, dump({
+      schedules: [{
+        id: 's-opt', scenario: 'express-rest', models: ['gpt-4o'],
+        cron: '* * * * *', enabled: true,
+        options: { forceBudget: true, timeoutMs: 12345 },
+      }],
+    }));
+    loadSchedulesConfig(configPath);
+    await syncSchedulesToDb(configPath);
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-opt');
+
+    const calls: Array<Record<string, unknown>> = [];
+    t.mock.module('../../src/orchestrator/run-lifecycle.js', {
+      exports: {
+        startRun: async (opts: Record<string, unknown>) => {
+          calls.push(opts);
+          return { runId: 'x', scenario: opts.scenario, ts: 't', startedAt: 'now', models: [] };
+        },
+      },
+    });
+
+    let result = await tickScheduler();
+    assert.deepEqual(result.ticked, ['s-opt']);
+    assert.deepEqual(calls[0], {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+      forceBudget: true, timeoutMs: 12345,
+    });
+
+    await insertSchedule({
+      id: 's-plain', scenario: 'express-rest', models: ['gpt-4o'],
+      cron: '* * * * *', enabled: true, createdAt: new Date().toISOString(),
+    });
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-plain');
+    result = await tickScheduler();
+    assert.deepEqual(result.ticked, ['s-plain']);
+    assert.deepEqual(calls[1], { scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler' });
+  } finally {
+    resetSchedulesCache();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('tickScheduler backs off failures by SCHEDULER_FAILURE_BACKOFF_MS', async (t) => {
+  const tmp = freshDb();
+  process.env.SCHEDULER_FAILURE_BACKOFF_MS = '5000';
+  try {
+    await insertSchedule({
+      id: 's-bad2', scenario: 'express-rest', models: ['gpt-4o'],
+      cron: '* * * * *', enabled: true, createdAt: new Date().toISOString(),
+    });
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-bad2');
+
+    t.mock.module('../../src/orchestrator/run-lifecycle.js', {
+      exports: {
+        startRun: async () => { throw new Error('boom'); },
+      },
+    });
+
+    const result = await tickScheduler();
+    assert.deepEqual(result.ticked, []);
+    assert.deepEqual(result.failures, ['s-bad2']);
+
+    const after = (await listSchedules()).find((s) => s.id === 's-bad2')!;
+    const nextMs = new Date(after.next_run!).getTime();
+    assert.ok(nextMs > Date.now() + 2000, `expected env-derived backoff, got ${after.next_run}`);
+    assert.ok(nextMs < Date.now() + 60000, `expected env-derived backoff, got ${after.next_run}`);
+  } finally {
+    delete process.env.SCHEDULER_FAILURE_BACKOFF_MS;
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
   }

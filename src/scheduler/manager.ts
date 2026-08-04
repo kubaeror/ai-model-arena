@@ -7,8 +7,6 @@ import { SchedulesConfigSchema } from './types.js';
 
 let schedulesConfig: SchedulesConfig | null = null;
 const scheduleStates = new Map<string, ScheduleState>();
-let _schedulerStarted = false;
-void _schedulerStarted;
 
 export function loadSchedulesConfig(configPath: string, logger?: Logger): SchedulesConfig {
   if (schedulesConfig) return schedulesConfig;
@@ -115,5 +113,4 @@ export async function syncSchedulesToDb(configPath: string, logger?: Logger): Pr
 export function resetSchedulesCache(): void {
   schedulesConfig = null;
   scheduleStates.clear();
-  _schedulerStarted = false;
 }
