@@ -158,7 +158,7 @@ async function start(): Promise<void> {
       // Without METRICS_TOKEN, /metrics must not be left unauthenticated —
       // require JWT (admin) instead. Prometheus scrapes use the token in prod.
       if (!metricsToken) {
-        requireAuth(auth)(req, res, next);
+        void requireAuth(auth)(req, res, next);
         return;
       }
       next();
