@@ -128,7 +128,33 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
   let stopReason = 'unknown';
   let turnsUsed = 0;
 
+  if (maxTurns < 1) {
+    stopReason = 'max_turns';
+    logger.warn('Agent stopped: max_turns reached', { turnsUsed: 0, maxTurns });
+    setSpanAttributes(loopSpan, {
+      stop_reason: stopReason,
+      turns_used: 0,
+      total_tool_calls: totalToolCalls,
+      'gen_ai.usage.input_tokens': usage.prompt ?? 0,
+      'gen_ai.usage.output_tokens': usage.completion ?? 0,
+      'gen_ai.usage.total_tokens': usage.total ?? 0,
+    });
+    endSpan(loopSpan);
+    conv.flush();
+    return { turnsUsed: 0, maxTurns, totalToolCalls: 0, toolsCalled: [], toolSuccessRates: {}, tokenUsage: usage, stopReason, errors: [] };
+  }
+
   for (let turn = 1; turn <= maxTurns; turn++) {
+    if (onBudgetCheck) {
+      try {
+        const ok = await onBudgetCheck(turn, usage);
+        if (!ok) {
+          stopReason = 'budget_exceeded';
+          logger.warn('Agent stopped: budget exceeded', { turn, tokens: usage.total });
+          break;
+        }
+      } catch (e) { logger.warn('onBudgetCheck failed', { turn, err: String(e) }); }
+    }
     turnsUsed = turn;
     logger.info('Agent turn', { turn, maxTurns });
 
@@ -254,17 +280,6 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       stopReason = 'task_complete';
       logger.info('Agent signalled task_complete', { turn });
       break;
-    }
-
-    if (onBudgetCheck) {
-      try {
-        const ok = await onBudgetCheck(turn, usage);
-        if (!ok) {
-          stopReason = 'budget_exceeded';
-          logger.warn('Agent stopped: budget exceeded', { turn, tokens: usage.total });
-          break;
-        }
-      } catch (e) { logger.warn('onBudgetCheck failed', { turn, err: String(e) }); }
     }
   }
 

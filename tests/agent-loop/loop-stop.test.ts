@@ -5,15 +5,18 @@ import type { ModelAdapter, ModelResponse, ChatMessage, ToolDefinition } from '.
 import type { ConversationLogger } from '../../src/logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../../src/tools/schema.js';
 
-function stubAdapter(responses: ModelResponse[]): ModelAdapter {
+function stubAdapter(responses: ModelResponse[]): ModelAdapter & { sendCalls: () => number } {
   let i = 0;
+  let sent = 0;
   return {
     sendMessage: async () => {
+      sent++;
       const r = responses[i++] ?? { text: '', toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: 'no_tool_calls' };
       return r;
     },
     supportsReasoning: () => false,
     supportsPromptCaching: () => false,
+    sendCalls: () => sent,
   };
 }
 
@@ -28,6 +31,13 @@ function stubConv() {
 
 function stubToolCtx() {
   return { sandboxDir: '/tmp', logger: stubLogger(), shellTimeoutMs: 10000, maxShellOutputBytes: 524288 };
+}
+
+function baseOpts() {
+  return {
+    tools: [], executors: {},
+    systemPrompt: 's', task: 't', maxTurns: 10, toolCtx: stubToolCtx(), conv: stubConv(), logger: stubLogger(),
+  };
 }
 
 test('stops on task_complete', async () => {
@@ -77,4 +87,27 @@ test('stops on api_error', async () => {
   });
   assert.equal(result.stopReason, 'api_error');
   assert.ok(result.errors.length > 0);
+});
+
+test('budget check runs before the first model call and stops immediately', async () => {
+  const calls: number[] = [];
+  const adapter = stubAdapter([]);
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, maxTurns: 5,
+    onBudgetCheck: async () => { calls.push(1); return false; },
+  });
+  assert.equal(result.stopReason, 'budget_exceeded');
+  assert.equal(calls.length, 1);
+  assert.equal(adapter.sendCalls(), 0); // adapter.sendMessage never invoked
+});
+
+test('maxTurns=0 returns stopReason max_turns without invoking the model', async () => {
+  const adapter = stubAdapter([]);
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, maxTurns: 0,
+  });
+  assert.equal(result.stopReason, 'max_turns');
+  assert.equal(adapter.sendCalls(), 0);
 });
