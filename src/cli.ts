@@ -35,7 +35,7 @@ const program = new Command();
 
 program
   .name('ai-arena')
-  .description('Automated, multi-model agentic coding arena (PM2-managed sandboxed sessions).')
+  .description('Automated, multi-model agentic coding arena (queue-driven sandboxed sessions).')
   .version('0.1.0');
 
 function rootDir(): string {
@@ -47,8 +47,7 @@ program
   .command('run')
   .description('Run a scenario against one or more models concurrently (one queued task each).')
   .requiredOption('-s, --scenario <name>', 'Scenario name (configs/scenarios/<name>.yaml) or a .yaml path')
-  .requiredOption('-m, --models <list>', 'Comma-separated model names from configs/models.yaml')
-  .option('--models-config <path>', 'Path to models.yaml (default: configs/models.yaml)')
+  .requiredOption('-m, --models <list>', 'Comma-separated model names from the provider catalog')
   .option('--scenarios-dir <path>', 'Directory containing scenario files (default: configs/scenarios)')
   .option('--timeout <minutes>', 'Overall wait timeout in minutes (default: 30)', (v) => Number(v))
   .action(async (opts) => {
@@ -63,12 +62,30 @@ program
     }
 
     const root = rootDir();
-    // Early model validation before launching workers
+    // Early model validation before launching workers. An empty catalog means
+    // models.dev was never synced — sync once automatically.
     initDb(dbPath());
     const { resolveModelForRun } = await import('./db/model-resolver.js');
-    const invalid: string[] = [];
+    let invalid: string[] = [];
     for (const name of models) {
       if (!(await resolveModelForRun(name))) invalid.push(name);
+    }
+    if (invalid.length > 0) {
+      const { listModelsWithPricing } = await import('./db/query.js');
+      if ((await listModelsWithPricing()).length === 0) {
+        console.error('Catalog is empty — running models.dev sync…');
+        const { fetchSync } = await import('./catalog/sync.js');
+        const res = await fetchSync('models.dev');
+        if (!res.ok) {
+          console.error(`Catalog sync failed: ${res.error ?? 'unknown error'}`);
+          process.exit(1);
+        }
+        console.error(`Catalog synced: ${res.count} models.`);
+        invalid = [];
+        for (const name of models) {
+          if (!(await resolveModelForRun(name))) invalid.push(name);
+        }
+      }
     }
     if (invalid.length > 0) {
       const { listModelsWithPricing } = await import('./db/query.js');
@@ -79,7 +96,7 @@ program
         console.error(`Available models (${available.length} total):`);
         for (const m of available) console.error(`  - ${m}`);
       } else {
-        console.error('No models in catalog. Run catalog sync first.');
+        console.error('No models in catalog.');
       }
       process.exit(1);
     }
@@ -87,7 +104,6 @@ program
     const runOpts = {
       scenario: opts.scenario,
       models,
-      modelsConfigPath: opts.modelsConfig,
       scenariosDir: opts.scenariosDir,
       timeoutMs: opts.timeout ? opts.timeout * 60 * 1000 : undefined,
       logger,

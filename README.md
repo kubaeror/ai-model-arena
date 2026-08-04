@@ -4,7 +4,7 @@ Multi-model **agentic coding arena** — run multiple LLMs on the same coding ta
 
 Models receive a task, get access to coding tools (file ops, shell, search), and work autonomously in an isolated sandbox. Every turn and tool call is logged, all artifacts are saved, and cross-model comparison reports are generated automatically.
 
-Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runner pods that scale to zero via KEDA. A real-time React dashboard provides run monitoring, scenario management, cost tracking, anomaly detection, and observability.
+Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runner pods autoscaled via KEDA. A real-time React dashboard provides run monitoring, scenario management, cost tracking, anomaly detection, and observability.
 
 ---
 
@@ -16,7 +16,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 - **13 built-in tools**: read_file, write_file, edit_file, glob, list_files, run_shell_command, search_code, web_fetch, web_search, todo_read, todo_write, task (subagent), task_complete
 - **Queue-driven architecture**: Redis Streams (production) or in-memory queue (dev) with KEDA autoscaling
 - **Session persistence**: SQLite (dev) or Postgres (production) via Drizzle ORM, with per-turn checkpointing
-- **OpenTelemetry tracing**: full span trees per run (agent → chat → tool), OTLP export to Tempo/Grafana
+- **OpenTelemetry tracing**: full span trees per run (agent → chat → tool), local trace-meta.json plus optional OTLP export
 - **Anomaly detection**: z-score based latency, loop, token/cost spike, error rate, and silent failure detection
 - **LLM-as-Judge evaluation**: rubric-based scoring (correctness, fidelity, style, efficiency)
 - **Cost tracking & budgets**: per-model and global daily/monthly limits with enforcement
@@ -25,8 +25,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 - **Notifications**: Slack, Discord, and signed webhooks
 - **Prompt injection detection**: content scanning on user-provided tool arguments
 - **Git integration**: auto-init, per-turn commits, and `diff.patch` generation
-- **Artifact lineage**: provenance tracking for generated files
-- **Prometheus metrics**: runner and dashboard health, queue depth, error rates
+- **Prometheus metrics**: dashboard health, queue depth, error rates
 - **Public REST API**: OpenAPI 3.0, API-key auth, per-key rate limiting, Swagger UI at `/api/docs`
 - **Web dashboard**: React + Vite + TanStack Query + Tailwind with live WebSocket updates
 
@@ -85,7 +84,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Sandbox** | `src/sandbox/` | Isolated workspace with path escape prevention, shell policy, git integration |
 | **Session store** | `src/session/store.ts` | Message + session persistence per turn |
 | **Database** | `src/db/` | Drizzle ORM: SQLite + Postgres schemas, migrations, model resolver |
-| **Orchestrator** | `src/orchestrator/` | Run lifecycle, run index, PM2 helpers |
+| **Orchestrator** | `src/orchestrator/` | Run lifecycle, run index, run utils |
 | **Catalog** | `src/catalog/` | models.dev sync, benchmark data, model matching |
 | **Cost tracking** | `src/cost-tracking/` | Pricing config, budget enforcement, per-run cost records |
 | **Evaluation** | `src/evaluation/` | LLM-as-Judge scoring, regression suite runner |
@@ -97,7 +96,6 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Security** | `src/security/` | Prompt injection detection |
 | **Secrets** | `src/secrets/` | Dual-mode secret store (k8s-mounted files or `.env` based) |
 | **Environment** | `src/env/` | Platform auto-detection (Kubernetes vs bare-metal) |
-| **Lineage** | `src/lineage/` | Artifact provenance tracking |
 | **Logger** | `src/logger/` | Pino structured logger, conversation/report/result/comparison loggers |
 | **Dashboard server** | `src/dashboard-server/` | Express API + WebSocket gateway, JWT auth, RBAC, 26 route modules |
 | **Dashboard client** | `src/dashboard-client/` | React + Vite + TanStack Query + Tailwind SPA |
@@ -106,7 +104,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 ## Quick start
 
-**Requirements**: Node.js ≥ 22
+**Requirements**: Node.js ≥ 22.22
 
 ```bash
 git clone <repo-url> && cd ai-model-arena
@@ -114,6 +112,10 @@ npm install
 cp .env.example .env
 # Edit .env — add at least one API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
 ```
+
+The first `run` syncs the model catalog from models.dev automatically when
+it is empty (no models found). You can also start the dashboard once — it
+syncs the catalog at boot.
 
 ### Run a scenario
 
@@ -155,7 +157,10 @@ docker compose up -d
 # → http://localhost:4000
 ```
 
-Set `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` in `.env` (authentication is mandatory, even locally).
+Set `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`, and `DASHBOARD_JWT_SECRET`
+(min 32 chars) in `.env` (authentication is mandatory, even locally).
+`WEBHOOK_SECRET_KEY` is required when `NODE_ENV=production` (webhook create
+refuses to run without it).
 
 ---
 
@@ -331,7 +336,7 @@ minikube service dashboard -n ai-arena --url
 
 For **Argo CD GitOps**, the application manifest is at `k8s/argocd/ai-arena-app.yaml` (auto-sync + self-heal from `main` branch).
 
-KEDA scales each adapter-family runner independently based on Redis Stream queue depth. All runners scale to zero when idle.
+KEDA scales each adapter-family runner independently based on Redis Stream queue depth (`minReplicaCount: 1`, so runners never fully scale to zero — keeping reclaim + group state warm).
 
 Observability stack (Prometheus, Grafana, Loki, Promtail, OTel Collector) is in `k8s/observability/`.
 
@@ -358,7 +363,7 @@ The arena instruments every run with OpenTelemetry spans following GenAI semanti
 - **`chat`** (per LLM API call — includes token usage, model, temperature)
 - **`execute_tool`** (per tool invocation — duration, success/failure)
 
-Set `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT` to send traces to Tempo/Grafana.
+Set `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT` to export spans to an OTel Collector (e.g. Tempo/Grafana — the k8s stack ships the Collector; a Tempo deployment is not included by default).
 
 Local trace metadata (`trace-meta.json`) is always recorded and surfaced in the dashboard's **Trace** tab. The **Observability** page provides aggregate stats without an external backend.
 
@@ -381,11 +386,11 @@ Anomalies are written to SQLite, trigger notifications, and appear on the dashbo
 
 ## Public API
 
-Interactive docs at `http://localhost:4000/api/docs` (Swagger UI). All endpoints under `/api/v1/`, protected by `X-API-Key` header.
+Interactive docs at `http://localhost:4000/api/docs` (Swagger UI). Endpoints under `/api/v1/` are protected by `X-API-Key` header; everything else uses JWT + RBAC.
 
-Key endpoints: `models`, `scenarios`, `runs`, `cost`, `traces`, `anomalies`, `observability`, `webhooks`, `export`, `analytics`, `metrics`, `catalog`, `queues`, `runners`, `providers`, `prompts`.
+Key `/api/v1/` endpoints: `models`, `scenarios`, `runs`, `traces`, `anomalies`, `observability`, `webhooks`, `export`, `analytics`, `metrics`, `catalog`, `providers`, `prompts`, `files`, `sessions`, `schedules`, `budget`, `cache`, `regression`.
 
-API keys are configured in `configs/api-keys.yaml` with granular permissions (`runs:read`, `runs:write`, `models:read`, `scenarios:read`, `analytics:read`, `export:read`, `traces:read`, `anomalies:read`, `anomalies:write`, `observability:read`, `webhooks:write`).
+API keys are configured in `configs/api-keys.yaml` with granular permissions. The full permission set is enforced by the server (see `src/dashboard-server/server.ts` v1 mounts); per-key rate limiting is applied.
 
 ## Development
 
@@ -397,6 +402,7 @@ npm run lint             # ESLint
 npm test                 # All tests (node:test)
 npm run test:ci          # Full CI: typecheck + lint + coverage + db tests
 npm run test:db          # Database-specific tests
+npm run test:db-pg       # Postgres smoke tests (requires local postgres)
 npm run db:generate      # Generate Drizzle migrations
 npm run db:migrate       # Apply Drizzle migrations
 npm run dashboard:dev    # API server + React dev server (concurrently)
@@ -415,28 +421,26 @@ ai-model-arena/
 │   ├── runner.ts                 # Queue-driven runner loop
 │   ├── runner-entry.ts           # Container entrypoint
 │   ├── config.ts                 # Zod schemas + YAML loaders
-│   ├── env.ts                    # Dashboard env config
 │   ├── types.ts                  # Shared TypeScript interfaces
 │   ├── agent-loop/               # Core send→tool→loop logic
 │   ├── anomaly-detection/        # Z-score detectors + anomaly DB
 │   ├── auth/                     # Password hashing + RBAC
 │   ├── catalog/                  # models.dev sync + model matching
 │   ├── cost-tracking/            # Pricing + budget enforcement
-│   ├── dashboard-server/         # Express API + WebSocket + 26 route modules
+│   ├── dashboard-server/         # Express API + WebSocket + route modules
 │   ├── dashboard-client/         # React SPA (Vite + TanStack Query)
 │   ├── db/                       # Drizzle ORM (SQLite + Postgres)
 │   ├── env/                      # Platform auto-detection (k8s vs bare-metal)
 │   ├── evaluation/               # LLM-as-Judge + regression testing
 │   ├── fs/                       # Locked file writes
-│   ├── lineage/                  # Artifact provenance
 │   ├── logger/                   # Pino + structured loggers
 │   ├── metrics/                  # Prometheus metrics
 │   ├── notifications/            # Slack, Discord, webhooks
 │   ├── observability/            # OpenTelemetry setup + trace instrumentation
-│   ├── orchestrator/             # Run lifecycle, PM2 helpers, run index
+│   ├── orchestrator/             # Run lifecycle + run index
 │   ├── providers/                # 59 provider descriptors + 4 adapter families
 │   ├── queue/                    # In-memory + Redis Streams queue
-│   ├── runner/                   # Checkpointing + idempotency
+│   ├── runner/                   # Checkpoint/resume + idempotency
 │   ├── sandbox/                  # Isolated filesystem + git
 │   ├── scheduler/                # Cron job manager
 │   ├── secrets/                  # Dual-mode secret store

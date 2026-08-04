@@ -21,7 +21,7 @@
 1. If provider outage: wait for recovery or switch to a fallback model
 2. If rate limiting: reduce concurrency or add additional API keys
 3. If circuit breaker: the breaker auto-resets after 30s — no action needed
-4. If model deprecated: update the model catalog (`npm run catalog:sync`)
+4. If model deprecated: re-sync the model catalog (the dashboard syncs at boot; `POST /api/cache/refresh` in the UI) or edit `configs/` provider config
 5. If credential issue: rotate the affected API key
 
 ### Escalation
@@ -41,7 +41,7 @@ If error rate persists > 15 minutes, escalate to the AI platform team.
 
 ### Common Causes
 - **All pods crashed**: Check for OOM kills, uncaught exceptions
-- **KEDA scaled to zero**: Queue is empty — this is expected during idle periods
+- **KEDA at min replicas**: Queue is empty — this is expected during idle periods (runners hold `minReplicaCount: 1`)
 - **Image pull failure**: New deployment with broken image reference
 - **Node capacity**: Insufficient cluster resources to schedule pods
 
