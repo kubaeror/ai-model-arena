@@ -2,7 +2,7 @@
 # Settings for LLM-as-judge scoring and objective metrics
 
 judge:
-  # Name of the model to use as judge (from models.yaml)
+  # Name of the model to use as judge (from the provider catalog)
   model: gpt-4o
   # Whether to run judge scoring (requires API call)
   enabled: true
