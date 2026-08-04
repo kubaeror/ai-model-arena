@@ -4,7 +4,7 @@ metadata:
   name: dashboard-pdb
   namespace: ai-arena
 spec:
-  maxUnavailable: 1
+  minAvailable: 1
   selector:
     matchLabels:
       app: dashboard
@@ -51,7 +51,7 @@ metadata:
   name: postgres-pdb
   namespace: ai-arena
 spec:
-  maxUnavailable: 1
+  minAvailable: 1
   selector:
     matchLabels:
       app: postgres
@@ -62,7 +62,7 @@ metadata:
   name: redis-pdb
   namespace: ai-arena
 spec:
-  maxUnavailable: 1
+  minAvailable: 1
   selector:
     matchLabels:
       app: redis

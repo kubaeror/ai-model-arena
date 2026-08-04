@@ -72,10 +72,18 @@ jobs:
         run: kubectl kustomize k8s/overlays/prod > .tmp/k8s-prod.yaml
       - uses: docker://ghcr.io/yannh/kubeconform:latest
         with:
-          args: -verbose -summary .tmp/k8s-dev.yaml
+          args: >-
+            -verbose -summary
+            -schema-location default
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+            .tmp/k8s-dev.yaml
       - uses: docker://ghcr.io/yannh/kubeconform:latest
         with:
-          args: -verbose -summary .tmp/k8s-prod.yaml
+          args: >-
+            -verbose -summary
+            -schema-location default
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+            .tmp/k8s-prod.yaml
 
   dockerfile-lint:
     runs-on: ubuntu-latest

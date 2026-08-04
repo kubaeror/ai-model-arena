@@ -166,6 +166,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               name: observability
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda
       ports:
         - port: 6379
 ---
