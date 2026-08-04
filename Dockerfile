@@ -26,6 +26,10 @@ RUN npm run build
 # ── runtime stage ──
 FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libargon2-1=0~20171227-0.3+deb12u1 && rm -rf /var/lib/apt/lists/*
+# npm is not needed at runtime (CMD runs node directly). The base image's
+# bundled npm ships vulnerable transitive deps (brace-expansion, ip-address)
+# that Trivy flags — remove it instead of shipping ~30MB of unused tooling.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 WORKDIR /app
 ENV NODE_ENV=production
 RUN useradd -r -u 10001 -g users arena && \
