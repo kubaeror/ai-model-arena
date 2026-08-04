@@ -340,6 +340,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       };
       let loopResult;
       let maxFallbackHops = 3;
+      // Cumulative spend of this run's tokens, so per-turn budget checks see
+      // the current run (addSpend is only called during finalize otherwise).
+      let prevRunCost = 0;
 
       // Transition to 'running'
       transitionTaskState(runId, task.model, 'running', runnerId).catch(e =>
@@ -362,7 +365,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             toolCtx,
             conv,
             logger: logger.child('loop'),
-            onTurnComplete: async (turn) => {
+            onTurnComplete: async (turn, _messages, usage) => {
               await store.appendMessage(session.id, {
                 id: crypto.randomUUID(),
                 sessionId: session.id,
@@ -375,6 +378,18 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                 tokenOutput: null,
                 createdAt: new Date().toISOString(),
               });
+              // Track this run's spend so the per-turn budget check below can
+              // trip on it (spend only reaches the ledger at finalize time).
+              try {
+                const cumulative = await computeCost(modelName, {
+                  prompt: usage.prompt ?? 0,
+                  completion: usage.completion ?? 0,
+                  cached: usage.cacheReadTokens ?? 0,
+                });
+                prevRunCost = Math.max(prevRunCost, cumulative.total);
+              } catch (e) {
+                logger.warn('Failed to compute run spend (non-fatal)', { model: modelName, err: String(e) });
+              }
             },
             onBudgetCheck: async (_turn: number, _tokenUsage: TokenUsage) => {
               const cancelledRunId = task!.config.modelRunId as string ?? task!.sessionId;
@@ -382,7 +397,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                 logger.info('Run cancelled during execution', { runId: cancelledRunId });
                 return false;
               }
-              const budgetCheck = checkBudget(modelName, root, false, logger);
+              const budgetCheck = checkBudget(modelName, root, false, logger, prevRunCost);
               if (!budgetCheck.allowed) {
                 logger.warn('Budget exceeded during run', { model: modelName, spent: budgetCheck.spentUsd, limit: budgetCheck.limitUsd });
                 return false;

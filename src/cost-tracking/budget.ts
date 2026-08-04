@@ -213,7 +213,12 @@ function getSpendMonth(state: BudgetState, modelName?: string): number {
   return state.global.monthly[monthKey] ?? 0;
 }
 
-export function checkBudget(modelName: string, rootDir: string, force: boolean = false, logger?: Logger): BudgetCheckResult {
+/**
+ * Check budget for a model. `extraSpendUsd` lets callers include spend that is
+ * not yet in the ledger (e.g. the current run's tokens, which are only added
+ * to the state file at finalize time) so mid-run checks can trip on it.
+ */
+export function checkBudget(modelName: string, rootDir: string, force: boolean = false, logger?: Logger, extraSpendUsd: number = 0): BudgetCheckResult {
   if (!budgetConfig) {
     return { allowed: true, spentUsd: 0, limitUsd: null, percentUsed: 0 };
   }
@@ -224,8 +229,8 @@ export function checkBudget(modelName: string, rootDir: string, force: boolean =
   const globalLimits = budgetConfig.global;
   const thresholds = budgetConfig.thresholds ?? { warn: 80, block: 100 };
   
-  const spentDaily = getSpendToday(state, modelName);
-  const spentMonthly = getSpendMonth(state, modelName);
+  const spentDaily = getSpendToday(state, modelName) + extraSpendUsd;
+  const spentMonthly = getSpendMonth(state, modelName) + extraSpendUsd;
   
   const limitDaily = modelLimits?.daily ?? globalLimits?.daily;
   const limitMonthly = modelLimits?.monthly ?? globalLimits?.monthly;

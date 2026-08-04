@@ -22,7 +22,7 @@ export interface AgentLoopOptions {
   toolCtx: ToolExecutionContext;
   conv: ConversationLogger;
   logger: Logger;
-  onTurnComplete?: (turn: number, messages: ChatMessage[]) => Promise<void>;
+  onTurnComplete?: (turn: number, messages: ChatMessage[], tokenUsage: TokenUsage) => Promise<void>;
   /** If provided, called after each turn to check budget. Return false to abort the run. */
   onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean>;
 }
@@ -198,7 +198,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     }
 
     if (onTurnComplete) {
-      try { await onTurnComplete(turn, messages); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
+      try { await onTurnComplete(turn, messages, usage); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
     }
 
     if (onBudgetCheck) {
