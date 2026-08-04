@@ -41,7 +41,7 @@ jobs:
       - name: Build Docker image
         run: docker build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
       - name: Generate SBOM (CycloneDX JSON)
-        uses: anchore/sbom-action@422cb34a0f8b599678c41b21163ea6088cedb6de # v0.17.9
+        uses: anchore/sbom-action@4a30bbadbe35d73a1729ee95a9196544192d905e # v0.17.9
         with:
           image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
           format: cyclonedx-json
@@ -53,7 +53,7 @@ jobs:
           path: sbom-${{ github.sha }}.cdx.json
           retention-days: 90
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
           format: table
