@@ -89,3 +89,77 @@ test('OpenAICompatAdapter.supportsPromptCaching returns true', () => {
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   assert.equal(adapter.supportsPromptCaching(), true);
 });
+
+test('OpenAICompatAdapter tolerates non-JSON tool call arguments', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => mockResponse({
+    choices: [{
+      message: {
+        role: 'assistant', content: null,
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: 'not json {' } }],
+      },
+      finish_reason: 'tool_calls',
+    }],
+    usage: {},
+  }) as Response) as typeof fetch;
+  try {
+    const result = await adapter.sendMessage([{ role: 'user', content: 'x' }], []);
+    assert.equal(result.toolCalls.length, 1);
+    assert.deepEqual(result.toolCalls[0].arguments, {});
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter x-api-key scheme sends the key even without headerName', async () => {
+  const desc: ProviderDescriptor = {
+    id: 'custom', name: 'Custom', apiBase: 'https://custom.example/v1',
+    authScheme: 'x-api-key', envVar: 'CUSTOM_KEY', adapter: 'openai-compat', isBuiltin: false,
+  };
+  const adapter = new OpenAICompatAdapter(desc, 'model-1', { apiKey: 'secret-key' });
+  let capturedHeaders: Record<string, string> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedHeaders = init?.headers as Record<string, string>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.equal(capturedHeaders['x-api-key'], 'secret-key');
+    assert.ok(!capturedHeaders['authorization']);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter refuses unconfigured placeholder base URLs', () => {
+  const desc: ProviderDescriptor = {
+    id: 'azure-openai', name: 'Azure OpenAI', apiBase: 'https://{resource}.openai.azure.com/openai/v1',
+    authScheme: 'x-api-key', envVar: 'AZURE_KEY', adapter: 'openai-compat', isBuiltin: true,
+  };
+  assert.throws(
+    () => new OpenAICompatAdapter(desc, 'gpt-4o', { apiKey: 'k' }),
+    /unconfigured baseUrl/,
+  );
+});
+
+test('OpenAICompatAdapter retries 429 and 5xx, surfaces HttpError after retries', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let calls = 0;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    calls++;
+    return mockResponse({ error: 'rate limited' }, 429);
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      () => adapter.sendMessage([{ role: 'user', content: 'hi' }], []),
+      (err: Error) => err.name === 'HttpError',
+    );
+    // 3 attempts: initial + 2 retries.
+    assert.ok(calls >= 3, `expected retries, got ${calls} calls`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
