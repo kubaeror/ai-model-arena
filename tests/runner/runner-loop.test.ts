@@ -95,6 +95,81 @@ test('runner dequeues and nacks an unresolvable model into the DLQ', async () =>
   }
 });
 
+test('runner exits promptly when started with an already-aborted signal', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  initDb(process.env.ARENA_DB_PATH);
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  ac.abort();
+  const started = Date.now();
+  await startRunner({ queue, signal: ac.signal });
+  assert.ok(Date.now() - started < 2000, 'runner should exit without blocking in dequeue');
+  await queue.close();
+  closeDb();
+  fs.rmSync(tmp, { recursive: true, force: true });
+  process.env = { ...ORIG_ENV };
+});
+
+test('runner acks a task for a cancelled run without executing it', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-'));
+  const outputs = path.join(tmp, 'outputs');
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  delete process.env.OPENAI_API_KEY;
+  initDb(process.env.ARENA_DB_PATH);
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  await upsertRun({
+    runId: 'run3', scenario: 'express-rest', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{ model: 'GPT-4o', runId: 'run3', status: 'running' } as never],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+  const { stopRun } = await import('../../src/orchestrator/run-lifecycle.js');
+  await stopRun('run3');
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'cancelled-task', sessionId: 'cancelled-session',
+    model: 'GPT-4o', provider: 'openai',
+    config: { modelRunId: 'run3', maxTurns: 5 },
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 8000, 'cancelled task acked');
+    // Cancelled runs must NOT be finalized as completed — status stays running
+    // per-model but the task itself is gone (ack, not execute).
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get('run3', 'GPT-4o') as { status: string } | undefined;
+    assert.equal(row?.status, 'running', 'cancelled run should not transition to completed');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
 test('runner fail-fasts on missing API key: ack + failed state + result.json', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-'));
   const outputs = path.join(tmp, 'outputs');
