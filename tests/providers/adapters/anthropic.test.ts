@@ -86,5 +86,4 @@ test('AnthropicAdapter.supportsReasoning returns true', () => {
   const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-7-sonnet-20250219', { apiKey: 'sk-ant' });
   assert.equal(adapter.supportsReasoning(), true);
   assert.equal(adapter.supportsPromptCaching(), true);
-  assert.equal(adapter.supportsStreaming(), false);
 });

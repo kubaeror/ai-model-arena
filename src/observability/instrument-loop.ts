@@ -52,7 +52,6 @@ function wrapAdapter(
   };
   return {
     sendMessage,
-    supportsStreaming: () => adapter.supportsStreaming(),
     supportsReasoning: () => adapter.supportsReasoning(),
     supportsPromptCaching: () => adapter.supportsPromptCaching(),
   };

@@ -19,7 +19,6 @@ test('BedrockAdapter constructs in native SigV4 mode without gateway', () => {
   process.env.AWS_BEDROCK_REGION = 'us-east-1';
   const adapter = new BedrockAdapter(bedrockDescriptor, 'anthropic.claude-3-sonnet-20240229-v1:0', { logger: stubLogger() });
   assert.ok(adapter);
-  assert.equal(adapter.supportsStreaming(), false);
   assert.equal(adapter.supportsReasoning(), false);
   assert.equal(adapter.supportsPromptCaching(), false);
   delete process.env.AWS_BEDROCK_REGION;

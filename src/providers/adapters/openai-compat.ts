@@ -39,13 +39,12 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     }
   }
 
-  supportsStreaming(): boolean { return false; }
   supportsReasoning(): boolean { return true; }
   supportsPromptCaching(): boolean { return true; }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     return this.withRetry(async () => {
-      const body = this.buildBody(messages, tools, opts, false);
+      const body = this.buildBody(messages, tools, opts);
       const res = await this.fetchEndpoint('/chat/completions', body);
       if (!res.ok) {
         const text = await res.text();
@@ -56,7 +55,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
-  private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined, stream: boolean): Record<string, unknown> {
+  private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.modelId,
       messages: messages.map(m => ({
@@ -66,7 +65,6 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
         ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
         ...(m.name ? { name: m.name } : {}),
       })),
-      stream,
     };
     if (tools.length > 0) {
       body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));

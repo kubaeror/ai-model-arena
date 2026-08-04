@@ -12,7 +12,6 @@ function stubAdapter(responses: ModelResponse[]): ModelAdapter {
       const r = responses[i++] ?? { text: '', toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: 'no_tool_calls' };
       return r;
     },
-    supportsStreaming: () => false,
     supportsReasoning: () => false,
     supportsPromptCaching: () => false,
   };
@@ -69,7 +68,6 @@ test('stops on maxTurns', async () => {
 test('stops on api_error', async () => {
   const adapter: ModelAdapter = {
     sendMessage: async () => { throw new Error('API down'); },
-    supportsStreaming: () => false,
     supportsReasoning: () => false,
     supportsPromptCaching: () => false,
   };

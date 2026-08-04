@@ -8,7 +8,6 @@ export interface SendOpts {
 
 export interface ModelAdapter {
   sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse>;
-  supportsStreaming(): boolean;
   supportsReasoning(): boolean;
   supportsPromptCaching(): boolean;
 }

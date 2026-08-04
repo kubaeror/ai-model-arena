@@ -24,13 +24,12 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
   }
 
-  supportsStreaming(): boolean { return false; }
   supportsReasoning(): boolean { return true; }
   supportsPromptCaching(): boolean { return true; }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     return this.withRetry(async () => {
-      const body = this.buildBody(messages, tools, opts, false);
+      const body = this.buildBody(messages, tools, opts);
       const res = await this.fetchEndpoint('/v1/messages', body);
       if (!res.ok) {
         const text = await res.text();
@@ -41,7 +40,7 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
     }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
-  private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined, stream: boolean): Record<string, unknown> {
+  private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
     let system: string | undefined;
     const conversational: Array<Record<string, unknown>> = [];
     const cacheIndices = new Set<number>();
@@ -86,7 +85,6 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
       model: this.modelId,
       max_tokens: opts?.maxTokens ?? 4096,
       messages: conversational,
-      stream,
     };
     if (system) body.system = system;
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;

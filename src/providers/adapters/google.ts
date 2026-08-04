@@ -23,7 +23,6 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
   }
 
-  supportsStreaming(): boolean { return false; }
   supportsReasoning(): boolean { return true; }
   supportsPromptCaching(): boolean { return true; }
 
