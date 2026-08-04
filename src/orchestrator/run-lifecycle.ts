@@ -26,6 +26,9 @@ function makeIdempotencyKey(scenario: string, models: string[]): string {
   return crypto.createHash('sha256').update(`${scenario}:${models.join(',')}`).digest('hex').slice(0, 32);
 }
 
+/** Per-run budget reservations (runId -> model -> reserved USD). */
+const runReservations = new Map<string, Map<string, number>>();
+
 let anomalyAnalysisFailures = 0;
 let statsWritebackFailures = 0;
 
@@ -154,7 +157,8 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   
   // Check budget for each model before starting
   const reservations: Array<{ model: string; estimated: number }> = [];
-  for (const modelName of opts.models) {
+  try {
+    for (const modelName of opts.models) {
     const budgetCheck = checkBudget(modelName, root, opts.forceBudget ?? false, logger);
     if (!budgetCheck.allowed) {
       const reason = budgetCheck.reason ?? `Budget exceeded for ${modelName}`;
@@ -212,6 +216,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   
   const spec = await createRunSpec(opts);
   const runId = spec.runId;
+  runReservations.set(runId, new Map(reservations.map((r) => [r.model, r.estimated])));
 
   // Register before enqueue: a task that fails fast (e.g. missing API key)
   // writes its final state before the late registerRun upsert can clobber
@@ -245,6 +250,14 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
 
   logger.info('Run enqueued', { runId, models: spec.models.map(m => m.model), tasks: spec.models.length });
   return spec;
+  } catch (err) {
+    // Never leak reservations: release everything reserved for this run,
+    // whether a later model failed budget, createRunSpec, or enqueue did.
+    for (const r of reservations) {
+      releaseReservation(r.model, r.estimated, 0, root, logger);
+    }
+    throw err;
+  }
 }
 
 /** Query live status for each model in a run from the runs table. */
@@ -386,12 +399,16 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
   const allSuccess = perModel.every((m) => m.status === 'completed' && m.success !== false);
   logger.info('Run finalized', { runId, md: mdPath, status: allSuccess ? 'success' : 'failed' });
 
-  // Release budget reservations with actual costs (from FAT.min ledger costs)
+  // Release budget reservations with actual costs (from FAT.min ledger costs).
+  // Releasing the exact reserved amount keeps pendingReservations accurate —
+  // a fabricated estimate leaked the remainder and eventually blocked all runs.
+  const reservations = runReservations.get(runId) ?? new Map<string, number>();
   for (const entry of entries) {
     const actualCost = entry.result?.costUsd ?? 0;
-    const estimatedCost = actualCost > 0 ? actualCost * 2 : 1;
-    releaseReservation(entry.model, estimatedCost, actualCost, root, logger);
+    const reserved = reservations.get(entry.model) ?? 0;
+    releaseReservation(entry.model, reserved, actualCost, root, logger);
   }
+  runReservations.delete(runId);
 
   // Run anomaly detection over the just-completed run (best-effort, non-blocking).
   void analyzeRun(runId, logger).catch((e) => {
