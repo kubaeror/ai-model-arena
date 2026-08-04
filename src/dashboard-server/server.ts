@@ -188,17 +188,37 @@ async function start(): Promise<void> {
     standardHeaders: true,
     legacyHeaders: false,
   });
-  app.post('/api/auth/login', loginRateLimit, (req: AuthedRequest, res) => {
+  app.post('/api/auth/login', loginRateLimit, async (req: AuthedRequest, res) => {
     const username = String(req.body?.username ?? '');
     const password = String(req.body?.password ?? '');
-    if (!verifyCredentials(auth, username, password)) {
-      res.status(401).json({ error: 'Invalid credentials' });
+    // 1) Env-configured bootstrap admin (backwards compatible).
+    if (verifyCredentials(auth, username, password)) {
+      const token = signToken(auth, username, 'admin');
+      setTokenCookie(res, token, auth);
+      res.json({ token, username, role: 'admin' });
       return;
     }
-    const token = signToken(auth, username);
-    // Set httpOnly cookie in addition to returning the token in the response body
-    setTokenCookie(res, token, auth);
-    res.json({ token, username });
+    // 2) DB-backed users (RBAC). Roles come from the user_roles table;
+    // the strongest role wins (admin > editor > viewer).
+    try {
+      const { getUserByUsername, getUserRolesByUserId } = await import('../db/query.js');
+      const user = await getUserByUsername(username);
+      if (user) {
+        const argon2 = await import('argon2');
+        if (await argon2.verify(user.password_hash, password)) {
+          const roleRows = await getUserRolesByUserId(user.id) as Array<{ id: string }>;
+          const roles = roleRows.map((r) => r.id);
+          const role = roles.includes('admin') ? 'admin' : roles.includes('editor') ? 'editor' : 'viewer';
+          const token = signToken(auth, username, role);
+          setTokenCookie(res, token, auth);
+          res.json({ token, username, role });
+          return;
+        }
+      }
+    } catch (e) {
+      logger.warn('DB-backed login lookup failed', { username, error: e instanceof Error ? e.message : String(e) });
+    }
+    res.status(401).json({ error: 'Invalid credentials' });
   });
 
   // ── Auth logout (revoke token) ──────────────────────────────────────────

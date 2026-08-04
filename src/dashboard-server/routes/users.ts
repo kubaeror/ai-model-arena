@@ -149,6 +149,14 @@ export function createUsersRouter(): Router {
     res.json({ ok: true });
   });
 
+  // GET /api/users/roles - list all available roles
+  // Registered BEFORE /:id/roles — Express matches in order, so a bare
+  // "roles" segment used to be swallowed by the :id param (always 404).
+  router.get('/roles', async (_req, res) => {
+    const roles = await listRoles();
+    res.json({ roles });
+  });
+
   // GET /api/users/:id/roles - list roles for a user
   router.get('/:id/roles', async (req, res) => {
     const user = await getUserById(req.params.id);
@@ -209,12 +217,6 @@ export function createUsersRouter(): Router {
 
     auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.role.remove', { type: 'user', id: req.params.id }, undefined, { roleId: req.params.roleId });
     res.json({ ok: true });
-  });
-
-  // GET /api/roles - list all available roles
-  router.get('/roles', async (_req, res) => {
-    const roles = await listRoles();
-    res.json({ roles });
   });
 
   return router;
