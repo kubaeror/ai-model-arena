@@ -53,6 +53,10 @@ const expected = (tokensPerTurn: number): number =>
  * per-test re-mock would be silently ignored on the second test.
  */
 test('startRun derives its reservation estimate from RUN_COST_ESTIMATE_TOKENS', async (t) => {
+  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
+    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
+    return;
+  }
   const tmp = freshDb();
   await seedCatalog();
   const captured: number[] = [];

@@ -106,6 +106,10 @@ test('tickScheduler ticks a due schedule and advances next_run', async () => {
 });
 
 test('tickScheduler passes schedule options (timeoutMs, forceBudget) into startRun', async (t) => {
+  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
+    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
+    return;
+  }
   const tmp = freshDb();
   const configPath = path.join(tmp, 'schedules.yaml');
   try {
@@ -165,6 +169,10 @@ test('tickScheduler passes schedule options (timeoutMs, forceBudget) into startR
 });
 
 test('tickScheduler backs off failures by SCHEDULER_FAILURE_BACKOFF_MS', async (t) => {
+  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
+    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
+    return;
+  }
   const tmp = freshDb();
   process.env.SCHEDULER_FAILURE_BACKOFF_MS = '5000';
   try {
@@ -196,6 +204,10 @@ test('tickScheduler backs off failures by SCHEDULER_FAILURE_BACKOFF_MS', async (
 });
 
 test('empty SCHEDULER_FAILURE_BACKOFF_MS falls back to the 1h default', async (t) => {
+  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
+    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
+    return;
+  }
   const tmp = freshDb();
   process.env.SCHEDULER_FAILURE_BACKOFF_MS = '';
   try {
@@ -226,6 +238,10 @@ test('empty SCHEDULER_FAILURE_BACKOFF_MS falls back to the 1h default', async (t
 });
 
 test('scheduler-tick entrypoint loads schedules config before ticking (production path)', async (t) => {
+  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
+    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
+    return;
+  }
   const tmp = freshDb();
   const configPath = path.join(tmp, 'schedules.yaml');
   try {
