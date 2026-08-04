@@ -534,6 +534,28 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       try {
         const manifest = generateManifest(sandboxDir, modelRunId, modelName);
         writeManifest(manifest, runOutputDir, logger);
+        // Persist per-file rows so the dashboard Files page has lineage data.
+        // Replaced per runId so restarts do not duplicate rows.
+        try {
+          const { insertFile } = await import('./db/query.js');
+          const { files } = await import('./db/schema.js');
+          const { getDrizzleDb } = await import('./db/index.js');
+          const { eq } = await import('drizzle-orm');
+          const db = getDrizzleDb();
+          await db.delete(files).where(eq(files.run_id, modelRunId));
+          for (const entry of manifest.entries) {
+            await insertFile({
+              id: crypto.randomUUID(),
+              runId: modelRunId,
+              path: entry.path,
+              model: modelName,
+              producedAt: manifest.generatedAt,
+              producedByTool: entry.producedByTool ?? null,
+            });
+          }
+        } catch (e) {
+          logger.warn('Failed to persist file lineage rows (non-fatal)', { error: String(e) });
+        }
       } catch (manifestErr) {
         logger.warn('Failed to generate artifact manifest (non-fatal)',
           { error: manifestErr instanceof Error ? manifestErr.message : String(manifestErr) });
