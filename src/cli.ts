@@ -15,6 +15,7 @@
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { load } from 'js-yaml';
 import { Command } from 'commander';
 import { findProjectRoot, dbPath } from './paths.js';
@@ -40,6 +41,20 @@ program
 
 function rootDir(): string {
   return findProjectRoot();
+}
+
+/**
+ * Encode a single CSV row per RFC 4180: fields containing a comma, a double
+ * quote, or a newline are wrapped in double quotes, with inner quotes doubled.
+ */
+export function toCsvRow(values: string[]): string {
+  return values
+    .map((v) =>
+      v.includes(',') || v.includes('"') || v.includes('\n')
+        ? `"${v.replace(/"/g, '""')}"`
+        : v,
+    )
+    .join(',');
 }
 
 // ── run ────────────────────────────────────────────────────────────────────
@@ -330,7 +345,7 @@ program
     }
     
     const rows = [
-      'run_id,model,scenario,started_at,duration_seconds,turns_used,success,total_tokens,estimated_cost_usd'
+      toCsvRow(['run_id', 'model', 'scenario', 'started_at', 'duration_seconds', 'turns_used', 'success', 'total_tokens', 'estimated_cost_usd']),
     ];
     
     for (const run of filtered) {
@@ -345,17 +360,17 @@ program
         const tu = result?.tokenUsage ?? {};
         const totalTokens = (tu.prompt ?? 0) + (tu.completion ?? 0);
         
-        rows.push([
+        rows.push(toCsvRow([
           run.runId,
           pm.model,
           run.scenario,
           run.startedAt,
-          Math.round((result?.durationMs ?? 0) / 1000),
-          result?.turnsUsed ?? 0,
-          result?.success ?? false,
-          totalTokens,
+          String(Math.round((result?.durationMs ?? 0) / 1000)),
+          String(result?.turnsUsed ?? 0),
+          String(result?.success ?? false),
+          String(totalTokens),
           (result?.costUsd ?? 0).toFixed(4),
-        ].join(','));
+        ]));
       }
     }
     
@@ -424,16 +439,22 @@ program
     console.log('');
   });
 
-// Default: start the dashboard server when no subcommand is given
-if (process.argv.length <= 2) {
-  process.env.DASHBOARD_PORT = process.env.DASHBOARD_PORT ?? '4000';
-  import('./dashboard-server/server.js').catch((err) => {
-    console.error('Failed to start dashboard server', err);
-    process.exit(1);
-  });
-} else {
-  program.parseAsync(process.argv).catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+// Default: start the dashboard server when no subcommand is given.
+// Only auto-start when run directly (not when imported, e.g. by tests).
+const entryFile = process.argv[1];
+const isCliEntry = entryFile !== undefined && import.meta.url === pathToFileURL(entryFile).href;
+
+if (isCliEntry) {
+  if (process.argv.length <= 2) {
+    process.env.DASHBOARD_PORT = process.env.DASHBOARD_PORT ?? '4000';
+    import('./dashboard-server/server.js').catch((err) => {
+      console.error('Failed to start dashboard server', err);
+      process.exit(1);
+    });
+  } else {
+    program.parseAsync(process.argv).catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+  }
 }
