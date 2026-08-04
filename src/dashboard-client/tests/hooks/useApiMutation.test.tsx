@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useApiMutation } from '../../src/hooks/useApiMutation';
 import type { ReactNode } from 'react';
@@ -62,7 +62,9 @@ describe('useApiMutation', () => {
       await result.current.mutateAsync(void 0);
     });
 
-    expect(result.current.isSuccess).toBe(true);
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
   });
 
   it('shows error toast on failure', async () => {
