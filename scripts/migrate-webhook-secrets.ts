@@ -110,8 +110,15 @@ async function main(): Promise<void> {
   closeDb();
 }
 
+function sanitizeErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw
+    .replace(/WEBHOOK_SECRET_KEY/gi, '[REDACTED_KEY_NAME]')
+    .replace(/\b(secret|token|password|key)\b\s*[:=]\s*\S+/gi, '$1=[REDACTED]');
+}
+
 main().catch((err) => {
-  console.error('Webhook secret migration failed:', err);
+  console.error(`Webhook secret migration failed: ${sanitizeErrorMessage(err)}`);
   try { closeDb(); } catch { /* already closed */ }
   process.exit(1);
 });
