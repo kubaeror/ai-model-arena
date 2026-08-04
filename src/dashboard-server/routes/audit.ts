@@ -9,6 +9,8 @@ const auditColumns = {
   action: audit_log.action,
   entity_type: audit_log.entity_type,
   entity_id: audit_log.entity_id,
+  before: audit_log.before,
+  after: audit_log.after,
   at: audit_log.at,
 };
 

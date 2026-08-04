@@ -353,3 +353,94 @@ export async function getCostLeaderboard(): Promise<CostLeaderboardEntry[]> {
   return r.leaderboard;
 }
 
+
+// ── Sessions ─────────────────────────────────────────────────────────────────
+export interface SessionRow {
+  id: string;
+  prompt_id: string | null;
+  prompt_version: number | null;
+  model: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  call_count: number;
+}
+
+export async function listSessions(params?: {
+  status?: string; model?: string; limit?: number; offset?: number;
+}): Promise<{ sessions: SessionRow[]; total: number }> {
+  const sp = new URLSearchParams();
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) sp.set(k, String(v));
+    }
+  }
+  return apiFetch<{ sessions: SessionRow[]; total: number }>(`/api/sessions?${sp.toString()}`);
+}
+
+export async function getSession(sessionId: string): Promise<SessionRow | null> {
+  return apiFetch<SessionRow | null>(`/api/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export async function getSessionMessages(sessionId: string): Promise<Array<Record<string, unknown>>> {
+  const r = await apiFetch<{ messages: Array<Record<string, unknown>> }>(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+  return r.messages;
+}
+
+export async function getSessionCalls(sessionId: string): Promise<Array<Record<string, unknown>>> {
+  const r = await apiFetch<{ calls: Array<Record<string, unknown>> }>(`/api/sessions/${encodeURIComponent(sessionId)}/calls`);
+  return r.calls;
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+}
+
+// ── Files ────────────────────────────────────────────────────────────────────
+export interface FileRow {
+  id: number;
+  run_id: string;
+  prompt_id: string | null;
+  model: string | null;
+  produced_at: string;
+  produced_by_tool: string | null;
+  path: string;
+}
+
+export async function listFiles(params?: {
+  model?: string; runId?: string; tool?: string; limit?: number; offset?: number;
+}): Promise<{ files: FileRow[]; total: number }> {
+  const sp = new URLSearchParams();
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) sp.set(k, String(v));
+    }
+  }
+  return apiFetch<{ files: FileRow[]; total: number }>(`/api/files?${sp.toString()}`);
+}
+
+// ── Audit ────────────────────────────────────────────────────────────────────
+export interface AuditEntry {
+  id: number;
+  actor: string;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  at: string;
+  before: unknown;
+  after: unknown;
+}
+
+export async function listAudit(params?: {
+  actor?: string; action?: string; entity_type?: string; entity_id?: string;
+  from?: string; to?: string; limit?: number; offset?: number;
+}): Promise<{ entries: AuditEntry[]; total: number }> {
+  const sp = new URLSearchParams();
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) sp.set(k, String(v));
+    }
+  }
+  return apiFetch<{ entries: AuditEntry[]; total: number }>(`/api/audit?${sp.toString()}`);
+}

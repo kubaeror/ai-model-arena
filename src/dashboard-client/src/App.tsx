@@ -32,6 +32,10 @@ const CostLeaderboard = lazy(() => import('./pages/CostLeaderboard').then(m => (
 const Budget = lazy(() => import('./pages/Budget').then(m => ({ default: m.Budget })));
 const Schedules = lazy(() => import('./pages/Schedules').then(m => ({ default: m.Schedules })));
 const Regression = lazy(() => import('./pages/Regression').then(m => ({ default: m.Regression })));
+const Sessions = lazy(() => import('./pages/Sessions').then(m => ({ default: m.Sessions })));
+const SessionDetail = lazy(() => import('./pages/SessionDetail').then(m => ({ default: m.SessionDetail })));
+const Files = lazy(() => import('./pages/Files').then(m => ({ default: m.Files })));
+const Audit = lazy(() => import('./pages/Audit').then(m => ({ default: m.Audit })));
 const NotFound = lazy(() => import('./pages/NotFound').then(m => ({ default: m.NotFound })));
 
 const queryClient = new QueryClient({
@@ -84,6 +88,10 @@ function Shell() {
                       <Route path="/budget" element={<Budget />} />
                       <Route path="/schedules" element={<Schedules />} />
                       <Route path="/regression" element={<Regression />} />
+                      <Route path="/sessions" element={<Sessions />} />
+                      <Route path="/sessions/:sessionId" element={<SessionDetail />} />
+                      <Route path="/files" element={<Files />} />
+                      <Route path="/audit" element={<Audit />} />
                       <Route path="/settings" element={<Settings />} />
                       <Route path="*" element={<NotFound />} />
                     </Routes>
