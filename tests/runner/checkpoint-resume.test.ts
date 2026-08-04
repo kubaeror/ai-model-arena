@@ -24,10 +24,6 @@ test('resumeFrom returns stored messages and computes lastCompletedTurn', async 
     content: 'task', toolCalls: null, toolCallId: null,
     tokenInput: null, tokenOutput: null, createdAt: new Date().toISOString(),
   });
-  await store.recordModelCall({
-    sessionId: s.id, turn: 0, provider: 'openai', model: 'gpt-4o',
-    requestHash: 'h1', responseText: 'done', usage: null, latencyMs: 200,
-  });
 
   await store.appendMessage(s.id, {
     id: 'm2', sessionId: s.id, turn: 1, role: 'user',
@@ -37,7 +33,7 @@ test('resumeFrom returns stored messages and computes lastCompletedTurn', async 
 
   const result = await resumeFrom(s.id);
   assert.equal(result.messages.length, 2);
-  assert.equal(result.lastCompletedTurn, 0);
+  assert.equal(result.lastCompletedTurn, 1);
   closeDb();
 });
 
@@ -97,6 +93,6 @@ test('resumeFrom handles multi-turn with mixed completed turns', async () => {
 
   const result = await resumeFrom(s.id);
   assert.equal(result.messages.length, 3);
-  assert.equal(result.lastCompletedTurn, 1);
+  assert.equal(result.lastCompletedTurn, 2);
   closeDb();
 });

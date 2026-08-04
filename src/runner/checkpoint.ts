@@ -21,8 +21,7 @@ export async function resumeFrom(sessionId: string): Promise<ResumeResult> {
   const msgs = await store.listMessages(sessionId);
   let lastCompletedTurn = -1;
   for (const m of msgs) {
-    const mc = await store.getModelCall(sessionId, m.turn);
-    if (mc) lastCompletedTurn = Math.max(lastCompletedTurn, m.turn);
+    lastCompletedTurn = Math.max(lastCompletedTurn, m.turn);
   }
   return {
     messages: msgs.map(storedToChat),

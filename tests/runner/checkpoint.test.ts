@@ -9,10 +9,9 @@ test('resumeFrom returns persisted messages + last turn', async () => {
   const store = createSessionStore();
   const s = await store.createSession({ model: 'gpt-4o' });
   await store.appendMessage(s.id, { id: 'm1', sessionId: s.id, turn: 0, role: 'user', content: 'hi', toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: new Date().toISOString() });
-  await store.recordModelCall({ sessionId: s.id, turn: 0, provider: 'openai', model: 'gpt-4o', requestHash: 'h', responseText: 'hello', usage: { inputTokens: 1, outputTokens: 1 }, latencyMs: 10 });
   await store.appendMessage(s.id, { id: 'm2', sessionId: s.id, turn: 1, role: 'assistant', content: 'hello', toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: new Date().toISOString() });
   const { messages, lastCompletedTurn } = await resumeFrom(s.id);
-  assert.equal(lastCompletedTurn, 0);
+  assert.equal(lastCompletedTurn, 1);
   assert.equal(messages.length, 2);
   closeDb();
 });

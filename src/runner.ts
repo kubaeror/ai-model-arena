@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { outputRoot, dbPath, findProjectRoot } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState } from './db/query.js';
+import { resumeFrom } from './runner/checkpoint.js';
 import { createQueue, type TaskQueue, type Task } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
@@ -26,7 +27,8 @@ import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
 import { loadBudgetConfig, checkBudget, computeCost } from './cost-tracking/index.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled } from './orchestrator/run-lifecycle.js';
 import { activeTasks, taskCounter, taskDuration } from './observability/metrics.js';
-import type { ToolExecutionContext, TokenUsage } from './types.js';
+import type { ToolExecutionContext, TokenUsage, ChatMessage } from './types.js';
+import type { StoredMessage } from './session/store.js';
 import { closeDb } from './db/index.js';
 import { secretStore } from './secrets/store.js';
 
@@ -233,8 +235,16 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       );
 
       let session = await store.loadSession(task.sessionId);
+      let resumedMessages: ChatMessage[] | undefined;
       if (!session) {
         session = await store.createSession({ model: task.model });
+        // Nothing to resume — nothing persisted yet.
+      } else {
+        const resumed = await resumeFrom(session.id);
+        if (resumed.messages.length > 0) {
+          resumedMessages = resumed.messages;
+          logger.info('Resuming session from checkpoint', { sessionId: session.id, turns: resumed.lastCompletedTurn + 1, messages: resumed.messages.length });
+        }
       }
 
       const modelRunId = task.config.modelRunId as string ?? task.sessionId;
@@ -243,6 +253,17 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       const scenarioDir = path.join(process.cwd(), 'configs', 'scenarios');
       const scenario = loadScenario(resolveScenarioPath(scenarioDir, scenarioName));
+
+      // Fresh sessions persist the initial system+task as turn 0 so a later
+      // resume can replay the full context.
+      if (!resumedMessages) {
+        const t0 = new Date().toISOString();
+        const turnZero: StoredMessage[] = [
+          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'system', content: scenario.systemPrompt, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
+          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'user', content: scenario.task, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
+        ];
+        for (const m of turnZero) await store.appendMessage(session.id, m);
+      }
 
       const runOutputDir = path.join(outputRoot(), modelName, modelRunId);
       const sandboxDir = path.join(runOutputDir, 'files');
@@ -371,19 +392,24 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             toolCtx,
             conv,
             logger: logger.child('loop'),
-            onTurnComplete: async (turn, _messages, usage) => {
-              await store.appendMessage(session.id, {
-                id: crypto.randomUUID(),
-                sessionId: session.id,
-                turn,
-                role: 'assistant',
-                content: null,
-                toolCalls: null,
-                toolCallId: null,
-                tokenInput: null,
-                tokenOutput: null,
-                createdAt: new Date().toISOString(),
-              });
+            initialMessages: resumedMessages,
+            onTurnComplete: async (turn, newMessages, usage) => {
+              // Persist the real conversation so checkpoint/resume replays
+              // actual content instead of empty stubs.
+              for (const m of newMessages) {
+                await store.appendMessage(session.id, {
+                  id: crypto.randomUUID(),
+                  sessionId: session.id,
+                  turn,
+                  role: m.role,
+                  content: m.content ?? null,
+                  toolCalls: m.toolCalls ? JSON.stringify(m.toolCalls) : null,
+                  toolCallId: m.toolCallId ?? null,
+                  tokenInput: usage.prompt ?? null,
+                  tokenOutput: usage.completion ?? null,
+                  createdAt: new Date().toISOString(),
+                });
+              }
               // Track this run's spend so the per-turn budget check below can
               // trip on it (spend only reaches the ledger at finalize time).
               try {

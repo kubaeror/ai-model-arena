@@ -22,7 +22,10 @@ export interface AgentLoopOptions {
   toolCtx: ToolExecutionContext;
   conv: ConversationLogger;
   logger: Logger;
-  onTurnComplete?: (turn: number, messages: ChatMessage[], tokenUsage: TokenUsage) => Promise<void>;
+  /** Pre-existing messages to replay (checkpoint resume). Skips system+task injection. */
+  initialMessages?: ChatMessage[];
+  /** Called after each turn with ONLY the messages appended this turn. */
+  onTurnComplete?: (turn: number, newMessages: ChatMessage[], tokenUsage: TokenUsage) => Promise<void>;
   /** If provided, called after each turn to check budget. Return false to abort the run. */
   onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean>;
 }
@@ -59,10 +62,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     tool_count: tools.length,
   });
 
-  const messages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: task },
-  ];
+  const messages: ChatMessage[] = opts.initialMessages && opts.initialMessages.length > 0
+    ? [...opts.initialMessages]
+    : [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: task },
+    ];
 
   // Scan initial messages for prompt injection patterns
   for (const msg of messages) {
@@ -93,6 +98,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
   for (let turn = 1; turn <= maxTurns; turn++) {
     turnsUsed = turn;
     logger.info('Agent turn', { turn, maxTurns });
+
+    // Snapshot length so onTurnComplete only receives this turn's messages.
+    const turnStartIndex = messages.length;
 
     let response;
     try {
@@ -191,14 +199,16 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       }
     }
 
+    // Persist this turn BEFORE the completion break so the final assistant
+    // message survives a crash — checkpoint/resume depends on it.
+    if (onTurnComplete) {
+      try { await onTurnComplete(turn, messages.slice(turnStartIndex), usage); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
+    }
+
     if (wantsComplete) {
       stopReason = 'task_complete';
       logger.info('Agent signalled task_complete', { turn });
       break;
-    }
-
-    if (onTurnComplete) {
-      try { await onTurnComplete(turn, messages, usage); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
     }
 
     if (onBudgetCheck) {
