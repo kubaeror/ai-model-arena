@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { sql } from 'drizzle-orm';
 import { initDb, closeDb, getDrizzleDb } from '../../src/db/index.js';
 import { migratePostgres, getPgClient } from '../../src/db/postgres.js';
 import { insertSchedule, listDueSchedules, deleteSchedule } from '../../src/db/query.js';
@@ -43,8 +44,8 @@ test('postgres: Drizzle execute + typed helpers run on PG', { skip: !isPg }, asy
   initDb();
   try {
     const db = getDrizzleDb();
-    const rows = await db.execute(db.sql`SELECT 1 AS ok`);
-    assert.ok(rows, 'Drizzle execute works on PG');
+    const result = await db.execute(sql`SELECT 1 AS ok`);
+    assert.ok(result, 'Drizzle execute works on PG');
   } finally {
     await closeDb();
   }
