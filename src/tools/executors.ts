@@ -132,32 +132,34 @@ export const runShellCommand: ToolExecutor = async (args, ctx) => {
     };
   }
 
-  const spawnCmd = (): ReturnType<typeof exec> => {
-    if (ctx.shellPolicy === 'permissive') {
-      return exec(command, {
-        cwd: ctx.sandboxDir,
-        timeout: ctx.shellTimeoutMs,
-        maxBuffer: ctx.maxShellOutputBytes,
-        env: sandboxEnv(),
-        shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
-        windowsHide: true,
-        killSignal: 'SIGKILL',
-      });
-    }
-    // Strict mode: use execFile with explicit arg array — no shell injection
-    // possible even if the regex missed something.
-    const parts = command.trim().split(/\s+/);
-    const bin = parts[0]!;
-    const binArgs = parts.slice(1);
-    return execFile(bin, binArgs, {
-      cwd: ctx.sandboxDir,
-      timeout: ctx.shellTimeoutMs,
-      maxBuffer: ctx.maxShellOutputBytes,
-      env: sandboxEnv(),
-      windowsHide: true,
-      killSignal: 'SIGKILL',
-    });
+// exec/execFile forward unknown options to spawn at runtime; the published
+// ExecOptions/ExecFileOptions types omit `detached`, which we need for
+// process-group kills. detached: true puts the child in its own process group
+// so the timeout kill (-pgid) reaches the whole tree, not just the direct
+// child. The untyped shared object infers compatible with both option types.
+const spawnCmd = (): ReturnType<typeof exec> => {
+  const common = {
+    cwd: ctx.sandboxDir,
+    timeout: ctx.shellTimeoutMs,
+    maxBuffer: ctx.maxShellOutputBytes,
+    env: sandboxEnv(),
+    windowsHide: true,
+    killSignal: 'SIGKILL' as const,
+    detached: true,
   };
+  if (ctx.shellPolicy === 'permissive') {
+    return exec(command, {
+      ...common,
+      shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+    });
+  }
+  // Strict mode: use execFile with explicit arg array — no shell injection
+  // possible even if the regex missed something.
+  const parts = command.trim().split(/\s+/);
+  const bin = parts[0]!;
+  const binArgs = parts.slice(1);
+  return execFile(bin, binArgs, common);
+};
 
   try {
     const proc = spawnCmd();
@@ -204,6 +206,17 @@ export const runShellCommand: ToolExecutor = async (args, ctx) => {
         content: `(output truncated at ${ctx.maxShellOutputBytes} bytes)\n` +
           formatShell(e.stdout ?? '', e.stderr ?? '', 'maxbuffer', ctx.maxShellOutputBytes),
         isError: false,
+      };
+    }
+
+    // Binary missing / not executable — the command never ran. Must be an
+    // error: reporting a typo'd command as a clean success pollutes the
+    // agent's view and the tool success metrics.
+    if (e.code === 'ENOENT' || e.code === 'EACCES') {
+      return {
+        content: `Error: command not found or not executable (${e.code}).\n` +
+          formatShell(e.stdout ?? '', e.stderr ?? '', null, ctx.maxShellOutputBytes),
+        isError: true,
       };
     }
 

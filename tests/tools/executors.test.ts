@@ -96,6 +96,18 @@ describe('tool argument validation', () => {
     assert.strictEqual(r.isError, true);
   });
 
+  it('runShellCommand reports missing binary as an error', async () => {
+    const r = await runShellCommand({ command: 'definitely-not-a-real-binary-xyz' }, ctx);
+    assert.strictEqual(r.isError, true, 'ENOENT must be an error, not a clean success');
+    assert.ok(r.content.includes('not found'), `content should mention not found, got: ${r.content}`);
+  });
+
+  it('runShellCommand runs a real command', async () => {
+    const r = await runShellCommand({ command: process.execPath + ' -e "console.log(41+1)"' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(r.content.includes('42'));
+  });
+
   it('listFiles rejects non-boolean recursive', async () => {
     const r = await listFiles({ recursive: 'yes' } as any, ctx);
     assert.strictEqual(r.isError, true);
