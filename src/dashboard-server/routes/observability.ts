@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { computeObservabilityStats } from '../../observability/stats.js';
-import { getDb } from '../../anomaly-detection/db.js';
+import { getDrizzleDb } from '../../db/index.js';
+import { sql } from 'drizzle-orm';
 import { listRuns } from '../../orchestrator/run-index.js';
 import { readTraceIndex } from '../../observability/trace-meta.js';
 import { INTERNAL_ERROR } from '../error-sanitizer.js';
@@ -65,8 +66,8 @@ export function createObservabilityRouter(): Router {
   router.get('/health', async (_req, res) => {
     let dbStatus: { ok: boolean; error?: string } = { ok: false };
     try {
-      const db = await getDb();
-      await db.run('SELECT 1 AS ok');
+      const db = getDrizzleDb();
+      await db.execute(sql`SELECT 1 AS ok`);
       dbStatus = { ok: true };
     } catch (err: any) {
       dbStatus = { ok: false, error: err?.message ?? INTERNAL_ERROR };

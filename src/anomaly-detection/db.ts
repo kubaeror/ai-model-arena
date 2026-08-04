@@ -27,17 +27,6 @@ export interface AnomalyRecord {
   metadata_json: string | null;
 }
 
-export function dbPath(): string {
-  // compat shim
-  return '';
-}
-
-export async function getDb(): Promise<any> {
-  return getDrizzleDb();
-}
-
-export async function closeDb(): Promise<void> {}
-
 export interface NewAnomaly {
   run_id: string;
   model: string;

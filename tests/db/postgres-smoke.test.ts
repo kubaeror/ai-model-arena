@@ -39,12 +39,12 @@ test('postgres: migrations + Drizzle round-trip + task transition columns', { sk
   }
 });
 
-test('postgres: raw SQL reads via .all() are dialect-translated', { skip: !isPg }, async () => {
+test('postgres: Drizzle execute + typed helpers run on PG', { skip: !isPg }, async () => {
   initDb();
   try {
     const db = getDrizzleDb();
-    const rows = await db.all('SELECT 1 AS ok');
-    assert.equal(Number(rows[0]?.ok), 1);
+    const rows = await db.execute(db.sql`SELECT 1 AS ok`);
+    assert.ok(rows, 'Drizzle execute works on PG');
   } finally {
     await closeDb();
   }

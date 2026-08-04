@@ -3,8 +3,8 @@ import { promises as fsp } from 'node:fs';
 import { listRuns } from '../../orchestrator/orchestrator.js';
 import { extractToolCallsFromConversation, detectTurnLoops, type LoopIncident } from '../../logger/conversation-parser.js';
 import { getDrizzleDb } from '../../db/index.js';
-import { tool_call_stats, run_models } from '../../db/schema.js';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { tool_call_stats, run_models, cost_ledger } from '../../db/schema.js';
+import { eq, inArray, sql, sum, countDistinct } from 'drizzle-orm';
 
 // ── In-memory cache (30s TTL) ──────────────────────────────────────────────
 
@@ -125,8 +125,7 @@ export function createAnalyticsRouter(): Router {
     const coveredRunIds = new Set<string>();
     if (runIds.length > 0) {
       const coveredRows = await db.select({ run_id: tool_call_stats.run_id }).from(tool_call_stats)
-        .where(inArray(tool_call_stats.run_id, runIds as any))
-        .all();
+        .where(inArray(tool_call_stats.run_id, runIds as any));
       for (const r of coveredRows as any[]) coveredRunIds.add(r.run_id);
     }
 
@@ -189,8 +188,7 @@ export function createAnalyticsRouter(): Router {
       const coveredList = [...coveredRunIds];
       const successRows = await db.select({ run_id: run_models.run_id, model: run_models.model, success: run_models.success })
         .from(run_models)
-        .where(inArray(run_models.run_id, coveredList as any))
-        .all() as any[];
+        .where(inArray(run_models.run_id, coveredList as any)) as any[];
       for (const row of successRows) {
         if (row.success === 1) successfulRuns++;
       }
@@ -274,8 +272,7 @@ export function createAnalyticsRouter(): Router {
     if (filterTool) query = query.where(eq(tool_call_stats.tool_name, filterTool)) as any;
 
     const rows = await query.groupBy(sql`date`, tool_call_stats.model, tool_call_stats.tool_name)
-      .orderBy(sql`date ASC`)
-      .all() as any[];
+      .orderBy(sql`date ASC`) as any[];
 
     const trends: ToolTrendPoint[] = rows.map((r: any) => ({
       date: r.date,
@@ -295,25 +292,25 @@ export function createAnalyticsRouter(): Router {
   router.get('/cost', async (req, res) => {
     const db = getDrizzleDb();
     const filterModel = typeof req.query.model === 'string' && req.query.model ? req.query.model : undefined;
-    const params = filterModel ? [filterModel] : [];
+    const where = filterModel ? eq(cost_ledger.model, filterModel) : undefined;
 
-    const costRows = await db.all(sql.raw(`
-      SELECT model,
-        SUM(cost_usd) AS total_cost,
-        SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) AS total_tokens
-      FROM cost_ledger
-      ${filterModel ? 'WHERE model = ?' : ''}
-      GROUP BY model
-    `), ...params);
+    const costRows = await db.select({
+      model: cost_ledger.model,
+      total_cost: sum(cost_ledger.cost_usd),
+      total_tokens: sum(sql<number>`COALESCE(${cost_ledger.input_tokens}, 0) + COALESCE(${cost_ledger.output_tokens}, 0)`),
+    })
+      .from(cost_ledger)
+      .where(where)
+      .groupBy(cost_ledger.model);
 
-    const runRows = await db.all(sql.raw(`
-      SELECT model,
-        COUNT(DISTINCT run_id) AS runs,
-        COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) AS successes
-      FROM run_models
-      ${filterModel ? 'WHERE model = ?' : ''}
-      GROUP BY model
-    `), ...params);
+    const runRows = await db.select({
+      model: run_models.model,
+      runs: countDistinct(run_models.run_id),
+      successes: sum(sql<number>`CASE WHEN ${run_models.success} = 1 THEN 1 ELSE 0 END`),
+    })
+      .from(run_models)
+      .where(filterModel ? eq(run_models.model, filterModel) : undefined)
+      .groupBy(run_models.model);
 
     const byModel = new Map<string, Record<string, number>>();
     for (const c of costRows) {
