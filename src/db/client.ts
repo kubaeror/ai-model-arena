@@ -42,10 +42,6 @@ export function getDrizzleClient(): ReturnType<typeof drizzle<typeof schema>> {
   return drizzleClient;
 }
 
-export function getRawDrizzleClient(): any {
-  return getDrizzleClient();
-}
-
 export function closeDb(): void {
   if (dbInstance) {
     dbInstance.close();

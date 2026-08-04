@@ -103,17 +103,6 @@ function printComparisonTable(entries: ComparisonEntry[]): void {
   console.log('\n' + header + '\n' + sep + '\n' + body + '\n');
 }
 
-/** All runs from the index. */
-export async function listArenaProcesses(): Promise<Record<string, unknown>[]> {
-  return (await listRuns()).map(r => ({
-    name: r.runId,
-    status: r.status,
-    pid: null,
-    monit: null,
-    pm2_env: { status: r.status, unstable_restarts: 0, exit_code: null },
-  }));
-}
-
 /** Print a status table of all runs (CLI `status` command). */
 export async function printStatus(): Promise<void> {
   const runs = await listRuns();

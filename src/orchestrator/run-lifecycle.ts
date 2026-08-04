@@ -32,11 +32,6 @@ const runReservations = new Map<string, Map<string, number>>();
 let anomalyAnalysisFailures = 0;
 let statsWritebackFailures = 0;
 
-/** Returns counts of post-run background task failures (non-fatal). */
-export function getPostRunFailureCounts(): { anomalyAnalysis: number; statsWriteback: number } {
-  return { anomalyAnalysis: anomalyAnalysisFailures, statsWriteback: statsWritebackFailures };
-}
-
 export interface PerModelSpec {
   model: string;
   providerId: string;

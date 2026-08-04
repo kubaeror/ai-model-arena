@@ -21,19 +21,16 @@ import {
   sessions, messages, model_calls,
   run_models, cost_ledger,
   files, audit_log, output_mappings,
-  anomalies, webhooks,
+  anomalies,
   prompts, prompt_versions,
   users, roles, user_roles,
-  providers, models, model_providers, pricing, pricing_snapshots,
+  providers, models, model_providers, pricing,
   schedules,
 } from './schema.js';
 import type {
   DbSession, DbMessage, DbModelCall,
-  DbRunModel,
-  DbAnomaly, DbWebhook,
   DbPrompt, DbPromptVersion,
   DbUser, DbRole,
-  DbProvider,
   DbOutputMapping, DbSchedule, DbModel,
 } from './schema.js';
 
@@ -67,11 +64,6 @@ export async function updateSessionStatus(id: string, status: string): Promise<v
   await db.update(sessions).set({ status, updated_at: new Date().toISOString() }).where(eq(sessions.id, id));
 }
 
-export async function deleteSession(id: string): Promise<void> {
-  const db = getDrizzleDb();
-  await db.delete(sessions).where(eq(sessions.id, id));
-}
-
 // ── Messages ──────────────────────────────────────────────────────────────
 
 export async function createMessage(data: {
@@ -92,14 +84,6 @@ export async function listMessagesBySession(sessionId: string): Promise<DbMessag
   return db.select().from(messages)
     .where(eq(messages.session_id, sessionId))
     .orderBy(messages.turn, messages.created_at) as any;
-}
-
-export async function getMaxTurnForSession(sessionId: string): Promise<number> {
-  const db = getDrizzleDb();
-  const rows = await db.select({ maxTurn: max(messages.turn) })
-    .from(messages)
-    .where(eq(messages.session_id, sessionId));
-  return rows[0]?.maxTurn ?? -1;
 }
 
 // ── Model Calls ───────────────────────────────────────────────────────────
@@ -130,46 +114,6 @@ export async function getModelCallBySessionAndTurn(sessionId: string, turn: numb
 }
 
 // ── Runs ──────────────────────────────────────────────────────────────────
-
-export async function listRunModels(runId?: string): Promise<DbRunModel[]> {
-  const db = getDrizzleDb();
-  if (runId) return db.select().from(run_models).where(eq(run_models.run_id, runId)) as any;
-  return db.select().from(run_models).orderBy(run_models.run_id) as any;
-}
-
-export async function upsertRunModel(data: {
-  runId: string; model: string; procName?: string; outputDir?: string;
-  sandboxDir?: string; resultPath?: string; conversationPath?: string;
-  reportPath?: string; logFile?: string; status: string;
-  success?: number | null; turnsUsed?: number | null; totalToolCalls?: number | null;
-  stopReason?: string | null; durationMs?: number | null;
-  claimedAt?: string | null; startedAt?: string | null; completedAt?: string | null;
-  runnerId?: string | null;
-}): Promise<void> {
-  const db = getDrizzleDb();
-  await db.insert(run_models).values({
-    run_id: data.runId, model: data.model,
-    proc_name: data.procName ?? null, output_dir: data.outputDir ?? null,
-    sandbox_dir: data.sandboxDir ?? null, result_path: data.resultPath ?? null,
-    conversation_path: data.conversationPath ?? null, report_path: data.reportPath ?? null,
-    log_file: data.logFile ?? null, status: data.status,
-    claimed_at: data.claimedAt ?? null, started_at: data.startedAt ?? null,
-    completed_at: data.completedAt ?? null, runner_id: data.runnerId ?? null,
-    success: data.success, turns_used: data.turnsUsed, total_tool_calls: data.totalToolCalls,
-    stop_reason: data.stopReason ?? null, duration_ms: data.durationMs,
-  }).onConflictDoUpdate({
-    target: [run_models.run_id, run_models.model],
-    set: {
-      status: data.status,
-      claimed_at: data.claimedAt ?? null,
-      started_at: data.startedAt ?? null,
-      completed_at: data.completedAt ?? null,
-      runner_id: data.runnerId ?? null,
-      success: data.success, turns_used: data.turnsUsed, total_tool_calls: data.totalToolCalls,
-      stop_reason: data.stopReason ?? null, duration_ms: data.durationMs,
-    },
-  });
-}
 
 /**
  * Update the status + timestamp columns for a task in the run_models table.
@@ -301,51 +245,7 @@ export async function deleteOutputMapping(id: string): Promise<void> {
 
 // ── Anomalies ─────────────────────────────────────────────────────────────
 
-export async function insertAnomaly(data: {
-  runId: string; model: string; type: string; severity: string;
-  description: string; detectedAt: string; metadataJson?: string | null;
-}): Promise<DbAnomaly> {
-  const db = getDrizzleDb() as any;
-  const result = await db.insert(anomalies).values({
-    run_id: data.runId, model: data.model, type: data.type,
-    severity: data.severity, description: data.description,
-    detected_at: data.detectedAt, resolved: 0, metadata_json: data.metadataJson ?? null,
-  }).returning();
-  return result[0] as DbAnomaly;
-}
-
-// ── Webhooks ──────────────────────────────────────────────────────────────
-
-export async function insertWebhook(data: {
-  url: string; events: string; secret?: string | null; createdAt: string;
-}): Promise<DbWebhook> {
-  const db = getDrizzleDb() as any;
-  // Encrypt the HMAC secret at rest (H5) — mirror anomaly-detection/db.ts.
-  const { encryptWebhookSecret } = await import('../security/webhook-secret-crypto.js');
-  const encryptedSecret = encryptWebhookSecret(data.secret ?? null);
-  const result = await db.insert(webhooks).values({
-    url: data.url, events: data.events, secret: encryptedSecret,
-    created_at: data.createdAt, active: 1,
-  }).returning();
-  return result[0] as DbWebhook;
-}
-
-export async function listWebhooks(activeOnly = false): Promise<DbWebhook[]> {
-  const db = getDrizzleDb();
-  if (activeOnly) return db.select().from(webhooks).where(eq(webhooks.active, 1)) as any;
-  return db.select().from(webhooks).orderBy(desc(webhooks.created_at)) as any;
-}
-
 // ── Pricing ───────────────────────────────────────────────────────────────
-
-export async function getLatestPricingVersion(): Promise<string | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select({ version: pricing_snapshots.version })
-    .from(pricing_snapshots)
-    .orderBy(desc(pricing_snapshots.id))
-    .limit(1);
-  return rows[0]?.version ?? null;
-}
 
 // ── Schedules ─────────────────────────────────────────────────────────────
 
@@ -392,16 +292,6 @@ export async function listSchedules(): Promise<DbSchedule[]> {
 
 // ── Providers (custom) ────────────────────────────────────────────────────
 
-export async function listCustomProviders(): Promise<DbProvider[]> {
-  const db = getDrizzleDb();
-  return db.select().from(providers).where(eq(providers.is_builtin, 0)).orderBy(providers.id) as any;
-}
-
-export async function deleteCustomProvider(id: string): Promise<void> {
-  const db = getDrizzleDb();
-  await db.delete(providers).where(and(eq(providers.id, id), eq(providers.is_builtin, 0)));
-}
-
 // ── Models (for model-resolver) ───────────────────────────────────────────
 
 export async function getModelByNameOrId(nameOrId: string): Promise<(DbModel & { api_model_id: string; env_var: string | null; provider_adapter: string }) | null> {
@@ -414,8 +304,8 @@ export async function getModelByNameOrId(nameOrId: string): Promise<(DbModel & {
     interleaved: models.interleaved, status: models.status,
     context_limit: models.context_limit, output_limit: models.output_limit,
     api_model_id: model_providers.api_model_id,
-    env_var: providersTable().env_var,
-    provider_adapter: providersTable().adapter,
+    env_var: providers.env_var,
+    provider_adapter: providers.adapter,
   })
     .from(models)
     .innerJoin(model_providers, eq(model_providers.model_id, models.id))
@@ -504,12 +394,6 @@ export async function anomalyCountsByModel(): Promise<Array<{ model: string; tot
     .orderBy(desc(count()));
   return (rows as Array<{ model: string; total: unknown; unresolved: unknown }>)
     .map(r => ({ model: r.model, total: Number(r.total), unresolved: Number(r.unresolved) }));
-}
-
-// ── Helper: re-exported providers table ref for JOINs ─────────────────────
-
-function providersTable() {
-  return providers;
 }
 
 // ── Dashboard: generic paginated query helpers ────────────────────────────
