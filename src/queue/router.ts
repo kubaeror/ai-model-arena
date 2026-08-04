@@ -3,8 +3,8 @@
  * Tasks are routed to streams by adapter family, not individual provider,
  * so a single runner Deployment can handle 10+ OpenAI-compatible providers.
  *
- * Bedrock uses AWS IAM auth (no API key); ollama is self-hosted.
- * Both are excluded from shared-routed streams for now.
+ * Bedrock uses AWS IAM auth (no API key) and is excluded from
+ * shared-routed streams; ollama is self-hosted and shares the openai-compat stream.
  */
 const PROVIDER_ADAPTER_FAMILIES: Record<string, string> = {
   openai:     'openai-compat',
