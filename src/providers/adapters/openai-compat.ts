@@ -28,6 +28,15 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
+    // Fail fast on unconfigured placeholder URLs (e.g. azure-openai's
+    // https://{resource}.openai.azure.com/openai/v1) instead of POSTing to a
+    // literal '{resource}' hostname and failing with a confusing DNS error.
+    if (/\{/.test(this.baseUrl ?? '')) {
+      throw new Error(
+        `Provider "${descriptor.id}" has an unconfigured baseUrl "${this.baseUrl}". ` +
+        `Set a concrete baseUrl in the provider settings (replace {resource}/{instance} placeholders).`,
+      );
+    }
   }
 
   supportsStreaming(): boolean { return false; }
@@ -70,7 +79,13 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
   private async fetchEndpoint(path: string, body: Record<string, unknown>): Promise<Response> {
     const headers: Record<string, string> = {};
     if (this.descriptor.authScheme === 'bearer' && this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
-    if (this.descriptor.headerName && this.apiKey) headers[this.descriptor.headerName] = this.apiKey;
+    if (this.descriptor.authScheme === 'x-api-key' && this.apiKey) {
+      // headerName defaults to x-api-key so x-api-key schemes never silently
+      // send no auth header at all.
+      headers[this.descriptor.headerName ?? 'x-api-key'] = this.apiKey;
+    } else if (this.descriptor.headerName && this.apiKey) {
+      headers[this.descriptor.headerName] = this.apiKey;
+    }
     return this.post(`${this.baseUrl}${path}`, body, headers);
   }
 
@@ -79,9 +94,13 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     if (!choice) {
       return { text: null, toolCalls: [], usage: {}, stopReason: undefined, raw: json };
     }
-    const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map(tc => ({
-      id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments || '{}'),
-    }));
+    const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map(tc => {
+      // Some providers return non-JSON arguments strings; do not let a
+      // SyntaxError escape the retry wrapper and kill the whole run.
+      let args: Record<string, unknown> = {};
+      try { args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { args = {}; }
+      return { id: tc.id, name: tc.function.name, arguments: args };
+    });
     const usage: TokenUsage = {
       prompt: json.usage?.prompt_tokens,
       completion: json.usage?.completion_tokens,
