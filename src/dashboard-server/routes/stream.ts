@@ -53,12 +53,21 @@ export function attachStreamWs(server: Server, auth: AuthConfig): void {
     path: '/runner',
     maxPayload: MAX_PAYLOAD_BYTES,
     verifyClient: (info: VerifyInfo, cb) => {
-      const result = verifyWsRequest(info, auth, { useQueryToken: true });
-      if (result === null) {
+      const principal = verifyWsRequest(info, auth, { useQueryToken: true });
+      (info.req as IncomingMessage & { _wsUser?: { sub: string; role: string } })._wsUser = principal ?? undefined;
+      if (principal === null) {
         logger.warn('Rejected unauthenticated /runner WebSocket upgrade', {
           remoteAddress: info.req.socket.remoteAddress,
         });
         cb(false, 401, 'Unauthorized');
+        return;
+      }
+      if (principal.role !== 'admin') {
+        logger.warn('Rejected non-admin /runner WebSocket upgrade', {
+          sub: principal.sub,
+          remoteAddress: info.req.socket.remoteAddress,
+        });
+        cb(false, 403, 'Forbidden');
         return;
       }
       cb(true);
