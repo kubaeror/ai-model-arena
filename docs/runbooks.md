@@ -114,7 +114,7 @@ If 5xx persists > 10 minutes, escalate to on-call engineer.
 
 ### Restarting a Runner Pool
 ```bash
-kubectl rollout restart deployment/runner-openai -n ai-arena
+kubectl rollout restart deployment/runner-openai-compat -n ai-arena
 ```
 
 ### Inspecting the Dead Letter Queue
