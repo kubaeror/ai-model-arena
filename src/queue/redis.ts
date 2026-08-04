@@ -327,15 +327,15 @@ export class RedisStreamQueue implements TaskQueue {
     }
   }
 
-  async deadLetterRetry(taskId: string): Promise<void> {
+  async deadLetterRetry(taskId: string): Promise<boolean> {
     const provider = this.config.providerFilter;
-    if (!provider) return;
+    if (!provider) return false;
     const dlqStream = dlqStreamKey(this.config.streamPrefix, provider);
     const mainStream = streamKey(this.config.streamPrefix, provider);
 
     // Get the task from the DLQ
     const msgs = await this.redis.xrange(dlqStream, taskId, taskId);
-    if (msgs.length === 0) return;
+    if (msgs.length === 0) return false;
 
     const [, fields] = msgs[0]!;
     const data: Record<string, string> = {};
@@ -351,6 +351,7 @@ export class RedisStreamQueue implements TaskQueue {
     // Delete from DLQ
     await this.redis.xdel(dlqStream, taskId);
     void this.setQueueDepthGauge();
+    return true;
   }
 
   async close(): Promise<void> {

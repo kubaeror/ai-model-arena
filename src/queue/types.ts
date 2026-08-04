@@ -25,6 +25,6 @@ export interface TaskQueue {
   size(): Promise<number>;
   deadLetterSize?(): Promise<number>;
   deadLetterPeek?(limit: number): Promise<Task[]>;
-  deadLetterRetry?(taskId: string): Promise<void>;
+  deadLetterRetry?(taskId: string): Promise<boolean>;
   close?(): Promise<void>;
 }

@@ -100,6 +100,18 @@ export class InMemoryQueue implements TaskQueue {
     return this.dead.slice(0, limit);
   }
 
+  async deadLetterRetry(taskId: string): Promise<boolean> {
+    const idx = this.dead.findIndex((t) => t.taskId === taskId);
+    if (idx < 0) return false;
+    const [t] = this.dead.splice(idx, 1);
+    if (!t) return false;
+    t.attempts = 0;
+    this.pending.unshift(t);
+    this.syncQueueDepth();
+    this._notifyNext();
+    return true;
+  }
+
   async close(): Promise<void> {
     // No-op — in-memory state is lost on process exit.
   }
