@@ -103,7 +103,7 @@ describe('tool argument validation', () => {
   });
 
   it('runShellCommand runs a real command', async () => {
-    const r = await runShellCommand({ command: process.execPath + ' -e "console.log(41+1)"' }, ctx);
+    const r = await runShellCommand({ command: process.execPath + ' -p "41+1"' }, ctx);
     assert.strictEqual(r.isError, false);
     assert.ok(r.content.includes('42'));
   });
