@@ -213,6 +213,11 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   const spec = await createRunSpec(opts);
   const runId = spec.runId;
 
+  // Register before enqueue: a task that fails fast (e.g. missing API key)
+  // writes its final state before the late registerRun upsert can clobber
+  // it back to 'running' and wedge the run forever.
+  await registerRun(spec, opts.source ?? 'cli', opts.createdBy);
+
   // Enqueue tasks for each model instead of spawning PM2 workers
   const queue = createQueue();
   const idemKey = makeIdempotencyKey(spec.scenario, spec.models.map(m => m.model));
@@ -238,7 +243,6 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     await queue.enqueue(task);
   }
 
-  await registerRun(spec, opts.source ?? 'cli', opts.createdBy);
   logger.info('Run enqueued', { runId, models: spec.models.map(m => m.model), tasks: spec.models.length });
   return spec;
 }
