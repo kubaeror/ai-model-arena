@@ -79,7 +79,22 @@ export class RedisStreamQueue implements TaskQueue {
           for (let i = 0; i < fields.length; i += 2) {
             taskData[fields[i]!] = fields[i + 1]!;
           }
-          const task = parseTask(JSON.parse(taskData.task ?? '{}'));
+
+          let task: Task | null = null;
+          try {
+            task = safeParseTask(JSON.parse(taskData.task ?? '{}'));
+          } catch {
+            task = null;
+          }
+
+          if (task === null) {
+            // Malformed message — quarantine it so one corrupt entry cannot
+            // block reclaim of every other orphaned task in the stream.
+            const dlq = dlqStreamKey(this.config.streamPrefix, provider);
+            await this.redis.xadd(dlq, '*', 'task', taskData.task ?? '', 'reason', 'XAUTOCLAIM: invalid task payload');
+            await this.redis.xdel(stream, id);
+            continue;
+          }
 
           if ((task.attempts ?? 0) >= this.config.maxAttempts) {
             const dlq = dlqStreamKey(this.config.streamPrefix, provider);
