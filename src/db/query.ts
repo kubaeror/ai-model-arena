@@ -679,13 +679,13 @@ export async function getCostSummary(groupBy: 'model' | 'day', model?: string): 
       .from(cost_ledger)
       .where(where)
       .groupBy(sql`substr(${cost_ledger.recorded_at}, 1, 10)`, cost_ledger.model)
-      .orderBy(desc(sql`period`), asc(cost_ledger.model)) as any;
+      .orderBy(desc(sql`substr(${cost_ledger.recorded_at}, 1, 10)`), asc(cost_ledger.model)) as any;
   }
   return db.select({ model: cost_ledger.model, ...common })
     .from(cost_ledger)
     .where(where)
     .groupBy(cost_ledger.model)
-    .orderBy(desc(sql`total_cost`)) as any;
+    .orderBy(desc(sum(cost_ledger.cost_usd))) as any;
 }
 
 // ── Dashboard: metrics helpers ────────────────────────────────────────────
@@ -722,7 +722,7 @@ export async function queryTpsLeaderboard(): Promise<any[]> {
     .leftJoin(r, eq(r.model_id, models.id))
     .groupBy(models.id)
     .having(gt(count(r.run_id), 0))
-    .orderBy(desc(sql`avg_tps`)) as any;
+    .orderBy(desc(avg(r.tps))) as any;
 }
 
 // ── Dashboard: sessions helpers ───────────────────────────────────────────
@@ -814,5 +814,5 @@ export async function queryCacheLeaderboard(): Promise<any[]> {
   })
     .from(models)
     .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
-    .orderBy(desc(sql`intelligence`)) as any;
+    .orderBy(desc(sql`(SELECT score FROM benchmarks b WHERE b.model_id = ${models.id} AND b.is_preferred = 1 AND b.benchmark = 'Intelligence Index')`)) as any;
 }

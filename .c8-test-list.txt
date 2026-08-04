@@ -18,6 +18,7 @@ tests/dashboard/regression-path-traversal.test.ts
 tests/db/migrations.test.ts
 tests/db/models.test.ts
 tests/db/pagination.test.ts
+tests/db/query-helpers.test.ts
 tests/db/runs.test.ts
 tests/db/schedules.test.ts
 tests/db/sessions.test.ts
