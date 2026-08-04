@@ -1,5 +1,4 @@
 import type { ChatMessage, ToolDefinition, ModelResponse, Logger } from '../../types.js';
-import { NormalizedProviderError } from '../normalized-error.js';
 
 export interface SendOpts {
   reasoning?: { type: 'effort' | 'toggle' | 'budget_tokens'; value?: string | number };
@@ -46,7 +45,6 @@ export abstract class BaseAdapter {
   }
 
   protected isRetryable(err: unknown): boolean {
-    if (err instanceof NormalizedProviderError) return err.retryable;
     if (err instanceof HttpError) return err.status === 429 || (err.status >= 500 && err.status < 600);
     if (err instanceof Error) return RETRYABLE_MESSAGES.test(err.message);
     return false;

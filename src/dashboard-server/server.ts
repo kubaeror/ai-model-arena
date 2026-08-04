@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import '../env.js';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';

@@ -6,7 +6,7 @@ import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing } from '../cost-tracking/index.js';
-import * as pm2h from './pm2-helpers.js';
+import { ARENA_PREFIX, projectRoot, timestamp, sanitizeName } from './utils.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/index.js';
@@ -90,7 +90,7 @@ export interface PerModelStatus {
 
 /** Validate models + compute all run paths (no PM2, no spawning). */
 export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
-  const root = pm2h.projectRoot();
+  const root = projectRoot();
   const scenariosDir = opts.scenariosDir ?? path.join(root, 'configs', 'scenarios');
   initDb(dbPath());
   for (const name of opts.models) {
@@ -100,11 +100,11 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
     }
   }
 
-  const ts = pm2h.timestamp();
+  const ts = timestamp();
   const runId = `${opts.scenario}_${ts}`;
   const perModel: PerModelSpec[] = await Promise.all(opts.models.map(async (model) => {
     const resolved = await resolveModelForRun(model);
-    const procName = pm2h.sanitizeName(`${pm2h.ARENA_PREFIX}${model}-${opts.scenario}-${ts}`);
+    const procName = sanitizeName(`${ARENA_PREFIX}${model}-${opts.scenario}-${ts}`);
     const outputDir = path.join(outputRoot(), model, runId);
     const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
     fs.mkdirSync(pm2LogDir, { recursive: true });
@@ -149,7 +149,7 @@ export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | '
 
 /** Non-blocking: validate, build, spawn workers, register in index, return spec. */
 export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
-  const root = pm2h.projectRoot();
+  const root = projectRoot();
   const logger = opts.logger ?? createLogger('ai-arena:orchestrator');
   
   // Load budget config for enforcement (pricing now comes from the SQLite catalog)
@@ -389,7 +389,7 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
     logger.info('Run already finalized — skipping', { runId });
     return { mdPath: rec.comparisonMdPath ?? '', jsonPath: rec.comparisonJsonPath ?? '' };
   }
-  const root = pm2h.projectRoot();
+  const root = projectRoot();
   const { mdPath, jsonPath } = aggregate(root, {
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
@@ -478,7 +478,7 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
 export async function finalizeRunByRunId(runId: string, logger: Logger): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) return;
-  const root = pm2h.projectRoot();
+  const root = projectRoot();
   const { entries } = aggregate(root, {
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
@@ -524,7 +524,7 @@ export async function restartRun(runId: string): Promise<void> {
   if (!rec) throw new Error(`Run not found: ${runId}`);
   cancelledRuns.delete(runId);
   const queue = createQueue();
-  const ts = pm2h.timestamp();
+  const ts = timestamp();
   const idemKey = makeIdempotencyKey(rec.scenario, rec.perModel.map((m) => m.model));
   for (const m of rec.perModel) {
     const resolved = await resolveModelForRun(m.model);
