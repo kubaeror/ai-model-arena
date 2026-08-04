@@ -14,7 +14,7 @@
  * The runtime API is identical — Drizzle handles the dialect differences.
  */
 
-import { eq, and, desc, asc, sql, count, sum, max, inArray, gte, lte, like, getTableColumns } from 'drizzle-orm';
+import { eq, and, desc, asc, sql, count, sum, max, avg, inArray, gte, lte, like, gt, getTableColumns } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { getDrizzleDb } from './index.js';
 import {
@@ -471,19 +471,26 @@ export async function paginate<T extends Record<string, unknown>>(
 
 export async function listPromptsWithLatestVersion(): Promise<any[]> {
   const db = getDrizzleDb();
-  // Use subquery for latest version — Drizzle supports this but a raw SQL
-  // sub-select is cleaner for cross-dialect compatibility.
-  return db.all(sql.raw(`
-    SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
-      pv.version AS latest_version, pv.tag AS latest_tag
-    FROM prompts p
-    LEFT JOIN prompt_versions pv ON pv.id = (
-      SELECT pv2.id FROM prompt_versions pv2
-      WHERE pv2.prompt_id = p.id
-      ORDER BY pv2.version DESC LIMIT 1
-    )
-    ORDER BY p.name ASC
-  `));
+  const promptRows = await db.select().from(prompts).orderBy(asc(prompts.name));
+  if (promptRows.length === 0) return [];
+  const ids = promptRows.map((p: { id: string }) => p.id);
+  const versions = await db.select().from(prompt_versions)
+    .where(inArray(prompt_versions.prompt_id, ids))
+    .orderBy(desc(prompt_versions.version));
+  // First row per prompt is the latest version (descending order).
+  const latest = new Map<string, (typeof versions)[number]>();
+  for (const v of versions) {
+    if (!latest.has(v.prompt_id)) latest.set(v.prompt_id, v);
+  }
+  return promptRows.map((p: { id: string; name: string; description: string | null; created_at: string; updated_at: string }) => {
+    const lv = latest.get(p.id);
+    return {
+      id: p.id, name: p.name, description: p.description,
+      created_at: p.created_at, updated_at: p.updated_at,
+      latest_version: lv?.version ?? null,
+      latest_tag: lv?.tag ?? null,
+    };
+  });
 }
 
 export async function insertPrompt(data: {
@@ -529,15 +536,23 @@ export async function insertPromptVersion(data: {
 
 export async function listUsersWithRoles(): Promise<any[]> {
   const db = getDrizzleDb();
-  return db.all(sql.raw(`
-    SELECT u.id, u.username, u.created_at,
-      COALESCE(
-        (SELECT string_agg(ur.role_id, ',') FROM user_roles ur WHERE ur.user_id = u.id),
-        ''
-      ) AS roles
-    FROM users u
-    ORDER BY u.created_at ASC
-  `));
+  const userRows = await db.select().from(users).orderBy(asc(users.created_at));
+  if (userRows.length === 0) return [];
+  const roleRows = await db.select({ userId: user_roles.user_id, roleId: user_roles.role_id })
+    .from(user_roles)
+    .where(inArray(user_roles.user_id, userRows.map((u: { id: string }) => u.id)));
+  const rolesByUser = new Map<string, string[]>();
+  for (const r of roleRows) {
+    const list = rolesByUser.get(r.userId) ?? [];
+    list.push(r.roleId);
+    rolesByUser.set(r.userId, list);
+  }
+  return userRows.map((u: { id: string; username: string; created_at: string }) => ({
+    id: u.id,
+    username: u.username,
+    created_at: u.created_at,
+    roles: (rolesByUser.get(u.id) ?? []).join(','),
+  }));
 }
 
 export async function insertUser(data: {
@@ -648,15 +663,29 @@ export async function getModelDetail(modelId: string): Promise<any[]> {
 
 export async function getCostSummary(groupBy: 'model' | 'day', model?: string): Promise<any[]> {
   const db = getDrizzleDb();
-  const params: any[] = [];
-  let query: string;
+  const where = model ? eq(cost_ledger.model, model) : undefined;
+  const common = {
+    total_cost: sum(cost_ledger.cost_usd),
+    total_input_tokens: sum(cost_ledger.input_tokens),
+    total_output_tokens: sum(cost_ledger.output_tokens),
+    entry_count: count(),
+  };
   if (groupBy === 'day') {
-    query = `SELECT substr(recorded_at, 1, 10) AS period, model, SUM(cost_usd) AS total_cost, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, COUNT(*) AS entry_count FROM cost_ledger WHERE ${model ? 'model = ?' : '1=1'} GROUP BY period, model ORDER BY period DESC, model ASC`;
-  } else {
-    query = `SELECT model, SUM(cost_usd) AS total_cost, SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens, COUNT(*) AS entry_count FROM cost_ledger WHERE ${model ? 'model = ?' : '1=1'} GROUP BY model ORDER BY total_cost DESC`;
+    return db.select({
+      period: sql<string>`substr(${cost_ledger.recorded_at}, 1, 10)`,
+      model: cost_ledger.model,
+      ...common,
+    })
+      .from(cost_ledger)
+      .where(where)
+      .groupBy(sql`substr(${cost_ledger.recorded_at}, 1, 10)`, cost_ledger.model)
+      .orderBy(desc(sql`period`), asc(cost_ledger.model)) as any;
   }
-  if (model) params.push(model);
-  return db.all(sql.raw(query), ...params);
+  return db.select({ model: cost_ledger.model, ...common })
+    .from(cost_ledger)
+    .where(where)
+    .groupBy(cost_ledger.model)
+    .orderBy(desc(sql`total_cost`)) as any;
 }
 
 // ── Dashboard: metrics helpers ────────────────────────────────────────────
@@ -678,18 +707,22 @@ export async function queryModelRuntimeStats(opts: {
 
 export async function queryTpsLeaderboard(): Promise<any[]> {
   const db = getDrizzleDb();
-  return db.all(sql.raw(`
-    SELECT m.id as model_id, m.name, m.provider_id,
-      AVG(r.tps) as avg_tps, MAX(r.tps) as max_tps,
-      AVG(r.latency_p50_ms) as avg_latency_p50,
-      AVG(r.cache_hit_rate) as avg_cache_hit_rate,
-      COUNT(r.run_id) as run_count
-    FROM models m
-    LEFT JOIN model_runtime_stats r ON r.model_id = m.id
-    GROUP BY m.id
-    HAVING COUNT(r.run_id) > 0
-    ORDER BY avg_tps DESC
-  `));
+  const r = model_runtime_stats;
+  return db.select({
+    model_id: models.id,
+    name: models.name,
+    provider_id: models.provider_id,
+    avg_tps: avg(r.tps),
+    max_tps: max(r.tps),
+    avg_latency_p50: avg(r.latency_p50_ms),
+    avg_cache_hit_rate: avg(r.cache_hit_rate),
+    run_count: count(r.run_id),
+  })
+    .from(models)
+    .leftJoin(r, eq(r.model_id, models.id))
+    .groupBy(models.id)
+    .having(gt(count(r.run_id), 0))
+    .orderBy(desc(sql`avg_tps`)) as any;
 }
 
 // ── Dashboard: sessions helpers ───────────────────────────────────────────
@@ -764,16 +797,22 @@ export async function deleteSessionCascade(sessionId: string): Promise<void> {
 
 export async function queryCacheLeaderboard(): Promise<any[]> {
   const db = getDrizzleDb();
-  return db.all(sql.raw(`
-    SELECT m.id, m.name, m.provider_id, m.context_limit,
-      p.input, p.output, p.cache_read,
-      (SELECT score FROM benchmarks b WHERE b.model_id = m.id AND b.is_preferred = 1 AND b.benchmark = 'Intelligence Index') as intelligence,
-      (SELECT score FROM benchmarks b WHERE b.model_id = m.id AND b.is_preferred = 1 AND b.benchmark = 'Coding Score') as coding,
-      (SELECT AVG(r.tps) FROM model_runtime_stats r WHERE r.model_id = m.id) as arena_tps,
-      (SELECT AVG(r.latency_p50_ms) FROM model_runtime_stats r WHERE r.model_id = m.id) as arena_latency,
-      (SELECT COUNT(*) FROM model_runtime_stats r WHERE r.model_id = m.id) as arena_runs
-    FROM models m
-    LEFT JOIN pricing p ON p.model_id = m.id AND p.tier_size = 0
-    ORDER BY intelligence DESC
-  `));
+  const r = model_runtime_stats;
+  return db.select({
+    id: models.id,
+    name: models.name,
+    provider_id: models.provider_id,
+    context_limit: models.context_limit,
+    input: pricing.input,
+    output: pricing.output,
+    cache_read: pricing.cache_read,
+    intelligence: sql<number>`(SELECT score FROM benchmarks b WHERE b.model_id = ${models.id} AND b.is_preferred = 1 AND b.benchmark = 'Intelligence Index')`,
+    coding: sql<number>`(SELECT score FROM benchmarks b WHERE b.model_id = ${models.id} AND b.is_preferred = 1 AND b.benchmark = 'Coding Score')`,
+    arena_tps: sql<number>`(SELECT AVG(x.tps) FROM ${r} x WHERE x.model_id = ${models.id})`,
+    arena_latency: sql<number>`(SELECT AVG(x.latency_p50_ms) FROM ${r} x WHERE x.model_id = ${models.id})`,
+    arena_runs: sql<number>`(SELECT COUNT(*) FROM ${r} x WHERE x.model_id = ${models.id})`,
+  })
+    .from(models)
+    .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
+    .orderBy(desc(sql`intelligence`)) as any;
 }
