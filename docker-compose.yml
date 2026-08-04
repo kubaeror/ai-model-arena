@@ -44,6 +44,24 @@ services:
       - outputs:/var/arena/outputs
     command: ["node", "dist/runner.js"]
 
+  scheduler:
+    build: .
+    command: ["sh", "-c", "while true; do node dist/scripts/scheduler-tick.js; sleep 60; done"]
+    environment:
+      DB_DRIVER: postgres
+      DATABASE_URL: postgres://arena:arena@postgres:5432/arena
+      QUEUE_DRIVER: redis
+      REDIS_URL: redis://redis:6379
+      OUTPUT_ROOT: /var/arena/outputs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - outputs:/var/arena/outputs
+    restart: unless-stopped
+
   dashboard:
     build: .
     environment:
