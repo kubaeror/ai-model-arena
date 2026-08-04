@@ -9,7 +9,6 @@ const ENV_KEYS = [
   'REDIS_CONSUMER_GROUP',
   'REDIS_CONSUMER_NAME',
   'MAX_TASK_ATTEMPTS',
-  'REDIS_BLOCK_MS',
   'REDIS_RECLAIM_IDLE_MS',
   'REDIS_RECLAIM_INTERVAL_MS',
   'ARENA_PROVIDER_FILTER',
@@ -41,10 +40,17 @@ test('loadRedisQueueConfig applies defaults when only REDIS_URL set', (t) => {
   assert.equal(cfg.consumerGroup, 'arena-runners');
   assert.equal(cfg.consumerName, os.hostname());
   assert.equal(cfg.maxAttempts, 5);
-  assert.equal(cfg.blockMs, 5000);
   assert.equal(cfg.reclaimIdleMs, 60_000);
   assert.equal(cfg.reclaimIntervalMs, 30_000);
   assert.equal(cfg.providerFilter, undefined);
+});
+
+test('parsed config has no dead blockMs field', (t) => {
+  t.after(saveEnv());
+  for (const k of ENV_KEYS) delete process.env[k];
+  process.env.REDIS_URL = 'redis://localhost:6379';
+  const cfg = loadRedisQueueConfig();
+  assert.equal('blockMs' in (cfg as Record<string, unknown>), false);
 });
 
 test('loadRedisQueueConfig reads explicit env overrides', (t) => {
@@ -55,7 +61,6 @@ test('loadRedisQueueConfig reads explicit env overrides', (t) => {
   process.env.REDIS_CONSUMER_GROUP = 'cg';
   process.env.REDIS_CONSUMER_NAME = 'cn';
   process.env.MAX_TASK_ATTEMPTS = '7';
-  process.env.REDIS_BLOCK_MS = '1000';
   process.env.REDIS_RECLAIM_IDLE_MS = '5000';
   process.env.REDIS_RECLAIM_INTERVAL_MS = '2000';
   process.env.ARENA_PROVIDER_FILTER = 'anthropic';
@@ -65,7 +70,6 @@ test('loadRedisQueueConfig reads explicit env overrides', (t) => {
     consumerGroup: 'cg',
     consumerName: 'cn',
     maxAttempts: 7,
-    blockMs: 1000,
     reclaimIdleMs: 5000,
     reclaimIntervalMs: 2000,
     providerFilter: 'anthropic',
