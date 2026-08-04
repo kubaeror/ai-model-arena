@@ -73,6 +73,11 @@ spec:
                 secretKeyRef:
                   name: dashboard-auth
                   key: jwt-secret
+            - name: WEBHOOK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webhook-secret
+                  key: key
           ports:
             - containerPort: 4000
           volumeMounts:

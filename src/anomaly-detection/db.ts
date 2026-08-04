@@ -192,8 +192,10 @@ export async function getWebhook(id: number): Promise<WebhookRecord | null> {
 
 export async function deleteWebhook(id: number): Promise<boolean> {
   const db = getDrizzleDb();
-  const result = await db.delete(webhooks).where(eq(webhooks.id, id));
-  return (result as any).rowCount > 0;
+  const result = (await db.delete(webhooks).where(eq(webhooks.id, id))) as any;
+  // better-sqlite3 returns { changes, lastInsertRowid }, pg returns { rowCount }.
+  const changes = typeof result.rowCount === 'number' ? result.rowCount : (result.changes ?? 0);
+  return changes > 0;
 }
 
 export async function webhooksForEvent(event: string): Promise<WebhookRecord[]> {

@@ -39,6 +39,14 @@ kubectl -n ai-arena create secret generic dashboard-auth \
   --from-literal=jwt-secret=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
 kubectl -n ai-arena create secret generic provider-keys \
   --from-literal=OPENAI_API_KEY=...
+kubectl -n ai-arena create secret generic webhook-secret \
+  --from-literal=key=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+```
+
+> Note: the dashboard refuses to encrypt/decrypt webhook secrets in
+> production (`NODE_ENV=production`) without `WEBHOOK_SECRET_KEY` mounted as
+> the `webhook-secret` secret above — create it or webhook create/delete will
+> fail in every containerized deployment.
 
 # Deploy via kustomize
 kubectl apply -k k8s/overlays/dev

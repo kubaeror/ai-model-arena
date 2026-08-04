@@ -53,6 +53,7 @@ services:
       DASHBOARD_USERNAME: admin
       DASHBOARD_PASSWORD: change-me
       DASHBOARD_JWT_SECRET: dev-jwt-secret-change-in-production-at-least-32-chars
+      WEBHOOK_SECRET_KEY: 0000000000000000000000000000000000000000000000000000000000000000
     depends_on:
       postgres:
         condition: service_healthy
