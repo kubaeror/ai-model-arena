@@ -69,7 +69,7 @@ paths:
   /runs/{runId}:
     get:
       tags: [runs]
-      summary: Get a run + per-model PM2 status
+      summary: Get a run + per-model status
       parameters: [{ $ref: '#/components/parameters/RunId' }]
       responses: { '200': { description: Run detail } }
   /runs/{runId}/stop:
@@ -96,15 +96,6 @@ paths:
       summary: Get report.md for a model run
       parameters: [{ $ref: '#/components/parameters/RunId' }, { $ref: '#/components/parameters/Model' }]
       responses: { '200': { description: Markdown report } }
-  /cost:
-    get:
-      tags: [cost]
-      summary: Cost leaderboard by model
-      parameters:
-        - in: query
-          name: model
-          schema: { type: string }
-      responses: { '200': { description: Cost leaderboard } }
   /analytics/tools:
     get:
       tags: [tool-analytics]
@@ -119,7 +110,7 @@ paths:
       tags: [export]
       summary: Export all runs as CSV
       responses: { '200': { description: CSV } }
-  /runs/{runId}/export/csv:
+  /export/runs/{runId}/csv:
     get:
       tags: [export]
       summary: Export a single run's conversation as CSV
@@ -239,6 +230,94 @@ paths:
           required: true
           schema: { type: integer }
       responses: { '204': { description: Deleted }, '404': { description: Not found } }
+  /catalog/models:
+    get:
+      summary: List catalog models
+      tags: [Catalog]
+      parameters:
+        - { name: provider, in: query, schema: { type: string } }
+        - { name: reasoning, in: query, schema: { type: string, enum: ['1', '0'] } }
+        - { name: tool_call, in: query, schema: { type: string, enum: ['1', '0'] } }
+        - { name: min_context, in: query, schema: { type: integer } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, context] } }
+      responses:
+        '200': { description: Model list }
+  /catalog/models/{id}:
+    get:
+      summary: Full model detail (caps + pricing + benchmarks + runtime stats)
+      tags: [Catalog]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Model detail }
+        '404': { description: Not found }
+  /catalog/providers:
+    get:
+      summary: List all providers (builtin + custom)
+      tags: [Catalog]
+      responses: { '200': { description: Provider list } }
+    post:
+      summary: Add custom OpenAI-compatible provider
+      tags: [Catalog]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { id: {type: string}, name: {type: string}, apiBase: {type: string}, authScheme: {type: string}, envVar: {type: string}, adapter: {type: string} } } } } }
+      responses: { '201': { description: Created } }
+  /catalog/providers/{id}:
+    delete:
+      summary: Remove custom provider
+      tags: [Catalog]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Deleted } }
+  /catalog/benchmarks:
+    get:
+      summary: List benchmarks (filter by name/source/model)
+      tags: [Catalog]
+      parameters:
+        - { name: name, in: query, schema: { type: string } }
+        - { name: source, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+      responses: { '200': { description: Benchmark list } }
+  /catalog/benchmarks/{modelId}:
+    get:
+      summary: Benchmarks for one model
+      tags: [Catalog]
+      parameters: [{ name: modelId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Benchmarks } }
+  /catalog/pricing:
+    get:
+      summary: Pricing table
+      tags: [Catalog]
+      parameters: [{ name: model, in: query, schema: { type: string } }]
+      responses: { '200': { description: Pricing } }
+  /metrics/runtime:
+    get:
+      summary: Arena-measured runtime stats
+      tags: [Metrics]
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+      responses: { '200': { description: Runtime stats } }
+  /metrics/tps:
+    get:
+      summary: TPS leaderboard (arena measurements)
+      tags: [Metrics]
+      responses: { '200': { description: TPS leaderboard } }
+  /cache/stats:
+    get:
+      summary: Cache state per source
+      tags: [Cache]
+      responses: { '200': { description: Cache states } }
+  /cache/leaderboard:
+    get:
+      summary: Combined catalog benchmarks + arena measurements
+      tags: [Cache]
+      responses: { '200': { description: Leaderboard } }
+  /cache/refresh:
+    post:
+      summary: Force refresh a catalog source
+      tags: [Cache]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { source: { type: string, enum: [models.dev, modelbench, zeroeval] } } } } } }
+      responses: { '200': { description: Refresh result } }
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -262,94 +341,6 @@ components:
       name: id
       required: true
       schema: { type: integer }
-  /api/models:
-    get:
-      summary: List catalog models
-      tags: [Catalog]
-      parameters:
-        - { name: provider, in: query, schema: { type: string } }
-        - { name: reasoning, in: query, schema: { type: string, enum: ['1', '0'] } }
-        - { name: tool_call, in: query, schema: { type: string, enum: ['1', '0'] } }
-        - { name: min_context, in: query, schema: { type: integer } }
-        - { name: sort, in: query, schema: { type: string, enum: [name, context] } }
-      responses:
-        '200': { description: Model list }
-  /api/models/{id}:
-    get:
-      summary: Full model detail (caps + pricing + benchmarks + runtime stats)
-      tags: [Catalog]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses:
-        '200': { description: Model detail }
-        '404': { description: Not found }
-  /api/providers:
-    get:
-      summary: List all providers (builtin + custom)
-      tags: [Catalog]
-      responses: { '200': { description: Provider list } }
-    post:
-      summary: Add custom OpenAI-compatible provider
-      tags: [Catalog]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { id: {type: string}, name: {type: string}, apiBase: {type: string}, authScheme: {type: string}, envVar: {type: string}, adapter: {type: string} } } } } }
-      responses: { '201': { description: Created } }
-  /api/providers/{id}:
-    delete:
-      summary: Remove custom provider
-      tags: [Catalog]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Deleted } }
-  /api/benchmarks:
-    get:
-      summary: List benchmarks (filter by name/source/model)
-      tags: [Catalog]
-      parameters:
-        - { name: name, in: query, schema: { type: string } }
-        - { name: source, in: query, schema: { type: string } }
-        - { name: model, in: query, schema: { type: string } }
-      responses: { '200': { description: Benchmark list } }
-  /api/benchmarks/{modelId}:
-    get:
-      summary: Benchmarks for one model
-      tags: [Catalog]
-      parameters: [{ name: modelId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Benchmarks } }
-  /api/pricing:
-    get:
-      summary: Pricing table
-      tags: [Catalog]
-      parameters: [{ name: model, in: query, schema: { type: string } }]
-      responses: { '200': { description: Pricing } }
-  /api/metrics/runtime:
-    get:
-      summary: Arena-measured runtime stats
-      tags: [Metrics]
-      parameters:
-        - { name: model, in: query, schema: { type: string } }
-        - { name: from, in: query, schema: { type: string } }
-        - { name: to, in: query, schema: { type: string } }
-        - { name: limit, in: query, schema: { type: integer, default: 100 } }
-      responses: { '200': { description: Runtime stats } }
-  /api/metrics/tps:
-    get:
-      summary: TPS leaderboard (arena measurements)
-      tags: [Metrics]
-      responses: { '200': { description: TPS leaderboard } }
-  /api/cache/stats:
-    get:
-      summary: Cache state per source
-      tags: [Cache]
-      responses: { '200': { description: Cache states } }
-  /api/cache/leaderboard:
-    get:
-      summary: Combined catalog benchmarks + arena measurements
-      tags: [Cache]
-      responses: { '200': { description: Leaderboard } }
-  /api/cache/refresh:
-    post:
-      summary: Force refresh a catalog source
-      tags: [Cache]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { source: { type: string, enum: [models.dev, modelbench, zeroeval] } } } } } }
-      responses: { '200': { description: Refresh result } }
   schemas:
     Model:
       type: object
