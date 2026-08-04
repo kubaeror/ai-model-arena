@@ -15,9 +15,11 @@ function mockResponse(body: unknown, status = 200): Response {
 test('GoogleAdapter.sendMessage parses generateContent response', async () => {
   const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
   let capturedUrl = '';
+  let capturedHeaders: Record<string, string> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     capturedUrl = String(input);
+    capturedHeaders = (init?.headers as Record<string, string>) ?? {};
     return mockResponse({
       candidates: [{ content: { parts: [{ text: 'Hello Gemini' }] }, finishReason: 'STOP' }],
       usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15, cachedContentTokenCount: 3 },
@@ -30,7 +32,8 @@ test('GoogleAdapter.sendMessage parses generateContent response', async () => {
     assert.equal(result.usage.prompt, 10);
     assert.equal(result.usage.completion, 5);
     assert.equal(result.usage.cacheReadTokens, 3);
-    assert.ok(capturedUrl.includes('key=AIza-test'));
+    assert.equal(capturedHeaders['x-goog-api-key'], 'AIza-test');
+    assert.ok(!capturedUrl.includes('key='), 'API key must not appear in the URL');
     assert.ok(capturedUrl.includes('gemini-1.5-pro'));
     assert.ok(capturedUrl.includes('generateContent'));
   } finally {

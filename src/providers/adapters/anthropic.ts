@@ -46,7 +46,10 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
     const conversational: Array<Record<string, unknown>> = [];
     const cacheIndices = new Set<number>();
     let targetCount = 0;
-    for (let i = messages.length - 1; i >= 0 && targetCount < MAX_CACHE_BREAKPOINTS; i--) {
+    // Cache breakpoints go on the STABLE prefix (early user/system turns), not
+    // the tail: the newest turns change every iteration and invalidate the
+    // cache, so marking them backwards made every request a cache miss.
+    for (let i = 0; i < messages.length && targetCount < MAX_CACHE_BREAKPOINTS; i++) {
       const m = messages[i];
       if (!m) continue;
       if (m.role === 'system' || m.role === 'user') {

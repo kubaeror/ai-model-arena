@@ -30,8 +30,11 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     return this.withRetry(async () => {
       const body = this.buildBody(messages, tools, opts);
-      const url = `${this.baseUrl}/v1beta/models/${this.modelId}:generateContent?key=${this.apiKey ?? ''}`;
-      const res = await this.post(url, body);
+      // Key goes in the x-goog-api-key header, not the URL: query-string keys
+      // leak into proxy/access logs. Model id is URL-encoded so Vertex-style
+      // ids (publishers/.../models/...) survive.
+      const url = `${this.baseUrl}/v1beta/models/${encodeURIComponent(this.modelId)}:generateContent`;
+      const res = await this.post(url, body, { 'x-goog-api-key': this.apiKey ?? '' });
       if (!res.ok) {
         const text = await res.text();
         throw new HttpError(res.status, text, `Google ${res.status}: ${text.slice(0, 200)}`);
