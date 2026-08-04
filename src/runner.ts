@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { outputRoot } from './paths.js';
+import { outputRoot, dbPath, findProjectRoot } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState } from './db/query.js';
 import { createQueue, type TaskQueue, type Task } from './queue/index.js';
@@ -130,10 +130,11 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const logger = createLogger('ai-arena:runner');
   const runnerId = process.env.REDIS_CONSUMER_NAME ?? `runner-${process.pid}`;
 
-  initDb(path.join(outputRoot(), 'arena.db'));
+  const root = findProjectRoot();
+  initDb(dbPath());
 
   // Load budget config for enforcement in the runner loop
-  loadBudgetConfig(path.join(outputRoot(), '..', 'configs', 'budget.yaml'), logger);
+  loadBudgetConfig(path.join(root, 'configs', 'budget.yaml'), logger);
 
   const store = createSessionStore();
   const registry = new ProviderRegistry();
@@ -381,7 +382,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                 logger.info('Run cancelled during execution', { runId: cancelledRunId });
                 return false;
               }
-              const budgetCheck = checkBudget(modelName, outputRoot(), false, logger);
+              const budgetCheck = checkBudget(modelName, root, false, logger);
               if (!budgetCheck.allowed) {
                 logger.warn('Budget exceeded during run', { model: modelName, spent: budgetCheck.spentUsd, limit: budgetCheck.limitUsd });
                 return false;
