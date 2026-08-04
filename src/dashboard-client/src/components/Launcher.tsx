@@ -24,7 +24,7 @@ export function Launcher({ open, onClose }: LauncherProps) {
   const { data: models } = useCatalogModels({ tool_call: '1' });
   const { data: scenarios } = useQuery({
     queryKey: ['scenarios'],
-    queryFn: async () => (await api.get('/api/scenarios')).json() as Promise<{ data: Scenario[] }>,
+    queryFn: async () => (await api.get('/api/scenarios')).json() as Promise<{ scenarios: Scenario[] }>,
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -55,7 +55,7 @@ export function Launcher({ open, onClose }: LauncherProps) {
           label="Scenario"
           value={scenario}
           onChange={setScenario}
-          options={(scenarios?.data ?? []).map(s => ({ value: s.name, label: s.name }))}
+          options={(scenarios?.scenarios ?? []).map(s => ({ value: s.name, label: s.name }))}
         />
         <div>
           <span className="font-body text-12 text-fg-1 uppercase">Models</span>
