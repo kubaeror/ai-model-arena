@@ -78,6 +78,13 @@
       "when": 1785849611143,
       "tag": "0011_pricing_tier_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1785849658928,
+      "tag": "0012_runtime_ddl",
+      "breakpoints": true
     }
   ]
 }
