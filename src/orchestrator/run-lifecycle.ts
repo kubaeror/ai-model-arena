@@ -505,6 +505,31 @@ export async function stopRun(runId: string): Promise<void> {
 export async function restartRun(runId: string): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
+  cancelledRuns.delete(runId);
+  const queue = createQueue();
+  const ts = pm2h.timestamp();
+  const idemKey = makeIdempotencyKey(rec.scenario, rec.perModel.map((m) => m.model));
+  for (const m of rec.perModel) {
+    const resolved = await resolveModelForRun(m.model);
+    const task: Task = {
+      taskId: `${runId}-${m.model}`,
+      sessionId: `${runId}-${m.model}`,
+      provider: resolved?.providerId ?? 'unknown',
+      model: m.model,
+      scenario: rec.scenario,
+      config: {
+        modelRunId: runId,
+        outputDir: m.outputDir,
+        maxTurns: resolved?.maxTurns ?? 20,
+      },
+      enqueuedAt: new Date().toISOString(),
+      attempts: 0,
+      // Unique idempotency key per restart: the dedup window (24h) would
+      // otherwise swallow the re-enqueued task as a duplicate.
+      idempotencyKey: `${idemKey}-${m.model}-restart-${ts}`,
+    };
+    await queue.enqueue(task);
+  }
   await updateRun(runId, (r) => {
     r.status = 'running';
     r.finishedAt = null;
