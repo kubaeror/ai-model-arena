@@ -58,6 +58,7 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: npm ci --prefix src/dashboard-client
+      - run: npm --prefix src/dashboard-client run typecheck
       - run: npm --prefix src/dashboard-client run test
 
   k8s-validate:
@@ -70,6 +71,8 @@ jobs:
           kubectl kustomize k8s/overlays/dev > .tmp/k8s-dev.yaml
       - name: Render kustomize (prod)
         run: kubectl kustomize k8s/overlays/prod > .tmp/k8s-prod.yaml
+      - name: Render kustomize (observability)
+        run: kubectl kustomize k8s/observability > .tmp/k8s-observability.yaml
       - uses: docker://ghcr.io/yannh/kubeconform:latest
         with:
           args: >-
@@ -84,6 +87,13 @@ jobs:
             -schema-location default
             -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
             .tmp/k8s-prod.yaml
+      - uses: docker://ghcr.io/yannh/kubeconform:latest
+        with:
+          args: >-
+            -verbose -summary
+            -schema-location default
+            -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+            .tmp/k8s-observability.yaml
 
   dockerfile-lint:
     runs-on: ubuntu-latest
