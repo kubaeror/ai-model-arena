@@ -206,6 +206,63 @@ test('OpenAICompatAdapter refuses unconfigured placeholder base URLs', () => {
   );
 });
 
+test('OpenAICompatAdapter serializes tools and tool-call messages into the body', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([
+      { role: 'assistant', content: null, toolCalls: [{ id: 'tc1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+      { role: 'tool', toolCallId: 'tc1', name: 'read_file', content: 'contents' },
+    ], [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object' } }]);
+    assert.deepEqual(capturedBody.tools, [{ type: 'function', function: { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } } }]);
+    assert.deepEqual(capturedBody.messages, [
+      { role: 'assistant', content: null, tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] },
+      { role: 'tool', content: 'contents', tool_call_id: 'tc1', name: 'read_file' },
+    ]);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter returns an empty response for empty choices', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => mockResponse({ choices: [] }) as Response) as typeof fetch;
+  try {
+    const result = await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.equal(result.text, null);
+    assert.deepEqual(result.toolCalls, []);
+    assert.equal(result.stopReason, undefined);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter custom headerName sends the key for non-bearer schemes', async () => {
+  const desc: ProviderDescriptor = {
+    id: 'custom2', name: 'Custom2', apiBase: 'https://custom.example/v1',
+    authScheme: 'none', headerName: 'x-custom-key', envVar: 'CUSTOM2_KEY', adapter: 'openai-compat', isBuiltin: false,
+  };
+  const adapter = new OpenAICompatAdapter(desc, 'model-2', { apiKey: 'secret-2' });
+  let capturedHeaders: Record<string, string> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedHeaders = init?.headers as Record<string, string>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.equal(capturedHeaders['x-custom-key'], 'secret-2');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('OpenAICompatAdapter retries 429 and 5xx, surfaces HttpError after retries', async () => {
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   let calls = 0;

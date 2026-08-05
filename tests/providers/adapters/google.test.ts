@@ -112,3 +112,36 @@ test('GoogleAdapter.sendMessage parses functionCall', async () => {
     globalThis.fetch = origFetch;
   }
 });
+
+test('GoogleAdapter.sendMessage builds contents, tools, and generationConfig from options', async () => {
+  const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([
+      { role: 'system', content: 'You are a test agent.' },
+      { role: 'user', content: 'read a.ts' },
+      { role: 'assistant', toolCalls: [{ id: 'tc1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+      { role: 'tool', toolCallId: 'tc1', name: 'read_file', content: 'file contents' },
+    ], [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object' } }], {
+      temperature: 0.7, maxTokens: 100,
+    });
+
+    assert.deepEqual(capturedBody.contents, [
+      { role: 'user', parts: [{ text: 'read a.ts' }] },
+      { role: 'model', parts: [{ functionCall: { name: 'read_file', args: { path: 'a.ts' } } }] },
+      { role: 'user', parts: [{ functionResponse: { name: 'read_file', response: { content: 'file contents' } } }] },
+    ]);
+    assert.deepEqual(capturedBody.systemInstruction, { parts: [{ text: 'You are a test agent.' }] });
+    assert.deepEqual(capturedBody.tools, [{ functionDeclarations: [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object' } }] }]);
+    const gc = capturedBody.generationConfig as Record<string, unknown>;
+    assert.equal(gc.temperature, 0.7);
+    assert.equal(gc.maxOutputTokens, 100);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
