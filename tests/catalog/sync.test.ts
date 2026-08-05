@@ -77,6 +77,51 @@ test('fetchSync upserts providers, models, model_providers, pricing from models.
   }
 });
 
+test('fetchSync writes one pricing row per cost tier with correct values', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  const payload = {
+    openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
+      'gpt-4o': {
+        id: 'gpt-4o', name: 'GPT-4o',
+        attachment: true, reasoning: false, temperature: true, tool_call: true,
+        cost: {
+          input: 2.5, output: 10, cache_read: 1.25, cache_write: 5,
+          tiers: [
+            { input: 0.5, output: 1.5, cache_read: 0.25, cache_write: 0.75, tier: { type: 'input', size: 128000 } },
+            { input: 0.4, output: 1.2, cache_read: 0.2, tier: { type: 'input', size: 200000 } },
+          ],
+        },
+        limit: { context: 200000, output: 16384 },
+      },
+    } },
+  };
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.count, 1);
+    const db = getDb();
+    const rows = db.prepare(
+      'SELECT model_id, tier_size, input, output, cache_read, cache_write FROM pricing WHERE model_id = ? ORDER BY tier_size',
+    ).all('openai/gpt-4o') as Array<{ model_id: string; tier_size: number; input: number | null; output: number | null; cache_read: number | null; cache_write: number | null }>;
+    assert.equal(rows.length, 3);
+    assert.deepEqual(rows.map(r => [r.tier_size, r.input, r.output, r.cache_read, r.cache_write]), [
+      [0, 2.5, 10, 1.25, 5],
+      [128000, 0.5, 1.5, 0.25, 0.75],
+      [200000, 0.4, 1.2, 0.2, null],
+    ]);
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
 test('fetchSync does not duplicate pricing rows on repeated sync', async () => {
   const cleanup = freshDb();
   const origFetch = globalThis.fetch;

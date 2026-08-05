@@ -116,34 +116,53 @@ async function upsertCatalog(db: any, data: ModelsDevResponse): Promise<number> 
       });
 
       const cost = model.cost ?? {};
-      await db.insert(pricing).values({
-        model_id: canonicalId,
+      const contextOver200k = cost.context_over_200k;
+      await upsertPricingRow(db, {
+        model_id: canonicalId, tier_size: 0,
         input: cost.input ?? null, output: cost.output ?? null,
         cache_read: cost.cache_read ?? null, cache_write: cost.cache_write ?? null,
-        tier_size: 0,
-        over_200k_input: cost.context_over_200k?.input ?? null,
-        over_200k_output: cost.context_over_200k?.output ?? null,
-        over_200k_cache_read: cost.context_over_200k?.cache_read ?? null,
-        over_200k_cache_write: cost.context_over_200k?.cache_write ?? null,
+        over_200k_input: contextOver200k?.input ?? null,
+        over_200k_output: contextOver200k?.output ?? null,
+        over_200k_cache_read: contextOver200k?.cache_read ?? null,
+        over_200k_cache_write: contextOver200k?.cache_write ?? null,
         updated_at: now,
-      }).onConflictDoUpdate({
-        target: [pricing.model_id, pricing.tier_size],
-        set: {
-          input: cost.input ?? null, output: cost.output ?? null,
-          cache_read: cost.cache_read ?? null, cache_write: cost.cache_write ?? null,
-          over_200k_input: cost.context_over_200k?.input ?? null,
-          over_200k_output: cost.context_over_200k?.output ?? null,
-          over_200k_cache_read: cost.context_over_200k?.cache_read ?? null,
-          over_200k_cache_write: cost.context_over_200k?.cache_write ?? null,
-          updated_at: now,
-        },
       });
+      for (const tier of cost.tiers ?? []) {
+        await upsertPricingRow(db, {
+          model_id: canonicalId, tier_size: tier.tier.size,
+          input: tier.input, output: tier.output,
+          cache_read: tier.cache_read ?? null, cache_write: tier.cache_write ?? null,
+          over_200k_input: null, over_200k_output: null,
+          over_200k_cache_read: null, over_200k_cache_write: null,
+          updated_at: now,
+        });
+      }
       modelCount++;
     }
   }
 
   await capturePricingSnapshot(db, now);
   return modelCount;
+}
+
+async function upsertPricingRow(db: any, row: {
+  model_id: string; tier_size: number;
+  input: number | null; output: number | null;
+  cache_read: number | null; cache_write: number | null;
+  over_200k_input: number | null; over_200k_output: number | null;
+  over_200k_cache_read: number | null; over_200k_cache_write: number | null;
+  updated_at: string;
+}): Promise<void> {
+  await db.insert(pricing).values(row).onConflictDoUpdate({
+    target: [pricing.model_id, pricing.tier_size],
+    set: {
+      input: row.input, output: row.output,
+      cache_read: row.cache_read, cache_write: row.cache_write,
+      over_200k_input: row.over_200k_input, over_200k_output: row.over_200k_output,
+      over_200k_cache_read: row.over_200k_cache_read, over_200k_cache_write: row.over_200k_cache_write,
+      updated_at: row.updated_at,
+    },
+  });
 }
 
 async function capturePricingSnapshot(db: any, version: string): Promise<void> {
@@ -154,7 +173,7 @@ async function capturePricingSnapshot(db: any, version: string): Promise<void> {
       model_id: r.model_id,
       input: r.input, output: r.output,
       cache_read: r.cache_read, cache_write: r.cache_write,
-      tier_size: 0,
+      tier_size: r.tier_size,
       over_200k_input: r.over_200k_input, over_200k_output: r.over_200k_output,
       over_200k_cache_read: r.over_200k_cache_read, over_200k_cache_write: r.over_200k_cache_write,
       snapshot_at: version,
