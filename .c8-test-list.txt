@@ -31,6 +31,9 @@ tests/notifications/format.test.ts
 tests/notifications/webhooks-dispatch.test.ts
 tests/orchestrator/budget-integration.test.ts
 tests/orchestrator/finalize-merge.test.ts
+tests/providers/adapters/anthropic.test.ts
+tests/providers/adapters/google.test.ts
+tests/providers/adapters/openai-compat.test.ts
 tests/providers/bedrock.test.ts
 tests/providers/circuit-breaker.test.ts
 tests/providers/custom.test.ts
