@@ -61,3 +61,12 @@ starterFiles: templates/express-rest
 maxTurns: 25
 shellTimeoutMs: 30000
 maxShellOutputBytes: 524288
+
+# Optional: model reasoning settings, forwarded to the provider adapter.
+# Only one should be set; if multiple are present the precedence is
+# effort > budget_tokens > toggle.
+#   effort: high          # OpenAI-compatible reasoning_effort (low|medium|high)
+#   toggle: true          # presence-based: enables provider reasoning (value ignored)
+#   budget_tokens: 4096   # Anthropic-compatible thinking budget_tokens
+# reasoning:
+#   effort: medium

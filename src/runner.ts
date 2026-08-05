@@ -10,7 +10,7 @@ import { createQueue, type TaskQueue, type Task } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun } from './db/model-resolver.js';
-import { loadScenario, resolveScenarioPath, type ScenarioConfig } from './config.js';
+import { loadScenario, resolveScenarioPath, toSendOptsReasoning, type ScenarioConfig } from './config.js';
 import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { writeReport } from './logger/report-logger.js';
@@ -386,6 +386,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       // Cumulative spend of this run's tokens, so per-turn budget checks see
       // the current run (addSpend is only called during finalize otherwise).
       let prevRunCost = 0;
+      // Scenario-configured reasoning, converted to the adapter union shape.
+      // Undefined when the scenario sets nothing — no behavior change.
+      const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
 
       // Transition to 'running'
       transitionTaskState(runId, task.model, 'running', runnerId).catch(e =>
@@ -413,6 +416,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             model: currentModel,
             temperature: 0,
             maxTokens: 0,
+            sendOpts: reasoningOpt ? { reasoning: reasoningOpt } : undefined,
             scenario: scenarioName,
             runId: modelRunId,
             modelConfig: modelName,

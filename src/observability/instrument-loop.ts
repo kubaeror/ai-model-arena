@@ -1,5 +1,5 @@
 import type { ChatMessage, ModelResponse, ToolDefinition, ToolExecutorMap } from '../types.js';
-import type { ModelAdapter } from '../providers/adapters/base.js';
+import type { ModelAdapter, SendOpts } from '../providers/adapters/base.js';
 import { runAgentLoop, type AgentLoopOptions, type AgentLoopResult } from '../agent-loop/loop.js';
 import { withSpan, truncate, captureContent } from './span-helpers.js';
 import { TraceRecorder, writeTraceMeta, type TraceMeta } from './trace-meta.js';
@@ -30,7 +30,7 @@ function wrapAdapter(
   recorder: TraceRecorder,
   o: { provider: string; model: string; temperature: number; maxTokens: number },
 ): ModelAdapter {
-  const sendMessage = async (messages: ChatMessage[], tools: ToolDefinition[]): Promise<ModelResponse> => {
+  const sendMessage = async (messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> => {
     return withSpan<ModelResponse>('chat', 'chat', recorder, {
       'gen_ai.system': o.provider,
       'gen_ai.request.model': o.model,
@@ -41,7 +41,7 @@ function wrapAdapter(
         recorder.addAttribute(spanId, 'gen_ai.prompt', truncate(JSON.stringify(messages.slice(-4)), 8000));
       }
       const start = Date.now();
-      const response = await adapter.sendMessage(messages, tools);
+      const response = await adapter.sendMessage(messages, tools, opts);
       recorder.addAttribute(spanId, 'gen_ai.usage.input_tokens', response.usage?.prompt ?? 0);
       recorder.addAttribute(spanId, 'gen_ai.usage.output_tokens', response.usage?.completion ?? 0);
       recorder.addAttribute(spanId, 'duration_ms', Date.now() - start);

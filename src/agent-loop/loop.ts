@@ -6,7 +6,7 @@ import type {
   ToolExecutorMap,
   TokenUsage,
 } from '../types.js';
-import type { ModelAdapter } from '../providers/adapters/base.js';
+import type { ModelAdapter, SendOpts } from '../providers/adapters/base.js';
 import type { ConversationLogger } from '../logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../tools/schema.js';
 import { detectInjection, scanToolResult } from '../security/prompt-injection.js';
@@ -28,6 +28,8 @@ export interface AgentLoopOptions {
   onTurnComplete?: (turn: number, newMessages: ChatMessage[], tokenUsage: TokenUsage) => Promise<void>;
   /** If provided, called after each turn to check budget. Return false to abort the run. */
   onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean>;
+  /** Model-send options forwarded to every adapter.sendMessage call (e.g. reasoning). */
+  sendOpts?: SendOpts;
 }
 
 export interface AgentLoopResult {
@@ -88,7 +90,7 @@ export function compactMessages(messages: ChatMessage[], protectedTail: number):
  * tool calls. Every step is mirrored into the ConversationLogger for durability.
  */
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopResult> {
-  const { adapter, tools, executors, systemPrompt, task, maxTurns, toolCtx, conv, logger, onTurnComplete, onBudgetCheck } = opts;
+  const { adapter, tools, executors, systemPrompt, task, maxTurns, toolCtx, conv, logger, onTurnComplete, onBudgetCheck, sendOpts } = opts;
 
   const loopSpan = startAgentSpan('agent-loop', {
     max_turns: maxTurns,
@@ -167,7 +169,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
 
     let response;
     try {
-      response = await adapter.sendMessage(messages, tools);
+      response = await adapter.sendMessage(messages, tools, sendOpts);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Model API call failed', { turn, error: msg });
