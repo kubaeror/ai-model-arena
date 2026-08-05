@@ -5,8 +5,15 @@ import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { Spinner } from '../components/ui/Spinner';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-import { listRegressionSuites, runRegression } from '../lib/api';
+import { DataTable } from '../components/ui/DataTable';
+import { EmptyState } from '../components/ui/EmptyState';
+import { listRegressionSuites, runRegression, listRegressionResults } from '../lib/api';
 import type { RegressionResult } from '../lib/api';
+import type { Column } from '../components/ui/DataTable';
+
+function failedRegressionCount(r: RegressionResult): number {
+  return r.scenarioResults.filter((sr) => sr.regression && !sr.regression.passed).length;
+}
 
 export function Regression() {
   const [selectedSuite, setSelectedSuite] = useState('');
@@ -19,12 +26,36 @@ export function Regression() {
     queryFn: listRegressionSuites,
   });
 
+  const pastResults = useQuery({
+    queryKey: ['regression', 'results'],
+    queryFn: () => listRegressionResults(10),
+    refetchInterval: 30_000,
+  });
+
   const runMut = useMutation({
     mutationFn: () => runRegression({ suite: selectedSuite, model: filterModel || undefined, updateBaseline }),
     onSuccess: (data) => setResult(data),
   });
 
   if (suites.isLoading) return <div className="flex justify-center py-12"><Spinner /></div>;
+
+  const columns: Column<RegressionResult>[] = [
+    { key: 'suite', header: 'Suite', sortable: true },
+    { key: 'runId', header: 'Run ID', render: r => <span className="text-12">{r.runId}</span> },
+    { key: 'model', header: 'Models', render: r => <span className="font-mono text-12">{r.model}</span>, sortable: true },
+    { key: 'timestamp', header: 'Timestamp', render: r => <span className="text-12">{new Date(r.timestamp).toLocaleString()}</span>, sortable: true },
+    {
+      key: 'passed', header: 'Status', render: r => (
+        <Badge variant="status" value={r.passed ? 'PASSED' : 'FAILED'} className={r.passed ? 'text-accent' : 'text-danger'} />
+      ),
+    },
+    {
+      key: 'regressions', header: 'Regressions', render: r => {
+        const n = failedRegressionCount(r);
+        return n > 0 ? <span className="text-12 text-danger">{n}</span> : <span className="text-12 text-fg-1">0</span>;
+      },
+    },
+  ];
 
   return (
     <PageShell
@@ -106,6 +137,19 @@ export function Regression() {
           </PanelBody>
         </Panel>
       )}
+
+      <Panel>
+        <PanelHeader title="Past results" />
+        <PanelBody>
+          {pastResults.isLoading ? <div className="flex justify-center py-8"><Spinner /></div> : (
+            !pastResults.data || pastResults.data.length === 0 ? (
+              <EmptyState title="No regression runs yet" />
+            ) : (
+              <DataTable columns={columns} data={pastResults.data} getRowId={r => r.runId} />
+            )
+          )}
+        </PanelBody>
+      </Panel>
     </div>
     </PageShell>
   );

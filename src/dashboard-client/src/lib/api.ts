@@ -322,6 +322,11 @@ export async function listRegressionSuites(): Promise<string[]> {
 export async function runRegression(opts: { suite: string; model?: string; updateBaseline?: boolean }): Promise<RegressionResult> {
   return apiFetch('/api/regression', { method: 'POST', body: JSON.stringify(opts) });
 }
+export async function listRegressionResults(limit?: number): Promise<RegressionResult[]> {
+  const q = limit ? `?limit=${limit}` : '';
+  const r = await apiFetch<{ results: RegressionResult[] }>(`/api/regression/results${q}`);
+  return r.results;
+}
 
 // ── Diff ─────────────────────────────────────────────────────────────────────
 export async function getRunDiff(runId: string, model: string): Promise<{ model: string; diff: string | null }> {

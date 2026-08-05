@@ -190,7 +190,7 @@ program
     const logger = createLogger('ai-arena:regress');
     initDb(dbPath());
 
-    const { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath } =
+    const { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath, saveSuiteResult } =
       await import('./evaluation/regression.js');
     const result = await runRegressionSuite(
       suite,
@@ -229,6 +229,7 @@ program
     }
 
     const passed = result.passed;
+    saveSuiteResult(result, logger);
     const failedCount = result.scenarioResults.filter(
       (sr) => sr.regression && !sr.regression.passed,
     ).length;
