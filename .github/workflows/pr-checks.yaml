@@ -95,6 +95,35 @@ jobs:
             -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
             .tmp/k8s-observability.yaml
 
+  k8s-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Render kustomize (dev)
+        run: |
+          mkdir -p .tmp
+          kubectl kustomize k8s/overlays/dev > .tmp/k8s-dev.yaml
+      - name: Render kustomize (prod)
+        run: kubectl kustomize k8s/overlays/prod > .tmp/k8s-prod.yaml
+      - name: Render kustomize (observability)
+        run: kubectl kustomize k8s/observability > .tmp/k8s-observability.yaml
+      - uses: docker://openpolicyagent/conftest:latest
+        with:
+          args: test -p policy/k8s .tmp/k8s-dev.yaml
+      - uses: docker://openpolicyagent/conftest:latest
+        with:
+          args: test -p policy/k8s .tmp/k8s-prod.yaml
+      - uses: docker://openpolicyagent/conftest:latest
+        with:
+          args: test -p policy/k8s .tmp/k8s-observability.yaml
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate docker compose config
+        run: docker compose config -q
+
   dockerfile-lint:
     runs-on: ubuntu-latest
     steps:
