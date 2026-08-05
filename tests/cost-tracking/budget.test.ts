@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   loadBudgetConfig,
   checkBudget,
+  addSpend,
   reserveBudget,
   releaseReservation,
   resetBudgetCache,
@@ -148,6 +149,40 @@ test('releaseReservation for a never-persisted amount leaves the state file unto
     resetBudgetCache();
     loadBudgetConfig(configPath);
     assert.equal(reserveBudget('gpt-4o', 7, rootDir).ok, false, 'reservation remains counted after restart');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('addSpend ignores prototype-polluting model names', async () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  try {
+    loadBudgetConfig(configPath);
+    await addSpend('__proto__', 1, rootDir);
+    assert.equal((Object.prototype as unknown as Record<string, unknown>).daily, undefined,
+      'Object.prototype must not gain a daily ledger');
+    assert.equal((Object.prototype as unknown as Record<string, unknown>).monthly, undefined);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('reserveBudget ignores prototype-polluting model names', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  try {
+    loadBudgetConfig(configPath);
+    writeState(statePath); // ensure the state file exists before assertions
+    const result = reserveBudget('constructor', 1, rootDir);
+    assert.equal(result.ok, true);
+    assert.equal((Object.prototype as unknown as Record<string, unknown>).push, undefined,
+      'Object.prototype must not gain array methods');
+    assert.ok(!Object.prototype.hasOwnProperty.call(
+      JSON.parse(fs.readFileSync(statePath, 'utf8')).reservations ?? {}, 'constructor'),
+      'state file must not contain a reserved-key reservation');
   } finally {
     resetBudgetCache();
     fs.rmSync(tmp, { recursive: true, force: true });
