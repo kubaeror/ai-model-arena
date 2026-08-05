@@ -41,16 +41,27 @@ export interface RunnerOptions {
 
 const READINESS_FILE = '/tmp/runner-ready';
 
-function markReady(): void {
+/**
+ * Write the readiness file. Created with O_EXCL ('wx') so a pre-placed
+ * symlink is never followed: on EEXIST we unlink (which removes the link
+ * itself, not its target) and re-create exclusively. Failures are
+ * non-fatal — the k8s probe simply sees not-ready and retries.
+ */
+export function markReady(filePath: string = READINESS_FILE): void {
   try {
-    const dir = path.dirname(READINESS_FILE);
+    const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(READINESS_FILE, Date.now().toString());
+    try {
+      fs.writeFileSync(filePath, Date.now().toString(), { flag: 'wx' });
+    } catch {
+      try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+      try { fs.writeFileSync(filePath, Date.now().toString(), { flag: 'wx' }); } catch { /* non-fatal */ }
+    }
   } catch { /* non-fatal — probe will retry */ }
 }
 
-function unmarkReady(): void {
-  try { fs.unlinkSync(READINESS_FILE); } catch { /* ignore */ }
+export function unmarkReady(filePath: string = READINESS_FILE): void {
+  try { fs.unlinkSync(filePath); } catch { /* ignore */ }
 }
 
 export interface SuccessOutcome {
