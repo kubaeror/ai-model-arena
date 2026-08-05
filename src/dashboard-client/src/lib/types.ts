@@ -98,12 +98,6 @@ export interface ProcStatus {
   scenario?: string;
   runId?: string;
   status: string;
-  pid: number | null;
-  cpu?: number;
-  memory?: number;
-  uptime?: number;
-  restarts?: number;
-  exitCode: number | null;
   online: boolean;
 }
 
