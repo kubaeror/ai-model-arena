@@ -1,0 +1,15 @@
+# Placeholder Grafana admin credentials. The real password is applied at
+# deploy time (SealedSecret, external secret, or env override on the
+# Deployment) — this manifest only guarantees the secret the grafana
+# Deployment references exists, with safe defaults for local/dev clusters.
+# Referenced by GF_SECURITY_ADMIN_USER / GF_SECURITY_ADMIN_PASSWORD in
+# grafana.yaml (and the same credentials the dashboard server expects).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-auth
+  namespace: observability
+type: Opaque
+stringData:
+  username: admin
+  password: change-me

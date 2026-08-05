@@ -1,10 +1,11 @@
+# Dashboard JSONs, provisioned by Grafana's file provider: mounted at
+# /var/lib/grafana/dashboards by grafana.yaml and picked up by the
+# dashboards.yaml provider below (no sidecar needed).
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboards
   namespace: observability
-  labels:
-    grafana_dashboard: "1"
 data:
   arena-overview.json: |
     {
@@ -99,3 +100,26 @@ data:
         }
       ]
     }
+---
+# Grafana provisioning config: file provider for dashboards. Mounted at
+# /etc/grafana/provisioning/dashboards by grafana.yaml; datasources are
+# provisioned separately from grafana-datasources.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: observability
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: arena
+        orgId: 1
+        folder: Arena
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
