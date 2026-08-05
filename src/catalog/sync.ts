@@ -30,12 +30,18 @@ const PROVIDER_ADAPTER_MAP: Record<string, 'openai-compat' | 'anthropic' | 'goog
 
 const DEFAULT_API_URL = 'https://models.dev/api.json';
 
+const DEFAULT_REFRESH_DAYS = 30;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 function getApiUrl(): string {
   return process.env.MODELS_DEV_API_URL ?? DEFAULT_API_URL;
 }
-function getRefreshIntervalMs(): number {
-  const days = Number(process.env.CATALOG_REFRESH_INTERVAL_DAYS ?? '30');
-  return (Number.isFinite(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
+export function refreshIntervalDays(): number {
+  const days = Number(process.env.CATALOG_REFRESH_DAYS ?? String(DEFAULT_REFRESH_DAYS));
+  return Number.isFinite(days) && days > 0 ? days : DEFAULT_REFRESH_DAYS;
+}
+export function refreshIntervalMs(): number {
+  return refreshIntervalDays() * MS_PER_DAY;
 }
 
 export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl: getApiUrl() }): Promise<SyncResult> {
@@ -183,7 +189,7 @@ async function capturePricingSnapshot(db: any, version: string): Promise<void> {
 
 async function updateCacheState(db: any, source: string, status: string, error: string | undefined, count: number): Promise<void> {
   const now = new Date();
-  const next = new Date(now.getTime() + getRefreshIntervalMs()).toISOString();
+  const next = new Date(now.getTime() + refreshIntervalMs()).toISOString();
   await db.insert(catalog_cache_state).values({
     source, last_fetch: now.toISOString(), last_status: status,
     last_error: error ?? null, count, next_refresh: next,

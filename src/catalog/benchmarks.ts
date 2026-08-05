@@ -2,11 +2,10 @@ import { getDrizzleDb } from '../db/index.js';
 import { benchmarks, catalog_cache_state, models } from '../db/schema.js';
 import { ModelbenchResponseSchema, type ModelbenchResponse, ZeroEvalModelSchema } from './types.js';
 import { matchModelToCanonical, type CatalogEntry } from './match.js';
-import type { SyncResult } from './sync.js';
+import { refreshIntervalMs, type SyncResult } from './sync.js';
 
 const MODELBENCH_API = 'https://modelbench.lol/api/v1/models';
 const ZEROEVAL_API = 'https://api.zeroeval.com/leaderboard/models/full';
-const REFRESH_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 const PREFERRED_MODELBENCH = new Set(['Intelligence Index', 'Coding Score', 'Agentic Score', 'Speed TPS']);
 const ZEROEVAL_BENCH_MAP: Record<string, string> = {
   swebench: 'SWE-bench', gpqa: 'GPQA Diamond', mmlu: 'MMLU', humaneval: 'HumanEval', math: 'MATH',
@@ -14,6 +13,10 @@ const ZEROEVAL_BENCH_MAP: Record<string, string> = {
 
 export interface BenchmarkOpts {
   force?: boolean;
+}
+
+export function getRefreshIntervalMs(): number {
+  return refreshIntervalMs();
 }
 
 export async function fetchBenchmarks(source: 'modelbench' | 'zeroeval', _opts: BenchmarkOpts = {}): Promise<SyncResult> {
@@ -113,7 +116,7 @@ async function fetchZeroEval(db: any, catalog: CatalogEntry[]): Promise<number> 
 
 async function updateCacheState(db: any, source: string, status: string, error: string | undefined, count: number): Promise<void> {
   const now = new Date();
-  const next = new Date(now.getTime() + REFRESH_INTERVAL_MS).toISOString();
+  const next = new Date(now.getTime() + getRefreshIntervalMs()).toISOString();
   await db.insert(catalog_cache_state).values({
     source, last_fetch: now.toISOString(), last_status: status,
     last_error: error ?? null, count, next_refresh: next,
