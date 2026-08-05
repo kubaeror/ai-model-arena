@@ -128,7 +128,7 @@ data:
               severity: warning
             annotations:
               summary: "High task error rate (>5% over 5m)"
-              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#arenahigherrorrate"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#higherrorrate"
           - alert: ArenaRunnerDown
             expr: up{job="arena-runner"} == 0
             for: 5m
@@ -136,7 +136,7 @@ data:
               severity: critical
             annotations:
               summary: "Runner pod is down"
-              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#arenarunnerdown"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#runnerdown"
           - alert: ArenaQueueBacklog
             expr: arena_queue_depth > 100
             for: 10m
@@ -144,7 +144,7 @@ data:
               severity: warning
             annotations:
               summary: "Queue depth exceeds 100 for >10m"
-              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#arenaqueuebacklog"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#queuebacklog"
           - alert: ArenaDLQGrowing
             expr: arena_dlq_depth > 0
             for: 10m
@@ -152,7 +152,7 @@ data:
               severity: critical
             annotations:
               summary: "Dead-letter queue has {{ $value }} entries for {{ $labels.provider }}"
-              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#arenadlqgrowing"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#dlqgrowing"
           - alert: ArenaScheduleFailures
             expr: increase(arena_schedule_failures_total[15m]) > 0
             for: 5m
@@ -160,7 +160,7 @@ data:
               severity: warning
             annotations:
               summary: "Scheduler job {{ $labels.schedule_id }} failing"
-              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#arenaschedulefailures"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#schedulefailures"
           - alert: ArenaBudgetEightyPercent
             expr: arena_budget_percent > 80
             for: 5m
@@ -168,7 +168,7 @@ data:
               severity: warning
             annotations:
               summary: "Budget >80% consumed for {{ $labels.model }}"
-              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#arenabudget"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#budget"
           - alert: ArenaBudgetExhausted
             expr: arena_budget_percent >= 100
             for: 1m
@@ -176,7 +176,7 @@ data:
               severity: critical
             annotations:
               summary: "Budget exhausted for {{ $labels.model }}"
-              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#arenabudget"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#budget"
 ---
 apiVersion: v1
 kind: Service

@@ -110,6 +110,53 @@ If 5xx persists > 10 minutes, escalate to on-call engineer.
 
 ---
 
+## DLQGrowing
+
+**Severity:** critical
+**Expression:** Dead-letter queue depth > 0 for > 10 minutes
+
+### Triage
+1. Inspect the DLQ contents per provider: `curl -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/queues/<provider>/tasks`
+2. Check why tasks failed: look for shared failure patterns (provider outage, bad prompt, schema mismatch) in task error messages
+
+### Resolution
+1. If a provider is failing en masse, retry or discard the affected tasks after the outage clears
+2. Fix the underlying cause (see HighErrorRate), then retry individually: `curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/queues/<provider>/tasks/<task-id>/retry`
+3. For permanently invalid tasks, discard them and alert the requester
+
+---
+
+## ScheduleFailures
+
+**Severity:** warning
+**Expression:** Scheduler job failures increasing over 15 minutes
+
+### Triage
+1. Identify the failing schedule_id from the alert labels: `kubectl logs -n ai-arena -l app=runner --tail=50 | grep schedule_id`
+2. Check the schedule definition and its last run status in the dashboard schedules page
+
+### Resolution
+1. Fix the underlying cause (invalid payload, missing model, auth failure) and re-enable the schedule
+2. If the schedule keeps failing despite fixes, disable it to stop noisy retries and notify the owner
+
+---
+
+## Budget
+
+**Severity:** warning/critical
+**Expression:** Model budget > 80% consumed, or exhausted (>= 100%)
+
+### Triage
+1. Identify which model is over budget from the alert labels: check the model's spend in the dashboard provider catalog
+2. Verify whether spend is legitimate (active runs) or a runaway loop (repeated retries, infinite agent loops)
+
+### Resolution
+1. If a runaway loop is driving spend, activate the emergency kill switch: `curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/ops/killswitch`
+2. Reallocate budget or switch affected workloads to a cheaper/fallback model
+3. If exhausted, top up the model budget or pause workloads for that model until the next cycle
+
+---
+
 ## General Procedures
 
 ### Restarting a Runner Pool
