@@ -3,7 +3,8 @@
 # Deployment) — this manifest only guarantees the secret the grafana
 # Deployment references exists, with safe defaults for local/dev clusters.
 # Referenced by GF_SECURITY_ADMIN_USER / GF_SECURITY_ADMIN_PASSWORD in
-# grafana.yaml (and the same credentials the dashboard server expects).
+# grafana.yaml. Unrelated to dashboard auth, which uses DASHBOARD_JWT_SECRET
+# and DASHBOARD_PASSWORD (see dashboard.yaml).
 apiVersion: v1
 kind: Secret
 metadata:

@@ -391,7 +391,8 @@ export class RedisStreamQueue implements TaskQueue {
 
     // DLQ entries get opaque auto-ids from XADD '*', so match the embedded
     // taskId field instead of treating the task id as a stream entry id.
-    const msgs = await this.redis.xrange(dlqStream, '-', '+');
+    // Cap the scan so a huge DLQ can't balloon memory in one retry call.
+    const msgs = await this.redis.xrange(dlqStream, '-', '+', 'COUNT', 1000);
     let targetId: string | null = null;
     let fields: string[] = [];
     for (const [id, f] of msgs) {
