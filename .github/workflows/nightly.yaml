@@ -113,8 +113,8 @@ jobs:
           done
           # /health returns 200 only when the dashboard can reach postgres
           curl -sf http://localhost:4000/health
-          # Runner readiness file (src/runner.ts: READINESS_FILE = /tmp/runner-ready)
-          kubectl -n ai-arena exec deploy/runner-openai-compat -- sh -c 'test -f /tmp/runner-ready && echo RUNNER-READY'
+          # Runner readiness file (src/runner.ts: READINESS_FILE = /var/arena/readiness/runner-ready)
+          kubectl -n ai-arena exec deploy/runner-openai-compat -- sh -c 'test -f /var/arena/readiness/runner-ready && echo RUNNER-READY'
           # Startup logged, and the runner's XGROUP CREATE (MKSTREAM) proves a
           # live redis connection (no explicit "connected" log line exists).
           kubectl -n ai-arena logs deploy/runner-openai-compat --tail=100 | grep -q 'Runner starting'

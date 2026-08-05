@@ -39,7 +39,11 @@ export interface RunnerOptions {
   fallbackChain?: FallbackConfig;
 }
 
-const READINESS_FILE = '/tmp/runner-ready';
+// Per-pod emptyDir mount (k8s/base/*runner*.yaml), writable by the non-root
+// runner image user. Not the OS temp dir — CodeQL js/insecure-temporary-file
+// flags any predictable write under /tmp, and /tmp is an emptyDir mount that
+// a pre-planted symlink could otherwise abuse.
+const READINESS_FILE = '/var/arena/readiness/runner-ready';
 
 /**
  * Write the readiness file. Created with O_EXCL ('wx') so a pre-placed
@@ -52,13 +56,9 @@ export function markReady(filePath: string = READINESS_FILE): void {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     try {
-      // Fixed probe path is a k8s contract; O_EXCL ('wx') defeats pre-planted
-      // symlinks (EEXIST → unlink the link itself → exclusive re-create).
-      // codeql[js/insecure-temporary-file]
       fs.writeFileSync(filePath, Date.now().toString(), { flag: 'wx' });
     } catch {
       try { fs.unlinkSync(filePath); } catch { /* ignore */ }
-      // codeql[js/insecure-temporary-file]
       try { fs.writeFileSync(filePath, Date.now().toString(), { flag: 'wx' }); } catch { /* non-fatal */ }
     }
   } catch { /* non-fatal — probe will retry */ }
