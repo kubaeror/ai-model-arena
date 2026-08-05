@@ -22,6 +22,7 @@ import {
 import { analyzeRun } from '../anomaly-detection/index.js';
 import { runJudgeScoring, loadEvaluationConfig, writeJudgeResult } from '../evaluation/judge.js';
 import { insertJudgeScore } from '../db/query.js';
+import type { ModelAdapter } from '../providers/adapters/base.js';
 
 function makeIdempotencyKey(scenario: string, models: string[]): string {
   return crypto.createHash('sha256').update(`${scenario}:${models.join(',')}`).digest('hex').slice(0, 32);
@@ -390,7 +391,7 @@ async function buildPerModelEntries(
  * runs anomaly analysis + stats writeback, persists judge scores, and dispatches
  * the run_completed notification + webhook. Never throws on ancillary failures.
  */
-async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: Logger): Promise<{ mdPath: string; jsonPath: string }> {
+async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   // Idempotency guard: the CLI and the dashboard watcher can both finalize a
@@ -451,7 +452,7 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
               files[f.name] = fs.readFileSync(path.join(m.sandboxDir, f.name), 'utf8').slice(0, 4000);
             }
           } catch { /* sandbox may not exist */ }
-          const verdict = await runJudgeScoring(m.model, runId, task, files, evalCfg, logger);
+          const verdict = await runJudgeScoring(m.model, runId, task, files, evalCfg, logger, judgeAdapter);
           if (verdict) {
             writeJudgeResult(m.outputDir, verdict, logger);
             try {
@@ -490,7 +491,7 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
 }
 
 /** Read results, write comparison, update index. Used by the CLI (has a spec). */
-export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
+export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{
   entries: ComparisonEntry[];
   mdPath: string;
   jsonPath: string;
@@ -499,12 +500,12 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
     runId: spec.runId, scenario: spec.scenario, startedAt: spec.startedAt,
     models: spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
-  const core = await finalizeCore(spec.runId, entries, logger);
+  const core = await finalizeCore(spec.runId, entries, logger, judgeAdapter);
   return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath };
 }
 
 /** Finalize by runId (resolves paths from the index). Used by the dashboard watcher. */
-export async function finalizeRunByRunId(runId: string, logger: Logger): Promise<void> {
+export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) return;
   const root = projectRoot();
@@ -512,7 +513,7 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
-  await finalizeCore(runId, entries, logger);
+  await finalizeCore(runId, entries, logger, judgeAdapter);
 }
 
 let killSwitchActive = false;

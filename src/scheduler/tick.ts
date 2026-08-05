@@ -7,8 +7,9 @@ import type { RunStartOptions } from '../orchestrator/run-lifecycle.js';
 
 const logger = createLogger('ai-arena:scheduler');
 
-export async function tickScheduler(): Promise<{ ticked: string[]; failures: string[] }> {
-  const now = new Date().toISOString();
+export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions: RunStartOptions) => Promise<unknown> } = {}): Promise<{ ticked: string[]; failures: string[] }> {
+  const now = opts.now?.toISOString() ?? new Date().toISOString();
+  const start = opts.startRunFn ?? (await import('../orchestrator/run-lifecycle.js')).startRun;
   const rows = await listDueSchedules(now);
 
   const ticked: string[] = [];
@@ -34,7 +35,6 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
       // Route through startRun() for proper budget check + run registration.
       // Per-schedule options (timeoutMs/forceBudget) come from the YAML config,
       // not the DB row — join via the in-memory schedule record.
-      const { startRun } = await import('../orchestrator/run-lifecycle.js');
       const schedule = getSchedule(scheduleId);
       if (!schedule) {
         logger.warn('Schedule due in DB but missing from loaded schedules config; options (timeoutMs/forceBudget) will not be applied', { scheduleId });
@@ -46,7 +46,7 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
       };
       if (schedule?.options?.timeoutMs !== undefined) runOptions.timeoutMs = schedule.options.timeoutMs;
       if (schedule?.options?.forceBudget !== undefined) runOptions.forceBudget = schedule.options.forceBudget;
-      await startRun(runOptions);
+      await start(runOptions);
     } catch (err) {
       scheduleFailed = true;
       logger.warn('Schedule startRun failed', {

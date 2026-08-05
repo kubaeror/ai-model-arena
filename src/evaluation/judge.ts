@@ -3,6 +3,7 @@ import path from 'node:path';
 import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
+import type { ModelAdapter } from '../providers/adapters/base.js';
 import type { EvaluationConfig, JudgeResult, JudgeScore, Rubric } from './types.js';
 import { EvaluationConfigSchema } from './types.js';
 
@@ -107,27 +108,31 @@ export async function runJudgeScoring(
   task: string,
   files: Record<string, string>,
   config: EvaluationConfig,
-  logger?: Logger
+  logger?: Logger,
+  adapter?: ModelAdapter
 ): Promise<JudgeResult | null> {
   const judgeConfig = config.judge;
   if (!judgeConfig?.enabled) return null;
 
-  const resolved = await resolveModelForRun(judgeConfig.model);
-  if (!resolved) {
-    logger?.warn('Judge model not found in catalog', { model: judgeConfig.model });
-    return null;
+  let llmAdapter = adapter;
+  if (!llmAdapter) {
+    const resolved = await resolveModelForRun(judgeConfig.model);
+    if (!resolved) {
+      logger?.warn('Judge model not found in catalog', { model: judgeConfig.model });
+      return null;
+    }
+    const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
+    const { ProviderRegistry, loadBuiltins } = await import('../providers/index.js');
+    const registry = new ProviderRegistry();
+    loadBuiltins(registry);
+    await registry.loadCustomFromDb();
+    llmAdapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger?.child('judge') });
   }
-  const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
-  const { ProviderRegistry, loadBuiltins } = await import('../providers/index.js');
-  const registry = new ProviderRegistry();
-  loadBuiltins(registry);
-  await registry.loadCustomFromDb();
-  const adapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger?.child('judge') });
-  
+
   const prompt = buildJudgePrompt(config.rubric, task, files);
   
   try {
-    const response = await adapter.sendMessage(
+    const response = await llmAdapter.sendMessage(
       [{ role: 'user', content: prompt }],
       []
     );

@@ -10,10 +10,10 @@ export function schedulesPath(): string {
   return process.env.SCHEDULES_PATH ?? path.join(findProjectRoot(), 'configs', 'schedules.yaml');
 }
 
-export async function runSchedulerTick(): Promise<void> {
+export async function runSchedulerTick(opts?: Parameters<typeof tickScheduler>[0]): Promise<void> {
   initDb();
   loadSchedulesConfig(schedulesPath());
-  await tickScheduler();
+  await tickScheduler(opts);
   await closeDb();
 }
 
