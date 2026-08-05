@@ -56,7 +56,6 @@ import { atomicChat } from './descriptors/atomic-chat.js';
 import { meta } from './descriptors/meta.js';
 import { azureCognitive } from './descriptors/azure-cognitive.js';
 import { sapAICore } from './descriptors/sap-ai-core.js';
-import { gitlab } from './descriptors/gitlab.js';
 import { cohere } from './descriptors/cohere.js';
 import { perplexity } from './descriptors/perplexity.js';
 
@@ -68,7 +67,7 @@ export const BUILTIN_PROVIDERS: ProviderDescriptor[] = [
   frogbot, fireworks, gmiCloud, huggingface, helicone, ionet, moonshot, minimax, nebius,
   llmgateway, stackit, together, venice, vercelAIGateway, zenmux, snowflakeCortex, googleVertex,
   lmstudio, llamacpp, atomicChat,
-  meta, azureCognitive, sapAICore, gitlab, cohere, perplexity,
+  meta, azureCognitive, sapAICore, cohere, perplexity,
 ];
 
 export function loadBuiltins(reg: ProviderRegistry): void {

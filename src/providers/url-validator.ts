@@ -28,6 +28,24 @@ const BLOCKED_SUFFIXES = [
   '.svc.cluster.local',
 ];
 
+const METADATA_HOSTNAMES = [
+  'metadata.google.internal',
+  '169.254.169.254',
+  'metadata.tencentyun.com',
+];
+
+/** Returns true when a hostname is a private/loopback/internal/metadata address. */
+export function isBlockedProviderHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  for (const pattern of BLOCKED_HOST_PATTERNS) {
+    if (pattern.test(h)) return true;
+  }
+  for (const suffix of BLOCKED_SUFFIXES) {
+    if (h.endsWith(suffix)) return true;
+  }
+  return METADATA_HOSTNAMES.includes(h);
+}
+
 export type UrlValidationResult = { ok: true; normalized: string } | { ok: false; error: string };
 
 export function validateProviderUrl(raw: string, allowHttp?: boolean): UrlValidationResult {
