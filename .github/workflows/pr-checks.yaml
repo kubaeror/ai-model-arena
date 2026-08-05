@@ -80,21 +80,37 @@ jobs:
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: test-results-tap
+          # Per-leg names: upload-artifact v4+ rejects same-name uploads
+          # across matrix legs (409 conflict) and every PR gate would fail.
+          name: test-results-tap-${{ matrix.node-version }}
           path: tap.out
           if-no-files-found: warn
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: coverage-report
+          name: coverage-report-${{ matrix.node-version }}
           path: coverage/lcov.info
           if-no-files-found: warn
+
+  test-report:
+    needs: test-backend
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Download TAP results
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: test-results-tap-*
+          path: tap-results
+          merge-multiple: true
       - name: Publish TAP summary to PR
-        if: always()
+        # Single summary for the whole matrix (dorny/test-reporter matrix
+        # guidance): the per-leg artifacts are merged, then reported once.
         uses: dorny/test-reporter@6c357194179c694acfcad2100dbf27c5b9b0d5e0 # v1.9.1
         with:
-          path: tap.out
+          path: tap-results/tap.out
           reporter: tap
           only-summary: true
           fail-on-error: false
@@ -144,6 +160,8 @@ jobs:
         run: kubectl kustomize k8s/overlays/prod > .tmp/k8s-prod.yaml
       - name: Render kustomize (observability)
         run: kubectl kustomize k8s/observability > .tmp/k8s-observability.yaml
+      - name: Render kustomize (e2e)
+        run: kubectl kustomize k8s/overlays/e2e > .tmp/k8s-e2e.yaml
       - uses: docker://ghcr.io/yannh/kubeconform:latest
         with:
           args: >-
@@ -158,6 +176,13 @@ jobs:
             -schema-location default
             -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
             .tmp/k8s-prod.yaml
+      - uses: docker://ghcr.io/yannh/kubeconform:latest
+        with:
+          args: >-
+            -verbose -summary
+            -schema-location default
+            -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+            .tmp/k8s-e2e.yaml
       - uses: docker://ghcr.io/yannh/kubeconform:latest
         with:
           args: >-
