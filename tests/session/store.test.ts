@@ -20,6 +20,23 @@ test('session round-trips messages + model_calls', async () => {
   closeDb();
 });
 
+test('deleteSession removes session, messages and model_calls', async () => {
+  initDb(':memory:');
+  const store = createSessionStore();
+  const s = await store.createSession({ model: 'gpt-4o' });
+  await store.appendMessage(s.id, { id: 'msg1', sessionId: s.id, turn: 0, role: 'user', content: 'hi', toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: new Date().toISOString() });
+  await store.recordModelCall({ sessionId: s.id, turn: 0, provider: 'openai', model: 'gpt-4o', requestHash: 'h1', responseText: 'hello', usage: null, latencyMs: 10 });
+  assert.equal((await store.listMessages(s.id)).length, 1);
+  assert.ok(await store.getModelCall(s.id, 0));
+
+  await store.deleteSession(s.id);
+
+  assert.equal(await store.loadSession(s.id), null);
+  assert.deepEqual(await store.listMessages(s.id), []);
+  assert.equal(await store.getModelCall(s.id, 0), null);
+  closeDb();
+});
+
 test('updateSessionStatus changes status', async () => {
   initDb(':memory:');
   const store = createSessionStore();

@@ -3,6 +3,7 @@ import {
   createSession, getSessionById, updateSessionStatus,
   createMessage, listMessagesBySession,
   upsertModelCall, getModelCallBySessionAndTurn,
+  deleteSessionCascade,
 } from '../db/query.js';
 
 export type SessionStatus = 'active' | 'completed' | 'errored';
@@ -49,6 +50,7 @@ export interface SessionStore {
   recordModelCall(call: ModelCallRecord): Promise<void>;
   getModelCall(sessionId: string, turn: number): Promise<ModelCallRecord | null>;
   updateSessionStatus(sessionId: string, status: SessionStatus): Promise<void>;
+  deleteSession(sessionId: string): Promise<void>;
 }
 
 class SqliteSessionStore implements SessionStore {
@@ -126,6 +128,10 @@ class SqliteSessionStore implements SessionStore {
 
   async updateSessionStatus(sessionId: string, status: SessionStatus): Promise<void> {
     await updateSessionStatus(sessionId, status);
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await deleteSessionCascade(sessionId);
   }
 }
 
