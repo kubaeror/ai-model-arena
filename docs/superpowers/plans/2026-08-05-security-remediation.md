@@ -22,7 +22,7 @@
 ## File Structure
 
 | File | Responsibility | Task |
-|---|---|---|
+| --- | --- | --- |
 | `src/dashboard-server/routes/scenarios.ts` | Validate `starterFiles` at write time; guard reads/deletes at use time | 1 |
 | `tests/dashboard/scenarios-starterfiles-traversal.test.ts` | New: route tests for the traversal fix | 1 |
 | `src/dashboard-server/routes/secrets.ts` | Reject unsafe `envVar` keys and newline-containing values | 2 |
@@ -44,10 +44,12 @@
 **Context:** `ScenarioConfigSchema.starterFiles` is an unvalidated `z.string()` (src/config.ts:44). POST/PUT accept `body.starterFiles` verbatim (scenarios.ts:120-124, 170-173). Consequences: (a) GET `/:name` (viewer role) → `listStarterFiles` → `path.join(scenariosDir(), scenario.starterFiles)` → `walkFiles` + `fs.readFileSync` returns arbitrary file contents, including `.env` and `/etc/arena/secrets`; (b) DELETE (editor) → `fs.rmSync(path.join(scenariosDir(), scenario.starterFiles), { recursive: true, force: true })` (scenarios.ts:192) recursively deletes arbitrary directory trees (e.g. `starterFiles: "../../../src"`).
 
 **Files:**
+
 - Modify: `src/dashboard-server/routes/scenarios.ts`
 - Create: `tests/dashboard/scenarios-starterfiles-traversal.test.ts`
 
 **Interfaces:**
+
 - Consumes: `route-test-harness.js` exports `boot(t)`, `authedGet(base, token, path)`, `postJson(base, token, path, body)`, `TEST_ADMIN`; harness fields `h.base`, `h.adminToken`, `h.tmpDir` (temp project root with `configs/scenarios`).
 - Produces: no new exports; adds module-level const `TEMPLATE_PATH_RE` and write-time/read-time/delete-time guards in `createScenariosRouter`'s POST/PUT handlers, `listStarterFiles`, and DELETE handler.
 
@@ -233,10 +235,12 @@ git commit -m "fix(security): validate scenario starterFiles paths to block trav
 **Context:** `PUT /api/secrets/:envVar` (routes/secrets.ts:80-125) passes the URL param straight to `secretStore.set()` / the k8s API. In bare-metal mode `SecretStore.writeEnvFile` (store.ts:126-141) writes `` `${key}="${value}"` `` into `.env` and `process.env[envVar] = value` — a key containing `\n`, `=`, or whitespace injects arbitrary env lines (CodeQL alerts #32/39/40/82; k8s mode is safe because the k8s API validates keys). `SecretStore` itself must stay permissive (existing tests use `MY.KEY`/`MY$KEY`), so validation is added in the route.
 
 **Files:**
+
 - Modify: `src/dashboard-server/routes/secrets.ts`
 - Create: `tests/dashboard/secrets-envvar-validation.test.ts`
 
 **Interfaces:**
+
 - Produces: exported `isValidEnvVarName(name: string): boolean` and `hasControlChars(value: string): boolean` from `src/dashboard-server/routes/secrets.js` (route modules exporting pure helpers is the established pattern — see `resolveSuitePath` in `routes/regression.ts`).
 - Consumes: harness `boot(t)`, `postJson`; the k8s branch is skipped in tests (harness runs bare-metal), so only 400-path HTTP tests are used — the 200 path writes the repo-root `.env` and is intentionally not exercised over HTTP (store-level behavior is covered by `tests/secrets/store.test.ts`).
 
@@ -358,11 +362,13 @@ git commit -m "fix(security): validate secret envVar keys and values on the dash
 **Context:** `/^Bearer\s+(.+)$/i` is quadratic on `Authorization` headers with long space runs (CodeQL alerts #17 server.ts:255, #54 auth.ts:281, #66 server.ts:179). Parsing is trivially linear with string slicing.
 
 **Files:**
+
 - Modify: `src/dashboard-server/auth.ts`
 - Modify: `src/dashboard-server/server.ts`
 - Create: `tests/dashboard/extract-bearer-token.test.ts`
 
 **Interfaces:**
+
 - Produces: exported `extractBearerToken(authorization: string): string | null` from `src/dashboard-server/auth.js` — returns the trimmed token, or `null` when the header is missing/empty/wrong scheme. Scheme match is case-insensitive (RFC 7235); whitespace between scheme and token is trimmed.
 - Consumes: `extractBearerToken` in `server.ts` metrics handler (line ~178) and logout handler (line ~254).
 
@@ -501,10 +507,12 @@ git commit -m "fix(security): replace ReDoS-prone Bearer regexes with string par
 **Context:** `src/cost-tracking/budget.ts` writes `state.models[modelName]` (line 98) and `state.reservations[modelName]` (lines 179-180) with a modelName that flows from run/task specs (enqueueable by dashboard users). `modelName === "__proto__"` resolves to `Object.prototype`, so `addSpend` adds `Object.prototype.daily` and `reserveBudget` adds `Object.prototype.push` — process-wide prototype pollution (CodeQL alerts #65, #83).
 
 **Files:**
+
 - Modify: `src/cost-tracking/budget.ts`
 - Modify: `tests/cost-tracking/budget.test.ts`
 
 **Interfaces:**
+
 - Consumes: existing test helpers in `tests/cost-tracking/budget.test.ts` — `setup()`, `writeState()`, and imports `loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, resetBudgetCache` from `../../src/cost-tracking/budget.js`.
 - Produces: module-level `safeLedgerModel(modelName: string): boolean` in `budget.ts`; no exported API change.
 
@@ -622,10 +630,12 @@ git commit -m "fix(security): guard budget ledger against prototype pollution"
 **Context:** `src/runner.ts:48` writes `/tmp/runner-ready` with a predictable path and no `O_EXCL`, so a local attacker's pre-placed symlink would be followed (CodeQL alert #27 js/insecure-temporary-file). The k8s readiness probe path is `/tmp/runner-ready` and must stay unchanged.
 
 **Files:**
+
 - Modify: `src/runner.ts`
 - Create: `tests/runner/readiness-file.test.ts`
 
 **Interfaces:**
+
 - Produces: exported `markReady(filePath: string = READINESS_FILE): void` and `unmarkReady(filePath: string = READINESS_FILE): void` from `src/runner.js`. Existing internal call sites (`markReady()`, `unmarkReady()`) keep working via the default argument.
 
 - [ ] **Step 1: Write the failing tests**
@@ -742,20 +752,24 @@ git commit -m "fix(security): create runner readiness file without following sym
 **Context:** 10 of the open alerts (`js/missing-rate-limiting` ×9 in `tests/dashboard/`, +1 rbac test) are false positives in test harnesses, plus 2 log-injection alerts in the dev-only `scripts/ws-smoke.mjs`. Open PRs #26/#29 (codeql-action v3.37.2 → v4.37.3 for init/analyze) are stale-branch dependabot artifacts that duplicate this change — this task supersedes them (they get closed in Task 7).
 
 **Files:**
+
 - Modify: `.github/workflows/codeql.yml`
 - Create: `.github/codeql/codeql-config.yml`
 
 **Interfaces:**
+
 - Consumes: the exact v4.37.3 pinned SHAs from dependabot PRs #26 (init) and #29 (analyze) — fetch them in Step 1.
 - Produces: a single coherent CodeQL workflow with v4 actions + a config file that excludes `tests/**` and `scripts/ws-smoke.mjs` from analysis.
 
 - [ ] **Step 1: Fetch the v4.37.3 pinned SHAs**
 
 Run:
+
 ```bash
 gh pr diff 26 | grep '^\+.*init@'
 gh pr diff 29 | grep '^\+.*analyze@'
 ```
+
 Expected: two lines like `+        uses: github/codeql-action/init@<40-char-sha> # v4.37.3` and `+        uses: github/codeql-action/analyze@<40-char-sha> # v4.37.3`. Record both SHAs; they are used in Step 3. (If the diff output is empty, run `git fetch origin pull/26/head && git show FETCH_HEAD:.github/workflows/codeql.yml | grep init@`.)
 
 - [ ] **Step 2: Write the failing check**
@@ -811,11 +825,13 @@ git commit -m "ci(codeql): bump actions to v4.37.3 and ignore test-only paths"
 - [ ] **Step 1: Merge the clean dependency PRs**
 
 Run each and confirm the merge succeeded:
+
 ```bash
 gh pr merge 49 --rebase
 gh pr merge 30 --rebase
 gh pr merge 28 --rebase
 ```
+
 Expected: three "Pull request #NN has been merged" messages.
 
 - [ ] **Step 2: Close the irrelevant and superseded PRs**
@@ -825,6 +841,7 @@ gh pr close 54 --comment "Vendored skill-docs lockfile only — not part of the 
 gh pr close 26 --comment "Superseded by Task 6 of the security remediation: codeql-action/init bumped to v4.37.3 in main with a shared config file."
 gh pr close 29 --comment "Superseded by Task 6 of the security remediation: codeql-action/analyze bumped to v4.37.3 in main with a shared config file."
 ```
+
 Expected: three "Closed" messages.
 
 - [ ] **Step 3: Verify zero open PRs remain**
