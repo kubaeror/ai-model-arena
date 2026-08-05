@@ -27,6 +27,24 @@ function makeIdempotencyKey(scenario: string, models: string[]): string {
   return crypto.createHash('sha256').update(`${scenario}:${models.join(',')}`).digest('hex').slice(0, 32);
 }
 
+/** Non-blocking: fire budget_exceeded webhooks for a model that tripped its budget limit. */
+export async function dispatchBudgetExceeded(
+  modelName: string,
+  check: { spentUsd: number; limitUsd: number | null; percentUsed: number; reason?: string },
+  logger?: Logger,
+): Promise<void> {
+  try {
+    const { dispatchWebhooks } = await import('../notifications/webhooks.js');
+    await dispatchWebhooks('budget_exceeded', {
+      model: modelName,
+      spentUsd: check.spentUsd,
+      limitUsd: check.limitUsd,
+      percentUsed: check.percentUsed,
+      reason: check.reason ?? `Budget exceeded for ${modelName}`,
+    }, logger);
+  } catch { /* non-blocking */ }
+}
+
 /** Per-run budget reservations (runId -> model -> reserved USD). */
 const runReservations = new Map<string, Map<string, number>>();
 
@@ -160,18 +178,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     if (!budgetCheck.allowed) {
       const reason = budgetCheck.reason ?? `Budget exceeded for ${modelName}`;
       // Dispatch budget_exceeded webhook first (non-blocking), then throw.
-      void (async () => {
-        try {
-          const { dispatchWebhooks } = await import('../notifications/webhooks.js');
-          await dispatchWebhooks('budget_exceeded', {
-            model: modelName,
-            spentUsd: budgetCheck.spentUsd,
-            limitUsd: budgetCheck.limitUsd,
-            percentUsed: budgetCheck.percentUsed,
-            reason,
-          }, logger);
-        } catch { /* non-blocking */ }
-      })();
+      void dispatchBudgetExceeded(modelName, budgetCheck, logger);
       throw new Error(reason);
     }
 

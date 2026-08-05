@@ -78,6 +78,23 @@ test('slack regression payload renders fields', () => {
   assert.match(byTitle.get('Regressions') ?? '', /averageScore/);
 });
 
+test('slack regression payload includes baseline/current/threshold values', () => {
+  const payload = formatSlackPayload({
+    type: DispatchEventType.onRegressionFailed,
+    data: {
+      suite: 'backend-api',
+      model: 'gpt-4o',
+      regressions: [{ metric: 'averageScore', baseline: 80, current: 60, threshold: 10 }],
+    },
+  });
+  const fields = slackFields(payload);
+  const rendered = fields.find((f) => f.title === 'Regressions')?.value ?? '';
+  const numbers = rendered.match(/\d+(\.\d+)?/g) ?? [];
+  assert.ok(numbers.includes('80'), `baseline 80 missing from rendered text: ${rendered}`);
+  assert.ok(numbers.includes('60'), `current 60 missing from rendered text: ${rendered}`);
+  assert.ok(numbers.includes('10'), `threshold 10 missing from rendered text: ${rendered}`);
+});
+
 test('discord budget payload renders spentUsd/limitUsd (not $0.00)', () => {
   const payload = formatDiscordPayload({
     type: DispatchEventType.onBudgetThreshold,
@@ -124,4 +141,21 @@ test('discord regression payload renders fields', () => {
   assert.equal(byName.get('Suite'), 'backend-api');
   assert.equal(byName.get('Model'), 'gpt-4o');
   assert.match(byName.get('Regressions') ?? '', /averageScore/);
+});
+
+test('discord regression payload includes baseline/current/threshold values', () => {
+  const payload = formatDiscordPayload({
+    type: DispatchEventType.onRegressionFailed,
+    data: {
+      suite: 'backend-api',
+      model: 'gpt-4o',
+      regressions: [{ metric: 'averageScore', baseline: 80, current: 60, threshold: 10 }],
+    },
+  });
+  const fields = discordFields(payload);
+  const rendered = fields.find((f) => f.name === 'Regressions')?.value ?? '';
+  const numbers = rendered.match(/\d+(\.\d+)?/g) ?? [];
+  assert.ok(numbers.includes('80'), `baseline 80 missing from rendered text: ${rendered}`);
+  assert.ok(numbers.includes('60'), `current 60 missing from rendered text: ${rendered}`);
+  assert.ok(numbers.includes('10'), `threshold 10 missing from rendered text: ${rendered}`);
 });
