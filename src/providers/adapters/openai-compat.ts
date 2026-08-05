@@ -71,6 +71,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     }
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+    if (opts?.reasoning?.type === 'effort') body.reasoning_effort = String(opts.reasoning.value ?? 'medium');
     return body;
   }
 

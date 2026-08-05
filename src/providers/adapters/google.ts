@@ -70,6 +70,15 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
       gc.maxOutputTokens = opts.maxTokens;
       body.generationConfig = gc;
     }
+    if (opts?.reasoning && (opts.reasoning.type === 'budget_tokens' || opts.reasoning.type === 'toggle')) {
+      const gc = (body.generationConfig ?? {}) as Record<string, unknown>;
+      const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
+      if (opts.reasoning.type === 'budget_tokens') {
+        thinkingConfig.thinkingBudget = typeof opts.reasoning.value === 'number' ? opts.reasoning.value : 4096;
+      }
+      gc.thinkingConfig = thinkingConfig;
+      body.generationConfig = gc;
+    }
     return body;
   }
 

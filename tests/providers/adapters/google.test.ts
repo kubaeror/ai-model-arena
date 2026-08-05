@@ -41,6 +41,58 @@ test('GoogleAdapter.sendMessage parses generateContent response', async () => {
   }
 });
 
+test('GoogleAdapter.sendMessage maps budget_tokens into thinkingConfig', async () => {
+  const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], { reasoning: { type: 'budget_tokens', value: 2048 } });
+    const gc = (capturedBody.generationConfig ?? {}) as Record<string, unknown>;
+    assert.deepEqual(gc.thinkingConfig, { includeThoughts: true, thinkingBudget: 2048 });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('GoogleAdapter.sendMessage maps toggle into thinkingConfig', async () => {
+  const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], { reasoning: { type: 'toggle' } });
+    const gc = (capturedBody.generationConfig ?? {}) as Record<string, unknown>;
+    assert.deepEqual(gc.thinkingConfig, { includeThoughts: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('GoogleAdapter.sendMessage leaves body unchanged when reasoning is absent', async () => {
+  const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.deepEqual(capturedBody, {
+      contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+    });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('GoogleAdapter.sendMessage parses functionCall', async () => {
   const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
   const origFetch = globalThis.fetch;

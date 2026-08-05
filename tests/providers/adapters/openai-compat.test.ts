@@ -80,6 +80,57 @@ test('OpenAICompatAdapter.sendMessage extracts cached_tokens from prompt_tokens_
   }
 });
 
+test('OpenAICompatAdapter.sendMessage maps reasoning effort into reasoning_effort', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], { reasoning: { type: 'effort', value: 'high' } });
+    assert.equal(capturedBody.reasoning_effort, 'high');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter.sendMessage ignores non-effort reasoning options', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], { reasoning: { type: 'budget_tokens', value: 4096 } });
+    assert.ok(!('reasoning_effort' in capturedBody), 'budget_tokens must not leak into reasoning_effort');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter.sendMessage leaves body unchanged when reasoning is absent', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.deepEqual(capturedBody, {
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('OpenAICompatAdapter.supportsPromptCaching returns true', () => {
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   assert.equal(adapter.supportsPromptCaching(), true);
