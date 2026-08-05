@@ -54,6 +54,37 @@ test('BedrockAdapter constructs with opts.baseUrl and apiKey', () => {
   assert.ok(adapter);
 });
 
+test('BedrockAdapter gateway mode tolerates malformed tool call arguments JSON', async () => {
+  const adapter = new BedrockAdapter(bedrockDescriptor, 'claude-3', {
+    logger: stubLogger(),
+    baseUrl: 'https://gateway.example.com',
+    apiKey: 'test-key',
+  });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      choices: [{
+        message: {
+          role: 'assistant', content: null,
+          tool_calls: [{ id: 'call_1', function: { name: 'read_file', arguments: '{broken' } }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+      usage: {},
+    }),
+    text: async () => '',
+  } as Response)) as typeof fetch;
+  try {
+    const result = await adapter.sendMessage([{ role: 'user', content: 'x' }], []);
+    assert.equal(result.toolCalls.length, 1);
+    assert.deepEqual(result.toolCalls[0].arguments, {});
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('HttpError preserves status and message', () => {
   const err = new HttpError(429, 'rate limited', 'Too many requests');
   assert.equal(err.status, 429);

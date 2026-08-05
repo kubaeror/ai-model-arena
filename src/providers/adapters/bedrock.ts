@@ -230,11 +230,11 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
       }
       return {
         text: choice.message.content ?? null,
-        toolCalls: (choice.message.tool_calls ?? []).map(tc => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: JSON.parse(tc.function.arguments || '{}'),
-        })),
+        toolCalls: (choice.message.tool_calls ?? []).map(tc => {
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { args = {}; }
+          return { id: tc.id, name: tc.function.name, arguments: args };
+        }),
         usage: {
           prompt: json.usage.prompt_tokens,
           completion: json.usage.completion_tokens,
