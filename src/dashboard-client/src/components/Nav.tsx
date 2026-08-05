@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { NavLink } from 'react-router';
-import { Menu, X, ChevronDown } from 'lucide-react';
+import { NavLink, useNavigate } from 'react-router';
+import { Menu, X, ChevronDown, LogOut } from 'lucide-react';
 import { useSettings } from '../providers/SettingsProvider';
+import { useAuth } from '../hooks/useAuth.js';
 import { CacheStatePill } from './CacheStatePill';
 import { cn } from '../lib/cn';
 
@@ -12,6 +13,7 @@ const MAIN_LINKS = [
   { to: '/leaderboard', label: 'Leaderboard' },
   { to: '/costs', label: 'Costs' },
   { to: '/compare', label: 'Compare' },
+  { to: '/comparisons', label: 'Comparisons' },
   { to: '/observability', label: 'Observability' },
   { to: '/runners', label: 'Runners' },
   { to: '/settings', label: 'Settings' },
@@ -54,6 +56,8 @@ function NavLinkItem({ to, label, onClick, size = 'md' }: {
 
 export function Nav() {
   const { theme, setTheme } = useSettings();
+  const { username, logout } = useAuth();
+  const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
@@ -106,6 +110,22 @@ export function Nav() {
         </div>
         <div className="flex items-center gap-2 md:gap-4">
           <CacheStatePill />
+          {username && (
+            <>
+              <span className="hidden sm:inline font-mono text-13 text-fg-2 select-none">{username}</span>
+              <button
+                onClick={() => {
+                  logout();
+                  navigate('/login');
+                }}
+                aria-label="Logout"
+                title={`Log out ${username}`}
+                className="h-8 px-2 rounded-inner hover:bg-bg-2 font-mono text-13 text-fg-1 hover:text-fg-0 flex items-center gap-1"
+              >
+                <LogOut size={14} /> Logout
+              </button>
+            </>
+          )}
           <button
             onClick={() => setTheme(nextTheme)}
             aria-label={`Toggle theme (current: ${theme})`}
