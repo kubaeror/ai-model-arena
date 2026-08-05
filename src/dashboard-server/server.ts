@@ -14,7 +14,7 @@ import { metricsHandler } from '../observability/metrics.js';
 import { initDb, closeDb, getDriver } from '../db/index.js';
 import { ensureFresh } from '../catalog/cache.js';
 import { startCatalogCron, stopCatalogCron } from '../catalog/cron.js';
-import { loadAuthConfig, requireAuth, verifyCredentials, signToken, revokeToken, setTokenCookie, clearTokenCookie, type AuthedRequest } from './auth.js';
+import { loadAuthConfig, requireAuth, verifyCredentials, signToken, revokeToken, extractBearerToken, setTokenCookie, clearTokenCookie, type AuthedRequest } from './auth.js';
 import { requireRole } from '../auth/rbac.js';
 import { maskSecrets } from './secrets.js';
 import { loadApiKeysConfig, requireApiKey } from './auth-api.js';
@@ -175,9 +175,8 @@ async function start(): Promise<void> {
     },
     (req: AuthedRequest, res) => {
       if (metricsToken) {
-        const authHeader = req.headers.authorization ?? '';
-        const match = /^Bearer\s+(.+)$/i.exec(authHeader);
-        if (!match || match[1] !== metricsToken) {
+        const token = extractBearerToken(req.headers.authorization ?? '');
+        if (!token || token !== metricsToken) {
           res.status(401).json({ error: 'Authentication required' });
           return;
         }
@@ -251,10 +250,9 @@ async function start(): Promise<void> {
 
   // ── Auth logout (revoke token) ──────────────────────────────────────────
   app.post('/api/auth/logout', requireAuth(auth), async (req: AuthedRequest, res) => {
-    const h = req.headers.authorization ?? '';
-    const m = /^Bearer\s+(.+)$/i.exec(h);
-    if (m?.[1]) {
-      await revokeToken(m[1]);
+    const token = extractBearerToken(req.headers.authorization ?? '');
+    if (token) {
+      await revokeToken(token);
     }
     clearTokenCookie(res);
     res.json({ ok: true });
