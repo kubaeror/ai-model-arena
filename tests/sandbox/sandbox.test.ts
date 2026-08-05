@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { safeResolve, isWithin } from '../../src/sandbox/sandbox.js';
+import { safeResolve, isWithin, resolveSeedDir } from '../../src/sandbox/sandbox.js';
 
 import { isShellCommandAllowed } from '../../src/sandbox/shell-policy.js';
 
@@ -64,5 +64,30 @@ describe('safeResolve symlink containment', () => {
 
     const resolved = safeResolve(sandbox, 'good-link');
     assert.ok(isWithin(sandbox, resolved));
+  });
+});
+
+describe('resolveSeedDir', () => {
+  it('resolveSeedDir resolves an in-root template dir', () => {
+    const root = '/tmp/arena/run-files';
+    assert.equal(resolveSeedDir(root, 'templates/my-tpl'), '/tmp/arena/run-files/templates/my-tpl');
+  });
+
+  it('resolveSeedDir returns null for path traversal', () => {
+    const root = '/tmp/arena/run-files';
+    assert.equal(resolveSeedDir(root, '../..'), null);
+    assert.equal(resolveSeedDir(root, '../../configs'), null);
+  });
+
+  it('resolveSeedDir returns null for absolute paths outside the root', () => {
+    const root = '/tmp/arena/run-files';
+    assert.equal(resolveSeedDir(root, '/etc'), null);
+    assert.equal(resolveSeedDir(root, '/etc/arena/secrets'), null);
+  });
+
+  it('resolveSeedDir returns null for empty or dot-only values', () => {
+    const root = '/tmp/arena/run-files';
+    assert.equal(resolveSeedDir(root, ''), null);
+    assert.equal(resolveSeedDir(root, '.'), null);
   });
 });

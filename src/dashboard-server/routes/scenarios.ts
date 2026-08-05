@@ -55,7 +55,7 @@ function writeStarterFiles(name: string, files: StarterFile[]): string {
 }
 
 function listStarterFiles(scenario: ScenarioConfig): StarterFile[] {
-  if (!scenario.starterFiles) return [];
+  if (!scenario.starterFiles || !TEMPLATE_PATH_RE.test(scenario.starterFiles)) return [];
   const dir = path.join(scenariosDir(), scenario.starterFiles);
   // Defense in depth: YAML written before write-time validation (or by any
   // other writer) may carry a traversal starterFiles. Never walk outside
@@ -202,7 +202,7 @@ export function createScenariosRouter(): Router {
     }
     const scenario = loadScenario(p);
     fs.unlinkSync(p);
-    if (scenario.starterFiles) {
+    if (scenario.starterFiles && TEMPLATE_PATH_RE.test(scenario.starterFiles)) {
       const tplDir = path.join(scenariosDir(), scenario.starterFiles);
       // Never rm -rf outside scenariosDir() (see listStarterFiles note).
       if (isWithin(scenariosDir(), tplDir)) {
