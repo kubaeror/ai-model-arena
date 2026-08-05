@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "uq_anomalies_run_model_type" ON "anomalies" USING btree ("run_id","model","type");

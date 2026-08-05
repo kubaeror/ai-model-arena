@@ -143,6 +143,7 @@ export const anomalies = pgTable('anomalies', {
   index('idx_anomalies_type').on(table.type),
   index('idx_anomalies_resolved').on(table.resolved),
   index('idx_anomalies_detected').on(table.detected_at),
+  uniqueIndex('uq_anomalies_run_model_type').on(table.run_id, table.model, table.type),
 ]);
 
 export const webhooks = pgTable('webhooks', {

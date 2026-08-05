@@ -59,3 +59,72 @@
 - Task 4.3: complete (d61ea0b): tests/db/postgres-smoke.test.ts (migrate+round-trip+raw SQL) gates PG; test:db-pg script = migrate + smoke only (SQLite-written db suite NOT PG-portable — known, don't run whole suite under PG). Smoke test made idempotent (unique run/schedule ids per run; cost_ledger FK requires runs row — both dialects enforce it).
 - Task 4.4: complete (d61ea0b): CI job boots postgres:16 + runs test:db-pg before client build.
 - Task 5.1: complete (commit ec87515). .c8-test-list.txt: globs→explicit files (63 entries, +8 newly covered incl. silent-failure/finalize-merge/budget-integration); coverage gate green (67.88/75.08/58.5 ≥ 45/75/30); README truth: 4 adapter families, 26 route modules, worker.ts line removed; dead-code grep (sendMessageStream/MCP_TOOLS/spawnRunWorkers/queryTable/lockFile/createFallbackRouter/probeProviderHealth/signArtifacts) → zero hits. Final sweep: typecheck clean, lint 96w/0e, 355/359 tests, coverage gate green, test:db 49+2skipped, test:db-pg 2/2 against live Postgres.
+
+## Plan: complete-the-arena (branch complete-the-arena, base cf51be6)
+- Task 1: baseline gate green (typecheck 0, lint 0, tests 0 fail/4 skip)
+- Task 2: complete (commit 339fe5d, review clean)
+- Minor (2): queues.ts:36 returns {retried:true} even when deadLetterRetry returns false — fix in T44 queues rework.
+- Task 3: complete (commit 37d0974, review clean)
+- Task 4: complete (controller-executed comment fix, commit 12e0352, router tests pass)
+- Task 5: complete (commit ef43112, review clean/approved)
+- Important (5): redis DLQ retry matches stream-entry id while dashboard passes taskId → retry never works on redis DLQ; routes/queues.ts:35 always replies retried:true. FIX IN T44 (also T2 minor: same retried:true lie).
+- Minor (5): nack eval-path arg marshaling untested (fake falls back to non-Lua path masking regression); suggested eval-count tripwire assert; deadLetterRetry tripwire test `assert.equal(await q.deadLetterRetry('t1'), false)`.
+- Task 6: complete (commit 09ef948, review clean/approved)
+- Minor (6): no mid-run budget-failure or onBudgetCheck-throws test; pre-existing double endSpan on api_error path.
+- Task 7: complete (commit 5972447, review clean/approved)
+- Minor (7): resume marker surfaces in report.md transcript (spec'd behavior); test casts consistent with file pattern.
+- Task 8: complete (commits 2e64b9f + fix d1eee01, review approved after fix round)
+- Minor (8): backoff tests emit warn-log noise; schedulesPath() dead export.
+- Bonus fix in 8: no-arg initDb() defaulted to in-memory DB (silent) — now defaults via dbPath().
+- Task 9: complete (controller-executed, commit pending-check, docker compose config -q OK)
+- Task 10: complete (commit dfd92e9, review approved)
+- Minor (10): ProcStatus/live.ts/Ops.tsx CPU-Mem residual = T43 scope; journal hygiene (dup idx 10, missing snapshots 0008/idx10b-12, pg 0003-0005) = T29 scope.
+- Task 11: complete (commit b0deb54, review approved)
+- Task 12: complete (commit b9dac07 + guard commit 354a0a6, review approved)
+- Minor (12): sibling isRunCompleteByRunId same bug class (live.ts:221 watcher poll) — fold into T43; RunIndexModelEntry union missing claimed/failed/dead states (pre-existing stale).
+- Cross-cutting: t.mock.module tests now skip gracefully without --experimental-test-module-mocks (5 sites).
+- Task 13: complete (commit 7f610e9, review approved)
+- Minor (13): toCsvRow duplicates export.ts escapeCSV — shared src/csv.ts follow-up candidate (record for final review triage).
+- Task 14: complete (commit 61ed7b5, controller-verified trivial diff: desc text + dead import removal only)
+- Task 15: complete (commits 8159efc metrics-label fix + f328774 happy-path test, review approved)
+- Bug fixed in 15: taskDuration.observe lacked model/scenario labels at 4 runner.ts sites.
+- Task 16: complete (commit 19ae233, review approved). PHASE 1 COMPLETE.
+- Minor (16): e2e tests race on DB-status assert (use waitFor); breaker left open after tests (ordering-dependent); dup setup; helper parse semantics better than brief.
+- Follow-up candidate: loop.ts:169-184 swallows adapter errors → breaker never opens on provider failures (fallback only fires on infra errors).
+- Task 17: complete (commit 6011881, review approved)
+- Note (17): SendOpts.reasoning is union {type,value} NOT plan's {effort,toggle,budget_tokens}; adapters honor it; scenario-config conversion happens in T18.
+- Task 18: complete (commit ee6067f, review approved)
+- Note (18): instrument-loop.ts wrapper needed opts forwarding (verified necessary); reasoning schema lenient on unknown keys (consistent with existing schemas).
+- Task 19: complete (commit b4702da, controller-verified small diff: guarded parse matching openai-compat convention + test)
+- Task 20: complete (commit b97c68a, controller-verified)
+- Task 21: complete (commit 60e9150, review approved)
+- Minor (21): url-validator isBlockedProviderHost duplicates inline loops (drift risk, defensible); allowlist must-contain-{ assertion stricter than brief.
+- Task 22: complete (commit 74a2119, review approved)
+- Minor (22): no-key providers now show unreachable (honest but unexplained in UI); success-path socket not released (resp.body?.cancel); error embeds full body.
+- Task 23: complete (commit ff827d6, controller-verified: clean dead-code removal + 4 tests)
+- Task 24: complete (commit 20ec984, review approved)
+- Minor (24): path keys not normalized (./ or ../ variants miss); padded keys.
+- Task 25: complete (commit c2f5f4a, controller-verified: 39 prefixes added incl. AWS_ collapse; 52-test drift guard)
+- Task 26: complete (commit 14aa074, controller-verified)
+- Open Minor (pre-existing): aws_secret_key pattern over-redacts git SHAs/digests; tail-leak on 42+ runs — final-review triage candidate.
+- Task 27: complete (commit ff4d885, review approved). PHASE 2 COMPLETE.
+- Minor (27): un-awaited store.set/delete in tests; platform frozen at construction; stale-line cleanup pre-existing.
+- Task 28: complete (commit 023901a, review approved)
+- Infra note (28): tests aren't typechecked (tsconfig includes src/** only) — consider tsconfig.test.json in T62.
+- Task 29: complete (commit 579b844, review approved)
+- Minor (29): pg journal contiguity not guarded by test; 0013_ file-prefix collision noted.
+- Task 30: complete (commit 06666fa, controller-verified)
+- Task 31: complete (commit a2342ad, review approved). (First dispatch of T31 returned empty — re-dispatched successfully.)
+- Task 32: complete (commit 5e88ec8, controller-verified)
+- Task 33: complete (commit 7bdc28c, review approved)
+- Task 34: complete (commit f811a4d, controller-verified)
+- Task 35: complete (commit 0f6e1f8, review approved)
+- Note (35): env rename CATALOG_REFRESH_INTERVAL_DAYS→CATALOG_REFRESH_DAYS (plan-mandated); no back-compat fallback (old deployments silently get 30d) — final-review triage.
+- Task 36: complete (commit 9dd6895, fixes 2 Important findings on 68b5090; report in task-36-report.md)
+- Note (36): insertJudgeScore now upserts on uq_judge_scores_run_model (fresh verdict replaces stale on re-finalize); persistence deduped to single site (run-lifecycle finalize judge step) — runJudgeScoring no longer touches DB; tests: upsert unit test + run-lifecycle integration + runJudgeScoring no-persist assert.
+- Task 36: complete (commits 68b5090 + fix 9dd6895; review approved after fix round). Ledger commit 51eb33a reverted + .superpowers/ gitignored (06147ae).
+- Minor (36): balanced-brace scan is first-{ → last-} slicing not nesting-aware; dynamic import outside try/catch (mitigated by outer catch).
+- Task 37: complete (commits 6f34f7c + fix fa641b0, review approved after fix round)
+- Minor (37): stale-day entries linger in file until next save; empty arrays linger; fetchSync resetPricingCache wiring beyond brief (justified).
+- Task 38: complete (commit TBD): scenario-scoped buildRunHistory (filter before window), anomaly dedup (uq_anomalies_run_model_type unique index in both schemas + migrations 0015/0008, pre-insert check + onConflictDoNothing), named detector exports, warn logs on insufficient baseline; new tests detectors.test.ts (6σ/1σ latency, 5-repeat loop, 5× cost) + analyze.test.ts (dedup idempotency, scenario filtering). Full suite 589 pass / 0 fail.
+- Minor (38): unique (run_id, model, type) dedups multiple latency anomalies for different tools in the same run+model (keeps first) — brief-mandated key; warn logs fire per detector per analyze when history empty (noise at cold start).

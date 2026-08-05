@@ -38,14 +38,34 @@ export interface NewAnomaly {
 
 export async function insertAnomaly(input: NewAnomaly): Promise<AnomalyRecord> {
   const db = getDrizzleDb();
+  // Dedup: one anomaly per (run, model, type). Guarded by the
+  // uq_anomalies_run_model_type unique index; pre-check first so re-analysis
+  // of the same run is idempotent and returns the existing record.
+  const existing = await findAnomaly(input.run_id, input.model, input.type);
+  if (existing) return existing;
   const detectedAt = new Date().toISOString();
   const meta = input.metadata ? JSON.stringify(input.metadata) : null;
   const result = await db.insert(anomalies).values({
     run_id: input.run_id, model: input.model, type: input.type,
     severity: input.severity, description: input.description,
     detected_at: detectedAt, resolved: 0, metadata_json: meta,
+  }).onConflictDoNothing({
+    target: [anomalies.run_id, anomalies.model, anomalies.type],
   }).returning();
+  if (result.length === 0) {
+    // Lost a race against a concurrent insert — return the winner.
+    const raced = await findAnomaly(input.run_id, input.model, input.type);
+    if (raced) return raced;
+  }
   return rowToRecord(result[0]);
+}
+
+async function findAnomaly(runId: string, model: string, type: AnomalyType): Promise<AnomalyRecord | null> {
+  const db = getDrizzleDb();
+  const rows = await db.select().from(anomalies)
+    .where(and(eq(anomalies.run_id, runId), eq(anomalies.model, model), eq(anomalies.type, type)))
+    .limit(1);
+  return rows.length ? rowToRecord(rows[0]) : null;
 }
 
 export interface AnomalyQuery {

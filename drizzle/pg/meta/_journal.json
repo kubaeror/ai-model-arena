@@ -57,6 +57,13 @@
       "when": 1785895452610,
       "tag": "0007_steady_spyke",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785896868348,
+      "tag": "0008_strong_thing",
+      "breakpoints": true
     }
   ]
 }
