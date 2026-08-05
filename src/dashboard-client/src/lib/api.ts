@@ -432,6 +432,60 @@ export async function listFiles(params?: {
   return apiFetch<{ files: FileRow[]; total: number }>(`/api/files?${sp.toString()}`);
 }
 
+// ── Prompts ─────────────────────────────────────────────────────────────────
+export interface PromptRow {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  latest_version: number | null;
+  latest_tag: string | null;
+}
+export interface PromptVersion {
+  id: string;
+  prompt_id: string;
+  version: number;
+  system_prompt: string;
+  task: string;
+  config: string | null;
+  tag: string | null;
+  created_at: string;
+  created_by: string;
+}
+export async function listPrompts(): Promise<PromptRow[]> {
+  const r = await apiFetch<{ prompts: PromptRow[] }>('/api/prompts');
+  return r.prompts;
+}
+export async function createPrompt(input: {
+  name: string; description?: string; systemPrompt: string; task: string; tag?: string;
+}): Promise<{ id: string; version: number }> {
+  return apiFetch('/api/prompts', { method: 'POST', body: JSON.stringify(input) });
+}
+export async function updatePrompt(
+  id: string,
+  input: { name?: string; description?: string },
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/prompts/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+export async function deletePrompt(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/prompts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+export async function listPromptVersions(id: string): Promise<PromptVersion[]> {
+  const r = await apiFetch<{ prompt: PromptRow; versions: PromptVersion[] }>(
+    `/api/prompts/${encodeURIComponent(id)}`,
+  );
+  return r.versions;
+}
+export async function enqueuePrompt(input: {
+  promptId: string; promptVersion?: number; models: string[]; scenario: string;
+}): Promise<{ tasks: Array<{ taskId: string; model: string; provider: string }>; count: number }> {
+  return apiFetch('/api/prompts/enqueue', { method: 'POST', body: JSON.stringify(input) });
+}
+
 // ── Audit ────────────────────────────────────────────────────────────────────
 export interface AuditEntry {
   id: number;
