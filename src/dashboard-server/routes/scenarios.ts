@@ -26,6 +26,8 @@ interface StarterFile {
 /** Write inline starter files into configs/scenarios/templates/<safe-name>/. */
 const MAX_STARTER_FILE_BYTES = 1 * 1024 * 1024; // 1 MB per file
 const MAX_STARTER_FILES = 50;
+/** starterFiles must reference a bare template dir under configs/scenarios/templates. */
+const TEMPLATE_PATH_RE = /^templates\/[a-zA-Z0-9_-]+$/;
 
 function writeStarterFiles(name: string, files: StarterFile[]): string {
   const safe = name.replace(/[^a-zA-Z0-9_-]/g, '-');
@@ -55,6 +57,10 @@ function writeStarterFiles(name: string, files: StarterFile[]): string {
 function listStarterFiles(scenario: ScenarioConfig): StarterFile[] {
   if (!scenario.starterFiles) return [];
   const dir = path.join(scenariosDir(), scenario.starterFiles);
+  // Defense in depth: YAML written before write-time validation (or by any
+  // other writer) may carry a traversal starterFiles. Never walk outside
+  // scenariosDir().
+  if (!isWithin(scenariosDir(), dir)) return [];
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
   return walkFiles(dir).map((full) => ({
     path: path.relative(dir, full).replace(/\\/g, '/'),
@@ -123,6 +129,10 @@ export function createScenariosRouter(): Router {
       starterFiles = writeStarterFiles(name, body.starterFilesContent);
     }
     const parsed = ScenarioConfigSchema.parse({ ...body, starterFiles });
+    if (parsed.starterFiles !== undefined && !TEMPLATE_PATH_RE.test(parsed.starterFiles)) {
+      res.status(400).json({ error: 'Invalid starterFiles; must be templates/<bare-name>' });
+      return;
+    }
     // Validate the scenario name BEFORE resolving the path. The body `name`
     // was previously passed straight to resolveScenarioPath(), which accepted
     // absolute paths and `../` traversal — allowing an editor to write a YAML
@@ -172,6 +182,10 @@ export function createScenariosRouter(): Router {
       starterFiles = writeStarterFiles(newName, body.starterFilesContent);
     }
     const parsed = ScenarioConfigSchema.parse({ ...existing, ...body, name: newName, starterFiles });
+    if (parsed.starterFiles !== undefined && !TEMPLATE_PATH_RE.test(parsed.starterFiles)) {
+      res.status(400).json({ error: 'Invalid starterFiles; must be templates/<bare-name>' });
+      return;
+    }
     writeScenarioYaml(target, parsed);
     if (target !== p && fs.existsSync(p)) fs.unlinkSync(p);
     auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'scenario.update', { type: 'scenario', id: newName });
@@ -189,7 +203,11 @@ export function createScenariosRouter(): Router {
     const scenario = loadScenario(p);
     fs.unlinkSync(p);
     if (scenario.starterFiles) {
-      fs.rmSync(path.join(scenariosDir(), scenario.starterFiles), { recursive: true, force: true });
+      const tplDir = path.join(scenariosDir(), scenario.starterFiles);
+      // Never rm -rf outside scenariosDir() (see listStarterFiles note).
+      if (isWithin(scenariosDir(), tplDir)) {
+        fs.rmSync(tplDir, { recursive: true, force: true });
+      }
     }
     auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: req.params.name as string });
     res.json({ deleted: req.params.name as string });
