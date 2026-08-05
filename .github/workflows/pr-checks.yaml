@@ -99,28 +99,34 @@ jobs:
     permissions:
       checks: write
     steps:
-      # test-reporter v1.9.x runs `git ls-files` to filter TAP paths against
-      # tracked files — the job fails with "not a git repository" without it.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Download TAP results
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: test-results-tap-*
           path: tap-results
-          merge-multiple: true
-      - name: Publish TAP summary to PR
-        # Single summary for the whole matrix (dorny/test-reporter matrix
-        # guidance): the per-leg artifacts are merged, then reported once.
-        # `name` is required by the action code (v1.9.x) despite action.yml
-        # marking it optional — without it the step fails with
-        # "Input required and not supplied: name".
-        uses: dorny/test-reporter@6c357194179c694acfcad2100dbf27c5b9b0d5e0 # v1.9.1
-        with:
-          name: Backend Test Report
-          path: tap-results/tap.out
-          reporter: tap
-          only-summary: true
-          fail-on-error: false
+      - name: Publish TAP summary as check run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # node:test TAP (one file per matrix leg) — aggregate counts and
+          # publish a single check run on the commit. gh CLI is preinstalled.
+          TOTAL=0; PASS=0; FAIL=0
+          for f in tap-results/*/tap.out; do
+            [ -f "$f" ] || continue
+            t=$(grep -E '^# tests ' "$f" | tail -1 | awk '{print $3}'); TOTAL=$((TOTAL + ${t:-0}))
+            p=$(grep -E '^# pass ' "$f" | tail -1 | awk '{print $3}'); PASS=$((PASS + ${p:-0}))
+            fl=$(grep -E '^# fail ' "$f" | tail -1 | awk '{print $3}'); FAIL=$((FAIL + ${fl:-0}))
+          done
+          echo "total=$TOTAL pass=$PASS fail=$FAIL"
+          if [ "$FAIL" = "0" ] && [ "$TOTAL" -gt 0 ]; then CONCLUSION=success; else CONCLUSION=failure; fi
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name="Backend Test Report" \
+            -f head_sha="$GITHUB_SHA" \
+            -f status=completed \
+            -f conclusion="$CONCLUSION" \
+            -f "output[title]=Backend tests: $PASS passed / $FAIL failed" \
+            -f "output[summary]=Backend test summary (node 22 + node 24): **$TOTAL** tests, **$PASS** passed, **$FAIL** failed."
 
   test-frontend:
     runs-on: ubuntu-latest
