@@ -24,6 +24,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test:coverage
+      - run: npm test
       - name: Postgres migration parity gate
         run: |
           docker run -d --name pg -p 5432:5432 \
