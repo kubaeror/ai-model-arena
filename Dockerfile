@@ -24,6 +24,9 @@ COPY src/dashboard-client/ ./
 RUN npm run build
 
 # ── runtime stage ──
+# Healthchecks live in docker-compose.yml only (node one-liner on :4000 for the
+# dashboard). An image-level HEALTHCHECK would lie for the runner role, which
+# serves /metrics on :4001 and never binds :4000.
 FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libargon2-1=0~20171227-0.3+deb12u1 && rm -rf /var/lib/apt/lists/*
 # npm is not needed at runtime (CMD runs node directly). The base image's
