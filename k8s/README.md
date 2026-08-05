@@ -55,9 +55,9 @@ kubectl -n ai-arena create secret generic webhook-secret \
 
 ## Deploy via kustomize
 
-kubectl apply -k k8s/overlays/dev
-
 ```bash
+kubectl apply -k k8s/overlays/dev
+```
 
 ### Production (Argo CD)
 
