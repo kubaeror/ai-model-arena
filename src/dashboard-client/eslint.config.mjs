@@ -20,7 +20,7 @@ export default [
       'react-hooks': reactHooksPlugin,
     },
     rules: {
-      'no-console': 'warn',
+      'no-console': ['warn', { allow: ['error'] }],
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
       'react/react-in-jsx-scope': 'off',
