@@ -75,30 +75,6 @@ export class SandboxGit {
     this.logger?.info('Created initial commit', { hash: this.initialCommitHash });
   }
   
-  async commitTurn(turnNumber: number, summary: string): Promise<string | null> {
-    if (!this.initialized) return null;
-    
-    const shortSummary = summary.slice(0, 80).replace(/\n/g, ' ');
-    const message = `[${this.modelName}] turn ${turnNumber}: ${shortSummary}`;
-    
-    try {
-      await this.git(['add', '-A']);
-      const status = await this.git(['status', '--porcelain']);
-      if (!status.stdout.trim()) {
-        this.logger?.debug('No changes to commit', { turn: turnNumber });
-        return null;
-      }
-      await this.git(['commit', '-m', message]);
-      const result = await this.git(['rev-parse', 'HEAD']);
-      const hash = result.stdout.trim();
-      this.logger?.info('Committed turn changes', { turn: turnNumber, hash });
-      return hash;
-    } catch (err) {
-      this.logger?.warn('Failed to commit turn', { turn: turnNumber, error: String(err) });
-      return null;
-    }
-  }
-  
   async commitFinal(summary: string): Promise<string | null> {
     if (!this.initialized) return null;
     
