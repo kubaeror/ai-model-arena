@@ -18,10 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate conventional PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          TITLE="${{ github.event.pull_request.title }}"
-          echo "PR title: $TITLE"
-          if ! echo "$TITLE" | grep -qE '^(feat|fix|docs|ci|chore|test|refactor)(\([a-zA-Z0-9-]+\))?: .+$'; then
+          echo "PR title: $PR_TITLE"
+          if ! echo "$PR_TITLE" | grep -qE '^(feat|fix|docs|ci|chore|test|refactor)(\([a-zA-Z0-9-]+\))?: .+$'; then
             echo "::error::PR title must match 'type(optional scope): description' with type in: feat, fix, docs, ci, chore, test, refactor"
             exit 1
           fi
