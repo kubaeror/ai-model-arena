@@ -16,6 +16,7 @@ function getEmptyState(): BudgetState {
   return {
     global: { daily: {}, monthly: {} },
     models: {},
+    reservations: {},
     lastReset: new Date().toISOString(),
   };
 }
@@ -54,10 +55,12 @@ function loadBudgetState(config: BudgetConfig, rootDir: string, logger?: Logger)
   try {
     const content = fs.readFileSync(statePath, 'utf8');
     budgetState = JSON.parse(content) as BudgetState;
+    hydrateReservations(budgetState);
     return budgetState;
   } catch (err) {
     logger?.warn(`Failed to parse budget state, resetting`, { path: statePath });
     budgetState = getEmptyState();
+    hydrateReservations(budgetState);
     return budgetState;
   }
 }
@@ -102,6 +105,24 @@ export function addSpend(modelName: string, usd: number, rootDir: string, logger
 }
 
 let pendingReservations = new Map<string, number>();
+
+/**
+ * Rebuild the in-memory reservation map from the persisted state file so a
+ * fresh BudgetManager instance over the same state file still counts
+ * reservations made by a previous instance. Stale reservations (different
+ * day) are dropped.
+ */
+function hydrateReservations(state: BudgetState): void {
+  pendingReservations.clear();
+  const today = DAY_KEY();
+  for (const [modelName, entries] of Object.entries(state.reservations ?? {})) {
+    let total = 0;
+    for (const entry of entries) {
+      if (entry.dailyKey === today) total += entry.amount;
+    }
+    if (total > 0) pendingReservations.set(`res:${modelName}:d`, total);
+  }
+}
 
 /**
  * Reserve an estimated cost before dispatching a job.
@@ -153,6 +174,10 @@ export function reserveBudget(
 
   // Reserve the estimated cost
   pendingReservations.set(reservationKey, totalReserved + estimatedCostUsd);
+  if (!state.reservations) state.reservations = {};
+  if (!state.reservations[modelName]) state.reservations[modelName] = [];
+  state.reservations[modelName].push({ amount: estimatedCostUsd, dailyKey: DAY_KEY() });
+  saveBudgetState(rootDir, logger);
   logger?.debug('Budget reserved', {
     model: modelName,
     estimatedCost: estimatedCostUsd,
@@ -182,6 +207,17 @@ export function releaseReservation(
     pendingReservations.set(reservationKey, released);
   } else {
     pendingReservations.delete(reservationKey);
+  }
+
+  if (budgetConfig) {
+    const state = loadBudgetState(budgetConfig, rootDir, logger);
+    const entries = state.reservations?.[modelName];
+    if (entries && entries.length > 0) {
+      const today = DAY_KEY();
+      const idx = entries.findIndex((entry) => entry.dailyKey === today);
+      entries.splice(idx >= 0 ? idx : 0, 1);
+      saveBudgetState(rootDir, logger);
+    }
   }
 
   if (actualCostUsd > 0) {
@@ -316,4 +352,5 @@ export function resetBudgetCache(): void {
   budgetConfig = null;
   budgetState = null;
   spendQueue = Promise.resolve();
+  pendingReservations.clear();
 }

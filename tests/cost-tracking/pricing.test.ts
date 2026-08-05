@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { initDb, closeDb } from '../../src/db/client.js';
+import { initDb, closeDb, getDrizzleClient } from '../../src/db/client.js';
+import { pricing } from '../../src/db/schema.js';
+import { eq } from 'drizzle-orm';
 import { fetchSync } from '../../src/catalog/sync.js';
-import { getModelPricing, getPricing, computeCost, formatCost } from '../../src/cost-tracking/pricing.js';
+import { getModelPricing, getPricing, computeCost, formatCost, resetPricingCache } from '../../src/cost-tracking/pricing.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -20,6 +22,12 @@ const MODELS_DEV = {
       attachment: false, reasoning: false, temperature: true, tool_call: true,
       cost: { input: 2.5, output: 10, cache_read: 1.25, context_over_200k: { input: 1.5, output: 5, cache_read: 0.5 } },
       limit: { context: 400000, output: 16384 },
+    },
+    'gpt-cw': {
+      id: 'gpt-cw', name: 'GPT-CW',
+      attachment: false, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 2, output: 8, cache_write: 0.75 },
+      limit: { context: 128000, output: 16384 },
     },
   } },
 };
@@ -119,4 +127,51 @@ test('formatCost formats small/large amounts', () => {
   assert.equal(formatCost(0.0005), '$0.000500');
   assert.equal(formatCost(0.123456), '$0.1235');
   assert.equal(formatCost(12.5), '$12.50');
+});
+
+test('over-200k output cost uses the tier output price, not the input fallback', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    // Null out over_200k_output and add a tier row with its own output price.
+    const db = getDrizzleClient();
+    await db.update(pricing).set({ over_200k_output: null }).where(eq(pricing.model_id, 'openai/gpt-x'));
+    await db.insert(pricing).values({
+      model_id: 'openai/gpt-x', tier_size: 200001,
+      input: 1.25, output: 7.5, cache_read: 0.5, cache_write: null,
+      over_200k_input: null, over_200k_output: null,
+      over_200k_cache_read: null, over_200k_cache_write: null,
+      updated_at: new Date().toISOString(),
+    });
+    const c = await computeCost('openai/gpt-x', { prompt: 250000, completion: 1000 });
+    assert.equal(c.inputCost, 375); // 250000/1000 * 1.5
+    assert.equal(c.outputCost, 7.5); // largest tier output, not the over-200k input price
+    assert.equal(c.total, 382.5);
+  } finally { closeDb(); cleanup(); }
+});
+
+test('getPricing exposes cache_write and computeCost uses it when cache_read is missing', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    const p = await getPricing('openai/gpt-cw');
+    assert.equal(p?.cache_write, 0.75);
+    const c = await computeCost('openai/gpt-cw', { prompt: 0, completion: 0, cached: 2000 });
+    assert.equal(c.cachedCost, 1.5); // 2000/1000 * 0.75
+  } finally { closeDb(); cleanup(); }
+});
+
+test('resetPricingCache clears the pricing cache and re-lookup re-fetches', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    assert.equal((await getPricing('openai/gpt-4o'))?.input, 2.5);
+
+    const db = getDrizzleClient();
+    await db.update(pricing).set({ input: 9 }).where(eq(pricing.model_id, 'openai/gpt-4o'));
+
+    assert.equal((await getPricing('openai/gpt-4o'))?.input, 2.5, 'cached value served until reset');
+    resetPricingCache();
+    assert.equal((await getPricing('openai/gpt-4o'))?.input, 9, 're-lookup re-fetches after reset');
+  } finally { closeDb(); cleanup(); }
 });

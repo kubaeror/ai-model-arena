@@ -2,6 +2,7 @@ import { getDrizzleDb } from '../db/index.js';
 import { isStale } from './cache.js';
 import { ModelsDevResponseSchema, type ModelsDevResponse } from './types.js';
 import { normalizeModelId } from './match.js';
+import { resetPricingCache } from '../cost-tracking/pricing.js';
 import {
   providers, models, model_providers, pricing,
   pricing_snapshots, catalog_cache_state,
@@ -60,6 +61,7 @@ export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl:
     const parsed = ModelsDevResponseSchema.parse(raw) as ModelsDevResponse;
     const count = await upsertCatalog(db, parsed);
     await updateCacheState(db, 'models.dev', 'ok', undefined, count);
+    if (count > 0) resetPricingCache();
     return { source: 'models.dev', ok: true, count };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
