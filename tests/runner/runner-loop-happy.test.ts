@@ -65,6 +65,8 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
   process.env.ARENA_DB_PATH = dbFile;
   process.env.OUTPUT_ROOT = outputs;
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   process.env.OTEL_ENABLED = 'false';
   process.env.OPENAI_API_KEY = 'test-key-not-used';
   initDb(dbFile);

@@ -46,6 +46,7 @@ import { createAuditRouter } from './routes/audit.js';
 import { createFilesRouter } from './routes/files.js';
 import { attachStreamWs } from './routes/stream.js';
 import { mountOpenApi } from './openapi.js';
+import { assertRequiredEnv } from '../env/required.js';
 
 const logger = createLogger('ai-arena:dashboard');
 
@@ -54,6 +55,15 @@ function clientDist(): string {
 }
 
 async function start(): Promise<void> {
+  // Fail fast on missing required env before Otel/DB/listen. DASHBOARD_PASSWORD
+  // is NOT required here — auth.ts generates a one-time dev password and
+  // hard-fails itself under NODE_ENV=production.
+  try {
+    assertRequiredEnv('dashboard');
+  } catch (err) {
+    logger.error(err instanceof Error ? err.message : String(err), { component: 'dashboard', action: 'exit' });
+    process.exit(1);
+  }
   startOtel();
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
   // loadAuthConfig() throws in production if DASHBOARD_PASSWORD is unset, and

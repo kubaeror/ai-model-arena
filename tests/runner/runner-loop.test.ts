@@ -113,6 +113,8 @@ test('runner dequeues and nacks an unresolvable model into the DLQ', async () =>
   process.env.ARENA_DB_PATH = dbFile;
   process.env.OUTPUT_ROOT = outputs;
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   initDb(dbFile);
 
   const origFetch = globalThis.fetch;
@@ -163,6 +165,8 @@ test('runner exits promptly when started with an already-aborted signal', async 
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
   process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   initDb(process.env.ARENA_DB_PATH);
 
   const queue = new InMemoryQueue();
@@ -183,6 +187,8 @@ test('runner acks a task for a cancelled run without executing it', async () => 
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
   process.env.OUTPUT_ROOT = outputs;
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   delete process.env.OPENAI_API_KEY;
   initDb(process.env.ARENA_DB_PATH);
 
@@ -240,6 +246,8 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
   process.env.ARENA_DB_PATH = dbFile;
   process.env.OUTPUT_ROOT = outputs;
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   delete process.env.OPENAI_API_KEY;
   initDb(dbFile);
 
@@ -304,6 +312,8 @@ test('runner does not count a first-attempt failure below the DLQ threshold as t
   process.env.ARENA_DB_PATH = dbFile;
   process.env.OUTPUT_ROOT = outputs;
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   initDb(dbFile);
   tasksFailed.reset();
 
@@ -341,6 +351,8 @@ test('runner does not count a requeued model-not-found nack as tasksFailed', asy
   process.env.ARENA_DB_PATH = dbFile;
   process.env.OUTPUT_ROOT = outputs;
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   initDb(dbFile);
   tasksFailed.reset();
 
@@ -419,6 +431,8 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
   process.env.ARENA_DB_PATH = dbFile;
   process.env.OUTPUT_ROOT = outputs;
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   process.env.OTEL_ENABLED = 'false';
   process.env.OPENAI_API_KEY = 'test-key-not-used';
   process.env.ARENA_MAX_FALLBACK_HOPS = '0';
@@ -494,6 +508,8 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
   process.env.ARENA_DB_PATH = dbFile;
   process.env.OUTPUT_ROOT = outputs;
   process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   process.env.OTEL_ENABLED = 'false';
   process.env.OPENAI_API_KEY = 'test-key-not-used';
   process.env.ARENA_MAX_FALLBACK_HOPS = '3';

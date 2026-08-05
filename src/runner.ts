@@ -31,6 +31,7 @@ import type { ToolExecutionContext, TokenUsage, ChatMessage } from './types.js';
 import type { StoredMessage } from './session/store.js';
 import { closeDb } from './db/index.js';
 import { secretStore } from './secrets/store.js';
+import { assertRequiredEnv } from './env/required.js';
 
 export interface RunnerOptions {
   queue?: TaskQueue;
@@ -136,6 +137,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const signal = opts.signal ?? ac.signal;
   const logger = createLogger('ai-arena:runner');
   const runnerId = process.env.REDIS_CONSUMER_NAME ?? `runner-${process.pid}`;
+
+  // Fail fast on missing required env before initDb/createQueue connect.
+  try {
+    assertRequiredEnv('runner');
+  } catch (err) {
+    logger.error(err instanceof Error ? err.message : String(err), { component: 'runner', action: 'exit' });
+    process.exit(1);
+  }
 
   const root = findProjectRoot();
   initDb(dbPath());
