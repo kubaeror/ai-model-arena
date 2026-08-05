@@ -87,7 +87,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --generate-notes
       - name: Download SBOM artifact
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v5.0.0
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           name: sbom-${{ github.ref_name }}
       - name: Attach SBOM to release
@@ -98,7 +98,11 @@ jobs:
       - name: Promote tag image to prod overlay
         run: |
           git remote set-branches origin main
-          git fetch --depth 1 origin main
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Tag $GITHUB_REF_NAME points to a commit not on main — refusing to promote."
+            exit 1
+          }
           git checkout -b main origin/main
           sed -i "s|newTag: .*|newTag: ${{ github.sha }}|" k8s/overlays/prod/kustomization.yaml
           if git diff --quiet k8s/overlays/prod/kustomization.yaml; then
@@ -109,6 +113,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "ci: promote ${{ github.ref_name }} image to prod"
+          git pull --rebase origin main || git pull --rebase origin main
           git push origin main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -130,3 +135,37 @@ jobs:
       registry-username: ${{ github.actor }}
     secrets:
       registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  # The container SLSA generator does not upload an "attestation" workflow
+  # artifact; it publishes the attestation to the container registry via
+  # `cosign attest` (generator_container_slsa3.yml v2.0.0/v2.1.0). Pull it
+  # back down and attach it to the GitHub release. Runs `if: always()` so a
+  # failed/skipped slsa job cannot fail the release; a missing attestation is
+  # tolerated with the test -f guard below (and uploaded when present).
+  attach-attestation:
+    needs: [release, slsa]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Download SLSA attestation from registry
+        id: fetch-attestation
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cosign login ghcr.io -u "${{ github.actor }}" -p "$GITHUB_TOKEN"
+          cosign download attestation "ghcr.io/${{ github.repository }}@${{ needs.release.outputs.digest }}" > attestation.jsonl
+      - name: Attach attestation to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -s attestation.jsonl ]; then
+            gh release upload "$GITHUB_REF_NAME" attestation.jsonl
+          else
+            echo "No SLSA attestation found in registry; skipping release attach"
+          fi
