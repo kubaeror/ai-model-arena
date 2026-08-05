@@ -627,7 +627,7 @@ git commit -m "fix(security): guard budget ledger against prototype pollution"
 
 ### Task 5: Symlink-safe runner readiness file (LOW)
 
-**Context:** `src/runner.ts:48` writes `/tmp/runner-ready` with a predictable path and no `O_EXCL`, so a local attacker's pre-placed symlink would be followed (CodeQL alert #27 js/insecure-temporary-file). The k8s readiness probe path is `/tmp/runner-ready` and must stay unchanged.
+**Context:** `src/runner.ts:48` writes `/tmp/runner-ready` with a predictable path and no `O_EXCL`, so a local attacker's pre-placed symlink would be followed (CodeQL alert #27 js/insecure-temporary-file). NOTE (deviation): the file was later relocated to `/var/arena/readiness/runner-ready` (per-pod emptyDir) because CodeQL also flags O_EXCL writes under /tmp.
 
 **Files:**
 
@@ -702,7 +702,7 @@ Expected: 3 FAIL — `markReady`/`unmarkReady` are not exported from `src/runner
 Replace the existing `markReady`/`unmarkReady` (lines 44-54):
 
 ```ts
-const READINESS_FILE = '/tmp/runner-ready';
+const READINESS_FILE = '/var/arena/readiness/runner-ready';
 
 /**
  * Write the readiness file. Created with O_EXCL ('wx') so a pre-placed
@@ -728,7 +728,7 @@ export function unmarkReady(filePath: string = READINESS_FILE): void {
 }
 ```
 
-Verify the internal call sites still read `markReady()` / `unmarkReady()` with no arguments (defaults keep `/tmp/runner-ready`).
+Verify the internal call sites still read `markReady()` / `unmarkReady()` with no arguments (defaults keep `/var/arena/readiness/runner-ready`).
 
 - [ ] **Step 4: Run tests to verify they pass**
 

@@ -74,6 +74,8 @@ spec:
               mountPath: /var/arena/outputs
             - name: tmp
               mountPath: /tmp
+            - name: readiness
+              mountPath: /var/arena/readiness
             - name: provider-keys
               mountPath: /etc/arena/secrets
               readOnly: true
@@ -91,17 +93,17 @@ spec:
               memory: 1Gi
           startupProbe:
             exec:
-              command: ["test", "-f", "/tmp/runner-ready"]
+              command: ["test", "-f", "/var/arena/readiness/runner-ready"]
             failureThreshold: 30
             periodSeconds: 2
           livenessProbe:
             exec:
-              command: ["test", "-f", "/tmp/runner-ready"]
+              command: ["test", "-f", "/var/arena/readiness/runner-ready"]
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             exec:
-              command: ["test", "-f", "/tmp/runner-ready"]
+              command: ["test", "-f", "/var/arena/readiness/runner-ready"]
             initialDelaySeconds: 5
             periodSeconds: 5
       topologySpreadConstraints:
@@ -117,6 +119,8 @@ spec:
           persistentVolumeClaim:
             claimName: outputs
         - name: tmp
+          emptyDir: {}
+        - name: readiness
           emptyDir: {}
         - name: provider-keys
           secret:
