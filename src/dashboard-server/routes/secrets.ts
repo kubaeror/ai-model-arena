@@ -15,6 +15,21 @@ function mask(v: string): string {
   return v.slice(0, 4) + '...' + v.slice(-4);
 }
 
+/**
+ * Reject envVar keys that could break .env parsing or inject lines into the
+ * file (bare-metal store). k8s API keys (alphanumeric, '-', '_', '.') and
+ * regex-special store keys remain settable — only whitespace, '=' and empty
+ * names are dangerous on the write path.
+ */
+export function isValidEnvVarName(name: string): boolean {
+  return name.length > 0 && !/[\s=]/.test(name);
+}
+
+/** Secret values must not contain line breaks (would break .env quoting). */
+export function hasControlChars(value: string): boolean {
+  return /[\r\n]/.test(value);
+}
+
 function initK8s(): void {
   if (k8sReady) return;
   if (!isKubernetes()) return;
@@ -83,6 +98,15 @@ export function createSecretsRouter(): Router {
 
     if (!envVar || typeof value !== 'string' || !value) {
       res.status(400).json({ error: 'envVar and value are required' });
+      return;
+    }
+
+    if (!isValidEnvVarName(envVar)) {
+      res.status(400).json({ error: 'Invalid envVar; must not contain whitespace or "="' });
+      return;
+    }
+    if (hasControlChars(value)) {
+      res.status(400).json({ error: 'Secret value must not contain newlines' });
       return;
     }
 
