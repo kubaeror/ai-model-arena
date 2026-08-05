@@ -1,4 +1,5 @@
 import type { Task, TaskQueue } from './types.js';
+import { DEFAULT_MAX_ATTEMPTS } from './types.js';
 import { queueDepth, dlqDepth } from '../observability/metrics.js';
 
 interface Waiter {
@@ -7,6 +8,7 @@ interface Waiter {
 }
 
 export class InMemoryQueue implements TaskQueue {
+  readonly maxAttempts = DEFAULT_MAX_ATTEMPTS;
   private pending: Task[] = [];
   private inFlight = new Map<string, Task>();
   private waiters: Waiter[] = [];
@@ -81,7 +83,7 @@ export class InMemoryQueue implements TaskQueue {
     if (t) {
       this.inFlight.delete(taskId);
       t.attempts += 1;
-      if (t.attempts >= 5) {
+      if (t.attempts >= this.maxAttempts) {
         this.dead.push(t);
         this.syncQueueDepth();
         this.syncDlqDepth();

@@ -64,6 +64,10 @@ export class RedisStreamQueue implements TaskQueue {
     } catch { /* best-effort — never fail queue ops */ }
   }
 
+  get maxAttempts(): number {
+    return this.config.maxAttempts;
+  }
+
   private startReclaimLoop(): void {
     if (this.reclaimStarted) return;
     this.reclaimStarted = true;

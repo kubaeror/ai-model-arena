@@ -1,12 +1,13 @@
 import os from 'node:os';
 import { z } from 'zod/v4';
+import { DEFAULT_MAX_ATTEMPTS } from './types.js';
 
 const RedisQueueConfigSchema = z.object({
   url: z.string(),
   streamPrefix: z.string().default('arena:tasks'),
   consumerGroup: z.string().default('arena-runners'),
   consumerName: z.string().default(os.hostname()),
-  maxAttempts: z.number().int().min(1).max(10).default(5),
+  maxAttempts: z.number().int().min(1).max(10).default(DEFAULT_MAX_ATTEMPTS),
   reclaimIdleMs: z.number().int().min(1_000).max(600_000).default(60_000),
   reclaimIntervalMs: z.number().int().min(1_000).max(300_000).default(30_000),
   providerFilter: z.string().optional(),
@@ -23,7 +24,7 @@ export function loadRedisQueueConfig(): RedisQueueConfig {
     streamPrefix: process.env.REDIS_STREAM_PREFIX ?? 'arena:tasks',
     consumerGroup: process.env.REDIS_CONSUMER_GROUP ?? 'arena-runners',
     consumerName: process.env.REDIS_CONSUMER_NAME ?? os.hostname(),
-    maxAttempts: Number(process.env.MAX_TASK_ATTEMPTS ?? 5),
+    maxAttempts: Number(process.env.MAX_TASK_ATTEMPTS ?? DEFAULT_MAX_ATTEMPTS),
     reclaimIdleMs: Number(process.env.REDIS_RECLAIM_IDLE_MS ?? 60_000),
     reclaimIntervalMs: Number(process.env.REDIS_RECLAIM_INTERVAL_MS ?? 30_000),
     providerFilter: process.env.ARENA_PROVIDER_FILTER ?? undefined,

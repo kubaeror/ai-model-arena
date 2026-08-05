@@ -6,7 +6,7 @@ import { outputRoot, dbPath, findProjectRoot } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState } from './db/query.js';
 import { resumeFrom } from './runner/checkpoint.js';
-import { createQueue, type TaskQueue, type Task } from './queue/index.js';
+import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun } from './db/model-resolver.js';
@@ -127,6 +127,11 @@ export async function runSuccessCriteria(
 
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const queue = opts.queue ?? createQueue();
+  // Mirrors each queue driver's nack dead-letter decision: a nack bumps the
+  // task's attempts and dead-letters at >= maxAttempts, so the attempt being
+  // nacked right now is terminal iff attempts + 1 >= maxAttempts.
+  const maxTaskAttempts = queue.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const isTerminalFailure = (attempts: number): boolean => attempts + 1 >= maxTaskAttempts;
   const ac = new AbortController();
   const signal = opts.signal ?? ac.signal;
   const logger = createLogger('ai-arena:runner');
@@ -330,6 +335,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
         taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
         taskCounted = true;
+        // nack requeues below the DLQ threshold — count only when it dead-letters.
+        if (isTerminalFailure(task!.attempts)) tasksFailed.inc();
         await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
         continue;
       }
@@ -619,7 +626,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
           if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
         }
-        tasksFailed.inc();
+        // nack requeues below the DLQ threshold — count only when it dead-letters.
+        if (isTerminalFailure(failedTask.attempts)) tasksFailed.inc();
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {

@@ -17,3 +17,4 @@ export function createQueue(provider?: string): TaskQueue {
 }
 
 export type { TaskQueue, Task } from './types.js';
+export { DEFAULT_MAX_ATTEMPTS } from './types.js';

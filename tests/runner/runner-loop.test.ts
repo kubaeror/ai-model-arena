@@ -13,6 +13,8 @@ import { ProviderRegistry } from '../../src/providers/index.js';
 import type { CreateAdapterOpts } from '../../src/providers/registry.js';
 import type { ModelAdapter } from '../../src/providers/adapters/base.js';
 import { CircuitBreaker } from '../../src/providers/circuit-breaker.js';
+import { tasksFailed } from '../../src/observability/metrics.js';
+import type { Task, TaskQueue } from '../../src/queue/types.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -36,6 +38,11 @@ async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 5000,
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+async function tasksFailedValue(): Promise<number> {
+  const snap = await tasksFailed.get();
+  return snap.values[0]?.value ?? 0;
+}
+
 function makeTask(overrides: Partial<Task>): Task {
   return {
     taskId: 't1',
@@ -48,6 +55,55 @@ function makeTask(overrides: Partial<Task>): Task {
     attempts: 0,
     ...overrides,
   } as Task;
+}
+
+/**
+ * Minimal queue that records nack/ack calls but never redelivers a nacked
+ * task. Stands in for InMemoryQueue/RedisStreamQueue redelivery so a test can
+ * observe a single sub-threshold failure without the queue retrying it into
+ * the DLQ (which is the queue's own, separately-tested behavior).
+ */
+class NoRetryQueue implements TaskQueue {
+  private pending: Task[] = [];
+  private inFlight = new Map<string, Task>();
+  nacked: Task[] = [];
+  acked: string[] = [];
+
+  async enqueue(task: Task): Promise<void> {
+    this.pending.push(task);
+  }
+
+  async dequeue(_timeoutMs?: number): Promise<Task | null> {
+    const t = this.pending.shift() ?? null;
+    if (t) this.inFlight.set(t.taskId, t);
+    else await new Promise((r) => setTimeout(r, 10));
+    return t;
+  }
+
+  async ack(taskId: string): Promise<void> {
+    this.inFlight.delete(taskId);
+    this.acked.push(taskId);
+  }
+
+  async nack(taskId: string, _reason?: string): Promise<void> {
+    const t = this.inFlight.get(taskId);
+    if (t) {
+      this.inFlight.delete(taskId);
+      this.nacked.push(t);
+    }
+  }
+
+  async size(): Promise<number> {
+    return this.pending.length;
+  }
+
+  async deadLetterSize(): Promise<number> {
+    return 0;
+  }
+
+  async deadLetterPeek(_limit: number): Promise<Task[]> {
+    return [];
+  }
 }
 
 test('runner dequeues and nacks an unresolvable model into the DLQ', async () => {
@@ -75,6 +131,8 @@ test('runner dequeues and nacks an unresolvable model into the DLQ', async () =>
   const ac = new AbortController();
   const runnerDone = startRunner({ queue, signal: ac.signal });
 
+  tasksFailed.reset();
+
   // attempts 4 → the nack bumps to 5 and lands in the DLQ.
   await queue.enqueue(makeTask({
     taskId: 'bad-model', sessionId: 'bad-session',
@@ -89,6 +147,7 @@ test('runner dequeues and nacks an unresolvable model into the DLQ', async () =>
     assert.equal(dlq.length, 1);
     assert.equal(dlq[0]?.taskId, 'bad-model');
     assert.equal(dlq[0]?.attempts, 5, 'nack should have bumped attempts to the DLQ threshold');
+    assert.equal(await tasksFailedValue(), 1, 'dead-lettered model-not-found must count as a terminal failure');
   } finally {
     ac.abort();
     await runnerDone;
@@ -207,6 +266,8 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
   const ac = new AbortController();
   const runnerDone = startRunner({ queue, signal: ac.signal });
 
+  tasksFailed.reset();
+
   await queue.enqueue(makeTask({
     taskId: 'no-key', sessionId: 'no-key-session',
     model: 'GPT-4o', provider: 'openai',
@@ -225,10 +286,83 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
     assert.equal(result.success, false);
     assert.ok(result.errors[0]?.includes('Missing API key'));
+    assert.equal(await tasksFailedValue(), 1, 'missing-key fast-fail (acked, never retried) must count as terminal');
   } finally {
     ac.abort();
     await runnerDone;
     await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner does not count a first-attempt failure below the DLQ threshold as tasksFailed', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  initDb(dbFile);
+  tasksFailed.reset();
+
+  const queue = new NoRetryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  // Scenario load throws before model resolution — lands in the catch block
+  // and is nacked. attempts 0 → the nack would requeue, not dead-letter, so
+  // it must NOT be counted as a terminal failure.
+  await queue.enqueue(makeTask({
+    taskId: 'transient', sessionId: 'transient-session',
+    scenario: 'no-such-scenario',
+    config: { modelRunId: 'run-transient', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 8000, 'task nacked');
+    assert.equal(await queue.deadLetterSize(), 0);
+    assert.equal(await tasksFailedValue(), 0, 'attempts below the DLQ threshold must not count as terminal');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner does not count a requeued model-not-found nack as tasksFailed', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  initDb(dbFile);
+  tasksFailed.reset();
+
+  const queue = new NoRetryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  // Model not found nacks like the catch block: with attempts 0 the nack
+  // requeues, so the increment must be gated on the DLQ threshold too.
+  await queue.enqueue(makeTask({
+    taskId: 'bad-model-transient', sessionId: 'bad-model-transient-session',
+    model: 'nope/nope', provider: 'unknown',
+    config: { modelRunId: 'run-bad-transient', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 8000, 'task nacked');
+    assert.equal(await tasksFailedValue(), 0, 'sub-threshold model-not-found nack must not count as terminal');
+  } finally {
+    ac.abort();
+    await runnerDone;
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
     process.env = { ...ORIG_ENV };
