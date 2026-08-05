@@ -99,7 +99,6 @@ test('loop detector flags 5+ consecutive identical tool calls', () => {
   const found = loopDetector(
     input({ toolCalls }),
     cfg({ loop: { enabled: true, consecutiveRepeats: 5, severity: 'medium' } }),
-    emptyHistory(),
   );
   assert.equal(found.length, 1);
   assert.equal(found[0]!.type, 'loop');
@@ -113,7 +112,6 @@ test('loop detector stays quiet below the consecutive threshold', () => {
   const found = loopDetector(
     input({ toolCalls }),
     cfg({ loop: { enabled: true, consecutiveRepeats: 5, severity: 'medium' } }),
-    emptyHistory(),
   );
   assert.equal(found.length, 0);
 });

@@ -44,7 +44,6 @@ const queryClient = new QueryClient({
 
 function Shell() {
   const { isAuthenticated } = useAuth();
-  const palette = useCommandPalette();
 
   return (
     <BrowserRouter>
@@ -53,68 +52,78 @@ function Shell() {
           <Login />
         </Suspense>
       ) : (
-        <LiveProvider>
-          <SettingsProvider>
-            <ToastProvider>
-              <ScrollToTop />
-              <a href="#main-content" className="sr-only focus:not-sr-only">
-                Skip to main content
-              </a>
-              <Nav />
-              <Suspense fallback={<PageShell title="" loading />}>
-                <main
-                  id="main-content"
-                  tabIndex={-1}
-                  className="mx-auto max-w-1600 px-3 md:px-6 py-4 md:py-6 animate-fade-in"
-                >
-                  <ErrorBoundary>
-                    <Routes>
-                      <Route path="/" element={<Home />} />
-                      <Route path="/catalog" element={<Catalog />} />
-                      <Route path="/catalog/:id" element={<ModelDetail />} />
-                      <Route path="/leaderboard" element={<Leaderboard />} />
-                      <Route path="/compare" element={<Compare />} />
-                      <Route path="/ops" element={<Ops />} />
-                      <Route path="/observability" element={<Observability />} />
-                      <Route path="/runs/:runId" element={<RunDetail />} />
-                      <Route path="/runners" element={<Runners />} />
-                      <Route path="/prompts" element={<Prompts />} />
-                      <Route path="/queues" element={<Queues />} />
-                      <Route path="/output-mappings" element={<OutputMappings />} />
-                      <Route path="/scenarios" element={<Scenarios />} />
-                      <Route path="/anomalies" element={<Anomalies />} />
-                      <Route path="/comparisons" element={<Comparisons />} />
-                      <Route path="/costs" element={<CostLeaderboard />} />
-                      <Route path="/budget" element={<Budget />} />
-                      <Route path="/schedules" element={<Schedules />} />
-                      <Route path="/regression" element={<Regression />} />
-                      <Route path="/sessions" element={<Sessions />} />
-                      <Route path="/sessions/:sessionId" element={<SessionDetail />} />
-                      <Route path="/files" element={<Files />} />
-                      <Route path="/audit" element={<Audit />} />
-                      <Route path="/settings" element={<Settings />} />
-                      <Route path="*" element={<NotFound />} />
-                    </Routes>
-                  </ErrorBoundary>
-                </main>
-              </Suspense>
-              <CommandPalette
-                open={palette.open}
-                onClose={() => palette.setOpen(false)}
-                query={palette.query}
-                onQueryChange={palette.setQuery}
-                filtered={palette.filtered}
-                selectedIndex={palette.selectedIndex}
-                selected={palette.selected}
-                inputRef={palette.inputRef}
-                onKeyDown={palette.handleKeyDown}
-                onSelect={palette.execute}
-              />
-            </ToastProvider>
-          </SettingsProvider>
-        </LiveProvider>
+        <ShellContent />
       )}
     </BrowserRouter>
+  );
+}
+
+// useCommandPalette() calls useNavigate(), which requires Router context —
+// it must live under <BrowserRouter>, not in Shell's own render.
+function ShellContent() {
+  const palette = useCommandPalette();
+
+  return (
+    <LiveProvider>
+      <SettingsProvider>
+        <ToastProvider>
+          <ScrollToTop />
+          <a href="#main-content" className="sr-only focus:not-sr-only">
+            Skip to main content
+          </a>
+          <Nav />
+          <Suspense fallback={<PageShell title="" loading />}>
+            <main
+              id="main-content"
+              tabIndex={-1}
+              className="mx-auto max-w-1600 px-3 md:px-6 py-4 md:py-6 animate-fade-in"
+            >
+              <ErrorBoundary>
+                <Routes>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/catalog" element={<Catalog />} />
+                  <Route path="/catalog/:id" element={<ModelDetail />} />
+                  <Route path="/leaderboard" element={<Leaderboard />} />
+                  <Route path="/compare" element={<Compare />} />
+                  <Route path="/ops" element={<Ops />} />
+                  <Route path="/observability" element={<Observability />} />
+                  <Route path="/runs/:runId" element={<RunDetail />} />
+                  <Route path="/runners" element={<Runners />} />
+                  <Route path="/prompts" element={<Prompts />} />
+                  <Route path="/queues" element={<Queues />} />
+                  <Route path="/output-mappings" element={<OutputMappings />} />
+                  <Route path="/scenarios" element={<Scenarios />} />
+                  <Route path="/anomalies" element={<Anomalies />} />
+                  <Route path="/comparisons" element={<Comparisons />} />
+                  <Route path="/costs" element={<CostLeaderboard />} />
+                  <Route path="/budget" element={<Budget />} />
+                  <Route path="/schedules" element={<Schedules />} />
+                  <Route path="/regression" element={<Regression />} />
+                  <Route path="/sessions" element={<Sessions />} />
+                  <Route path="/sessions/:sessionId" element={<SessionDetail />} />
+                  <Route path="/files" element={<Files />} />
+                  <Route path="/audit" element={<Audit />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </ErrorBoundary>
+            </main>
+          </Suspense>
+          <CommandPalette
+            open={palette.open}
+            onClose={() => palette.setOpen(false)}
+            query={palette.query}
+            onQueryChange={palette.setQuery}
+            filtered={palette.filtered}
+            selectedIndex={palette.selectedIndex}
+            selected={palette.selected}
+            inputRef={palette.inputRef}
+            onKeyDown={palette.handleKeyDown}
+            onSelect={palette.execute}
+          />
+        </ToastProvider>
+      </SettingsProvider>
+    </LiveProvider>
   );
 }
 

@@ -166,7 +166,6 @@ test('queryModelRuntimeStats filters and limits', async () => {
   try {
     await seedCatalog();
     const db = getDb();
-    const base = new Date().toISOString();
     for (let i = 0; i < 5; i++) {
       db.prepare(`INSERT INTO model_runtime_stats (model_id, run_id, tps, success, measured_at) VALUES (?, ?, ?, 1, ?)`)
         .run('openai/gpt-4o', `run-${i}`, i + 1, new Date(Date.now() - i * 60000).toISOString());

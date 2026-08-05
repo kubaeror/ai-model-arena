@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BaseAdapter, HttpError } from '../../src/providers/adapters/base.js';
+import { HttpError } from '../../src/providers/adapters/base.js';
 import { BedrockAdapter } from '../../src/providers/adapters/bedrock.js';
 import type { ProviderDescriptor } from '../../src/providers/types.js';
 
@@ -79,7 +79,7 @@ test('BedrockAdapter gateway mode tolerates malformed tool call arguments JSON',
   try {
     const result = await adapter.sendMessage([{ role: 'user', content: 'x' }], []);
     assert.equal(result.toolCalls.length, 1);
-    assert.deepEqual(result.toolCalls[0].arguments, {});
+    assert.deepEqual(result.toolCalls[0]!.arguments, {});
   } finally {
     globalThis.fetch = origFetch;
   }

@@ -4,7 +4,8 @@ import { initDb, closeDb } from '../../src/db/client.js';
 import { createSessionStore } from '../../src/session/store.js';
 import { resumeFrom } from '../../src/runner/checkpoint.js';
 import { runAgentLoop } from '../../src/agent-loop/loop.js';
-import type { ModelAdapter, ChatMessage } from '../../src/types.js';
+import type { ModelAdapter } from '../../src/providers/adapters/base.js';
+import type { ChatMessage } from '../../src/types.js';
 import type { ConversationLogger } from '../../src/logger/conversation-logger.js';
 
 function stubLogger() {

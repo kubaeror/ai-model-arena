@@ -7,7 +7,7 @@ Ops console / observability tool. Dark, dense, monospace-forward. Single acid-gr
 ## Color tokens
 
 | Token | CSS var | Light | Dark (default) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | bg-0 (page) | `--bg-0` | `#FFFFFF` | `#0A0E0C` |
 | bg-1 (panel) | `--bg-1` | `#F5F7F5` | `#11161300` |
 | bg-2 (hover) | `--bg-2` | `#E8ECE9` | `#1A211D` |
@@ -39,7 +39,7 @@ Font smoothing on root: `-webkit-font-smoothing: antialiased; -moz-osx-font-smoo
 ## Motion
 
 | Frequency | Examples | Animation |
-|---|---|---|
+| --- | --- | --- |
 | 100+/day | nav, tab switch | none, instant |
 | tens/day | hover | 80ms |
 | occasional | panel enter, modal | 150ms ease-out `cubic-bezier(0.23, 1, 0.32, 1)` |

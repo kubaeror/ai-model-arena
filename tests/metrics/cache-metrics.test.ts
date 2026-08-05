@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { extractCacheMetrics } from '../../src/metrics/cache-metrics.js';
-import type { TokenUsage } from '../../src/types.js';
 
 test('extractCacheMetrics returns zeros when usage has no cache fields', () => {
   const m = extractCacheMetrics({ prompt: 100, completion: 50, total: 150 });

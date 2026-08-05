@@ -1,0 +1,159 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# e2e overlay — identical to overlays/dev EXCEPT arena-secrets-sealed.yaml is
+# excluded and replaced by plain dev Secrets (secrets.yaml).
+#
+# Exclusion mechanism (documented choice): kustomize has no way to remove a
+# resource from an included base directory at FILE granularity — the loader
+# rejects file references outside the overlay root ("must build at directory"),
+# so a fork of base's resource list would require duplicating ~20 manifests.
+# The documented approach for deleting a base resource is a strategic-merge
+# patch with `$patch: delete`, which kustomize applies at the object level and
+# works for CRD kinds like SealedSecret (verified on kustomize v5.8.1). It also
+# stays auto-synced with base additions. One delete patch per SealedSecret.
+#
+# T2 note: label policy/image-policy: exempt mirrors overlays/dev so the
+# image-policy.rego conftest rule allows :latest in e2e (prod is enforced).
+
+namespace: ai-arena
+
+labels:
+  # e2e deployments are exempt from image-policy.rego (they legitimately use
+  # newTag: latest). prod has no such label and is always enforced.
+  # part-of/managed-by come from k8s/base's own kustomization (same as dev).
+  - pairs:
+      policy/image-policy: exempt
+
+resources:
+  - ../../base
+  - dev-pv.yaml
+  - secrets.yaml
+
+images:
+  - name: ghcr.io/kubaeror/ai-model-arena-runner
+    newTag: latest
+
+patches:
+  # --- drop the prod-keyed SealedSecrets (see header) ---
+  - target:
+      kind: SealedSecret
+      name: arena-db-auth
+    patch: |-
+      apiVersion: bitnami.com/v1alpha1
+      kind: SealedSecret
+      metadata:
+        name: arena-db-auth
+        namespace: ai-arena
+      $patch: delete
+  - target:
+      kind: SealedSecret
+      name: postgres-auth
+    patch: |-
+      apiVersion: bitnami.com/v1alpha1
+      kind: SealedSecret
+      metadata:
+        name: postgres-auth
+        namespace: ai-arena
+      $patch: delete
+  - target:
+      kind: SealedSecret
+      name: dashboard-auth
+    patch: |-
+      apiVersion: bitnami.com/v1alpha1
+      kind: SealedSecret
+      metadata:
+        name: dashboard-auth
+        namespace: ai-arena
+      $patch: delete
+  # --- dev parity: pull images if present locally (matches overlays/dev) ---
+  - target:
+      kind: Deployment
+      name: dashboard
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: dashboard
+      spec:
+        template:
+          spec:
+            initContainers:
+              - name: db-migrate
+                imagePullPolicy: IfNotPresent
+            containers:
+              - name: dashboard
+                imagePullPolicy: IfNotPresent
+  - target:
+      kind: Deployment
+      labelSelector: app=runner
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: runner
+      spec:
+        template:
+          spec:
+            initContainers:
+              - name: db-migrate
+                imagePullPolicy: IfNotPresent
+            containers:
+              - name: runner
+                imagePullPolicy: IfNotPresent
+  - target:
+      kind: CronJob
+      name: arena-scheduler
+    patch: |-
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: arena-scheduler
+      spec:
+        jobTemplate:
+          spec:
+            template:
+              spec:
+                initContainers:
+                  - name: db-migrate
+                    imagePullPolicy: IfNotPresent
+                containers:
+                  - name: scheduler
+                    imagePullPolicy: IfNotPresent
+  # Pin outputs to NO storage class: kind >= v0.23 node images ship a default
+  # local-path StorageClass (RWO-only, and its PVs carry no labels), which
+  # would otherwise default this RWX PVC to it and strand it Pending forever —
+  # the selector below can only match the overlay's own hostPath PV.
+  - target:
+      kind: PersistentVolumeClaim
+      name: outputs
+    patch: |-
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: outputs
+      spec:
+        storageClassName: ""
+        selector:
+          matchLabels:
+            storage-tier: outputs
+  # Relocate PGDATA under the mount: the postgres:16 entrypoint chmods the data
+  # dir, and on kind's local-path volume the mount root is root-owned, so a
+  # non-root postgres (uid 999, fsGroup-only group write) cannot chmod it and
+  # initdb dies. A subdir the entrypoint creates itself is owned by uid 999.
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+      spec:
+        template:
+          spec:
+            containers:
+              - name: postgres
+                env:
+                  - name: PGDATA
+                    value: /var/lib/postgresql/data/pgdata

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { OpenAICompatAdapter } from '../../../src/providers/adapters/openai-compat.js';
 import type { ProviderDescriptor } from '../../../src/providers/types.js';
+import type { FetchInput } from '../../helpers/fetch-types.js';
 
 const openaiDescriptor: ProviderDescriptor = {
   id: 'openai', name: 'OpenAI', apiBase: 'https://api.openai.com/v1',
@@ -16,7 +17,7 @@ test('OpenAICompatAdapter.sendMessage parses chat completion response', async ()
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   let capturedHeaders: Record<string, string> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedHeaders = init?.headers as Record<string, string>;
     return mockResponse({
       choices: [{ message: { role: 'assistant', content: 'Hello' }, finish_reason: 'stop' }],
@@ -53,9 +54,9 @@ test('OpenAICompatAdapter.sendMessage parses tool_calls', async () => {
     const result = await adapter.sendMessage([{ role: 'user', content: 'read file' }], []);
     assert.equal(result.text, null);
     assert.equal(result.toolCalls.length, 1);
-    assert.equal(result.toolCalls[0].id, 'call_1');
-    assert.equal(result.toolCalls[0].name, 'read_file');
-    assert.deepEqual(result.toolCalls[0].arguments, { path: 'a.ts' });
+    assert.equal(result.toolCalls[0]!.id, 'call_1');
+    assert.equal(result.toolCalls[0]!.name, 'read_file');
+    assert.deepEqual(result.toolCalls[0]!.arguments, { path: 'a.ts' });
     assert.equal(result.stopReason, 'tool_calls');
   } finally {
     globalThis.fetch = origFetch;
@@ -84,7 +85,7 @@ test('OpenAICompatAdapter.sendMessage maps reasoning effort into reasoning_effor
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
   }) as typeof fetch;
@@ -100,7 +101,7 @@ test('OpenAICompatAdapter.sendMessage ignores non-effort reasoning options', asy
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
   }) as typeof fetch;
@@ -116,7 +117,7 @@ test('OpenAICompatAdapter.sendMessage leaves body unchanged when reasoning is ab
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
   }) as typeof fetch;
@@ -168,7 +169,7 @@ test('OpenAICompatAdapter tolerates non-JSON tool call arguments', async () => {
   try {
     const result = await adapter.sendMessage([{ role: 'user', content: 'x' }], []);
     assert.equal(result.toolCalls.length, 1);
-    assert.deepEqual(result.toolCalls[0].arguments, {});
+    assert.deepEqual(result.toolCalls[0]!.arguments, {});
   } finally {
     globalThis.fetch = origFetch;
   }
@@ -182,7 +183,7 @@ test('OpenAICompatAdapter x-api-key scheme sends the key even without headerName
   const adapter = new OpenAICompatAdapter(desc, 'model-1', { apiKey: 'secret-key' });
   let capturedHeaders: Record<string, string> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedHeaders = init?.headers as Record<string, string>;
     return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
   }) as typeof fetch;
@@ -210,7 +211,7 @@ test('OpenAICompatAdapter serializes tools and tool-call messages into the body'
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
   }) as typeof fetch;
@@ -251,7 +252,7 @@ test('OpenAICompatAdapter custom headerName sends the key for non-bearer schemes
   const adapter = new OpenAICompatAdapter(desc, 'model-2', { apiKey: 'secret-2' });
   let capturedHeaders: Record<string, string> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedHeaders = init?.headers as Record<string, string>;
     return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
   }) as typeof fetch;

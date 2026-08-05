@@ -53,11 +53,10 @@ test('InMemoryQueue: nack moves to dead-letter after 5 attempts', async () => {
 
 test('InMemoryQueue: dequeue blocks until task arrives', async () => {
   const q = new InMemoryQueue();
-  let result: Task | null = null;
-  const promise = q.dequeue(5000).then(t => { result = t; });
+  const promise = q.dequeue(5000);
   // enqueue after a short delay while dequeue is waiting
   setTimeout(() => q.enqueue(mkTask('t4')), 50);
-  await promise;
+  const result = await promise;
   assert.ok(result);
   assert.equal(result!.taskId, 't4');
   await q.close?.();

@@ -253,7 +253,6 @@ test('budget_exceeded dispatch helper (during-run path) reaches registered webho
   });
 
   await dispatchBudgetExceeded('gpt-4o', {
-    allowed: false,
     reason: 'Daily budget exceeded for gpt-4o',
     spentUsd: 9,
     limitUsd: 5,

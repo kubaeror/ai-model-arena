@@ -6,11 +6,11 @@ channels:
     type: slack
     webhookUrl: ${SLACK_WEBHOOK_URL}
     # Slack incoming webhook URL - set via environment variable
-    
+
   slack-alerts:
     type: slack
     webhookUrl: ${SLACK_ALERTS_WEBHOOK_URL}
-    
+
   discord-arena:
     type: discord
     webhookUrl: ${DISCORD_WEBHOOK_URL}

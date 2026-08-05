@@ -21,8 +21,8 @@ test('upsertCustomProvider inserts a new custom provider row', async () => {
     });
     const list = await listCustomProviders();
     assert.equal(list.length, 1);
-    assert.equal(list[0].id, 'my-endpoint');
-    assert.equal(list[0].is_builtin, 0);
+    assert.equal(list[0]!.id, 'my-endpoint');
+    assert.equal(list[0]!.is_builtin, 0);
   } finally {
     closeDb();
     cleanup();
@@ -36,8 +36,8 @@ test('upsertCustomProvider updates existing by id', async () => {
     await upsertCustomProvider({ id: 'p1', name: 'New', apiBase: 'http://x/v1', adapter: 'openai-compat', authScheme: 'bearer' });
     const list = await listCustomProviders();
     assert.equal(list.length, 1);
-    assert.equal(list[0].name, 'New');
-    assert.equal(list[0].api_base, 'http://x/v1');
+    assert.equal(list[0]!.name, 'New');
+    assert.equal(list[0]!.api_base, 'http://x/v1');
   } finally {
     closeDb();
     cleanup();

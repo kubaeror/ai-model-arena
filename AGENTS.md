@@ -1,10 +1,12 @@
 # AI Model Arena - Agent Instructions
 
 ## Project Overview
+
 Multi-model agentic coding arena. TypeScript/Node.js monorepo with React dashboard.
 Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscaling. Each runner pulls tasks, runs an agentic coding loop with sandboxed tools, and checkpoints progress to Postgres/SQLite.
 
 ## Tech Stack
+
 - **Runtime**: Node.js >= 22, TypeScript (ESM, strict)
 - **Backend**: Express.js REST API + WebSocket (port 4000)
 - **Frontend**: React 18 + Vite + TanStack Query + Tailwind CSS + CodeMirror
@@ -15,6 +17,7 @@ Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscalin
 - **Logging**: Pino (structured JSON)
 
 ## Key Architecture
+
 - `src/cli.ts` — CLI entry (commander)
 - `src/runner.ts` — Long-lived queue-driven runner
 - `src/runner-entry.ts` — Container entrypoint (CALLS startRunner())
@@ -32,6 +35,7 @@ Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscalin
 - `configs/` — YAML model definitions + scenario configs
 
 ## Development Commands
+
 - `npm run dashboard:dev` — Start API + React dev server concurrently
 - `npm run dev` — Run CLI via tsx (no build needed)
 - `npm run build` — Compile TypeScript
@@ -42,11 +46,13 @@ Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscalin
 - `npm run db:migrate` — Apply Drizzle migrations
 
 ## Deployment
+
 - `docker compose up -d` — Local dev (Postgres + Redis + runner + dashboard)
 - `minikube start && bash scripts/k8s/bootstrap.sh && bash scripts/k8s/deploy.sh` — k8s deploy
 - `minikube service dashboard -n ai-arena --url` — Access dashboard on minikube
 
 ## Code Conventions
+
 - ESM imports only (`import`/`export`)
 - Zod schemas for runtime validation
 - All config via environment variables (never hardcode API keys)

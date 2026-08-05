@@ -6,6 +6,7 @@ import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
 import { fetchSync } from '../../src/catalog/sync.js';
 import { fetchBenchmarks } from '../../src/catalog/benchmarks.js';
+import type { FetchInput } from '../helpers/fetch-types.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -44,7 +45,7 @@ function modelbenchPage(page: number, limit: number, total: number, pageModels: 
 }
 
 function mockFetchImpl(urlMap: Record<string, () => unknown>): typeof fetch {
-  return (async (input: RequestInfo | URL) => {
+  return (async (input: FetchInput) => {
     const u = String(input);
     for (const [key, factory] of Object.entries(urlMap)) {
       if (u.includes(key)) {
@@ -89,7 +90,7 @@ test('fetchBenchmarks modelbench paginates past the 20-page cap and ingests all 
   const fullPages = 20;
   const lastCount = 10;
   const total = fullPages * limit + lastCount;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (input: FetchInput) => {
     const u = String(input);
     if (u.includes('models.dev/api.json')) {
       return { status: 200, ok: true, json: async () => MODELS_DEV } as unknown as Response;
@@ -112,7 +113,7 @@ test('fetchBenchmarks modelbench paginates past the 20-page cap and ingests all 
     assert.equal(result.ok, true);
     assert.equal(result.count, total * 5);
     const rows = getDb().prepare('SELECT COUNT(DISTINCT benchmark) AS b FROM benchmarks').all() as Array<{ b: number }>;
-    assert.equal(rows[0].b, 5);
+    assert.equal(rows[0]!.b, 5);
   } finally {
     globalThis.fetch = origFetch;
     closeDb();

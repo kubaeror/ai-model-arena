@@ -1,0 +1,6 @@
+# conftest configuration (applied automatically when running `conftest test`
+# from the repository root, and by the docker://openpolicyagent/conftest
+# action in .github/workflows/pr-checks.yaml).
+namespace: main
+input_format: kubernetes
+policy: policy/k8s

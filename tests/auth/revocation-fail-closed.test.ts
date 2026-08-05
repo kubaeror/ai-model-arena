@@ -28,20 +28,6 @@ function mockReq(token: string | null): unknown {
   return { headers, cookies: {} };
 }
 
-function runAuth(token: string | null): { statusCode: number; body: unknown; calledNext: boolean } {
-  const state = { statusCode: 0, body: undefined as unknown, calledNext: false };
-  const req = mockReq(token);
-  const res = {
-    status(code: number) { state.statusCode = code; return this; },
-    json(body: unknown) { state.body = body; return this; },
-  };
-  const cfg = loadAuthConfig();
-  const middleware = requireAuth(cfg);
-  // requireAuth returns an async middleware — call and handle the promise.
-  middleware(req as never, res as never, (() => { state.calledNext = true; }) as never);
-  return { statusCode: state.statusCode, body: state.body, calledNext: state.calledNext };
-}
-
 async function runAuthAsync(token: string | null): Promise<{ statusCode: number; body: unknown; calledNext: boolean }> {
   const state = { statusCode: 0, body: undefined as unknown, calledNext: false };
   const req = mockReq(token);

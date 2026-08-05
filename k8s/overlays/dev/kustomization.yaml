@@ -3,6 +3,12 @@ kind: Kustomization
 
 namespace: ai-arena
 
+labels:
+  # Dev deployments are exempt from image-policy.rego (they legitimately use
+  # newTag: latest). prod has no such label and is always enforced.
+  - pairs:
+      policy/image-policy: exempt
+
 resources:
   - ../../base
   - dev-pv.yaml

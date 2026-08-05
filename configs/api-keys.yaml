@@ -18,7 +18,7 @@ apiKeys:
       - analytics:read
       - export:read
     rateLimit: 100
-    
+
   - key: ${ARENA_API_KEY_READONLY}
     name: Read-only monitoring
     permissions:

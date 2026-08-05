@@ -28,8 +28,8 @@ test('syncSchedulesToDb mirrors YAML schedules idempotently', async () => {
 
   let rows = await listSchedules();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].id, 's1');
-  assert.equal(rows[0].enabled, 1);
+  assert.equal(rows[0]!.id, 's1');
+  assert.equal(rows[0]!.enabled, 1);
 
   await syncSchedulesToDb(configPath);
   rows = await listSchedules();
@@ -50,7 +50,7 @@ test('syncSchedulesToDb upserts hand-edited YAML changes into the DB', async () 
 
   loadSchedulesConfig(configPath);
   await syncSchedulesToDb(configPath);
-  let row = (await listSchedules())[0];
+  let row = (await listSchedules())[0]!;
   assert.equal(row.id, 's1');
   assert.equal(row.enabled, 1);
   assert.equal(row.scenario, 'x');
@@ -65,7 +65,7 @@ test('syncSchedulesToDb upserts hand-edited YAML changes into the DB', async () 
   resetSchedulesCache(); // simulate restart: config reloaded from disk
   await syncSchedulesToDb(configPath);
 
-  row = (await listSchedules())[0];
+  row = (await listSchedules())[0]!;
   assert.equal(row.id, 's1', 'upsert keeps the single row');
   assert.equal((await listSchedules()).length, 1);
   assert.equal(row.enabled, 0, 'hand-edited enabled=false propagates');
@@ -88,16 +88,16 @@ test('setScheduleEnabled persists enabled flag to YAML, memory, and DB', async (
 
   loadSchedulesConfig(configPath);
   await syncSchedulesToDb(configPath);
-  assert.equal((await listSchedules())[0].enabled, 1);
+  assert.equal((await listSchedules())[0]!.enabled, 1);
 
   const ok = await setScheduleEnabled(configPath, 's1', false);
   assert.equal(ok, true);
   assert.equal(getSchedule('s1')?.enabled, false, 'in-memory schedule reflects disabled');
 
   const yaml = load(fs.readFileSync(configPath, 'utf8')) as { schedules: Array<{ enabled: boolean }> };
-  assert.equal(yaml.schedules[0].enabled, false, 'YAML file persists enabled=false');
+  assert.equal(yaml.schedules[0]!.enabled, false, 'YAML file persists enabled=false');
 
-  assert.equal((await listSchedules())[0].enabled, 0, 'DB row reflects disabled');
+  assert.equal((await listSchedules())[0]!.enabled, 0, 'DB row reflects disabled');
 
   const okMissing = await setScheduleEnabled(configPath, 'does-not-exist', false);
   assert.equal(okMissing, false, 'unknown id returns false');
@@ -105,7 +105,7 @@ test('setScheduleEnabled persists enabled flag to YAML, memory, and DB', async (
   const okBack = await setScheduleEnabled(configPath, 's1', true);
   assert.equal(okBack, true);
   assert.equal(getSchedule('s1')?.enabled, true);
-  assert.equal((await listSchedules())[0].enabled, 1, 're-enable persists');
+  assert.equal((await listSchedules())[0]!.enabled, 1, 're-enable persists');
 
   fs.rmSync(dir, { recursive: true, force: true });
 });

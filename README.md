@@ -33,7 +33,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 ## Architecture
 
-```
+```text
 ┌──────────────┐     ┌────────────────────────────────────────────────────┐
 │   CLI / API   │────▶│           Queue (Redis Streams / In-Memory)        │
 └──────────────┘     └──────────────────┬─────────────────────────────────┘
@@ -72,7 +72,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 ### Key modules
 
 | Module | Path | Purpose |
-|--------|------|---------|
+| -------- | ------ | --------- |
 | **CLI** | `src/cli.ts` | Commander-based CLI: `run`, `status`, `cleanup`, `regress`, `schedule`, `export`, `diff`, `budget`. No-args starts the dashboard server. |
 | **Runner** | `src/runner.ts` | Long-lived queue consumer: dequeue → agent loop → checkpoint → ack/nack |
 | **Runner entry** | `src/runner-entry.ts` | Container entrypoint (starts OTel + runner) |
@@ -166,7 +166,7 @@ refuses to run without it).
 
 ## CLI reference
 
-```
+```text
 ai-arena run     -s <scenario> -m <model1,model2,...>  Run a scenario
 ai-arena status                                         List runs
 ai-arena diff    <runId> [-m <model>]                   View run diff
@@ -192,7 +192,7 @@ All CLI commands are also available through the dashboard UI:
 ### Run options
 
 | Flag | Description |
-|------|-------------|
+| ------ | ------------- |
 | `-s, --scenario <name>` | Scenario name from `configs/scenarios/<name>.yaml` or a `.yaml` path |
 | `-m, --models <list>` | Comma-separated model names from catalog |
 | `--timeout <minutes>` | Overall wait timeout (default: 30) |
@@ -204,7 +204,7 @@ All CLI commands are also available through the dashboard UI:
 Each model run writes to `outputs/<model>/<scenario>_<timestamp>/`:
 
 | File | Contents |
-|------|----------|
+| ------ | ---------- |
 | `conversation.json` | Full structured transcript: messages, tool calls/args, tool results, token usage per turn |
 | `report.md` | Human-readable summary with per-turn timeline |
 | `result.json` | Machine-readable outcome (turns, tokens, cost, stop reason, success) |
@@ -250,7 +250,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 ### Configuration files (`configs/`)
 
 | File | Purpose |
-|------|---------|
+| ------ | --------- |
 | `scenarios/<name>.yaml` | Scenario definitions (prompt, task, success criteria, starter files) |
 | `scenarios/templates/<name>/` | Starter files seeded into sandboxes |
 | `budget.yaml` | Global + per-model budget limits |
@@ -345,13 +345,19 @@ Observability stack (Prometheus, Grafana, Loki, Promtail, OTel Collector) is in 
 The arena uses a **dual approach** to secrets in Kubernetes:
 
 | Category | Method | Managed By | ArgoCD |
-|----------|--------|------------|--------|
+| ---------- | -------- | ------------ | -------- |
 | **Infrastructure** (DB credentials, Redis password, JWT secret) | [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) — encrypted at rest in git, decrypted by in-cluster controller | `kubeseal` CLI → git commit | Yes |
 | **Provider API keys** (OpenAI, Anthropic, Google, etc.) | Dashboard UI patches the `provider-keys` Secret via k8s API | Dashboard (Settings → API Keys) | No |
 
 Infra secrets are consumed as `envFrom.secretRef`. Provider keys are mounted as files at `/etc/arena/secrets/` in runner pods — kubelet auto-refreshes the mount within ~60s of dashboard updates, so no pod restart is needed.
 
 See [k8s/README.md](k8s/README.md#secrets-management) for the full sealing workflow and rotation procedures.
+
+## CI/CD
+
+GitHub Actions + Argo CD GitOps: PRs run hardened validation (`pr-checks`: typecheck, lint, tests+coverage, kubeconform, conftest, hadolint, actionlint, compose), main builds multi-arch images with SBOM, Trivy scan, cosign signing and SLSA attestation, and `v*` tags trigger GitHub Releases that bump the prod overlay — Argo CD (`k8s/argocd/ai-arena-app.yaml`, selfHeal, prune:false) syncs production from `main`.
+
+See [docs/CI-CD.md](docs/CI-CD.md) for the pipeline diagram, release runbook, nightly runs, local validation commands, and required repo settings.
 
 ---
 
@@ -374,7 +380,7 @@ Prometheus metrics are exposed by the dashboard server for runner health, queue 
 After each run, anomaly detectors check for:
 
 | Type | Detection method |
-|------|------------------|
+| ------ | ------------------ |
 | `latency` | Single tool/call duration exceeds historical p95 (z-score ≥ threshold) |
 | `loop` | Same tool+args repeated consecutively ≥ N times |
 | `token_spike` | Total tokens exceed N× historical average |
@@ -414,7 +420,7 @@ npm run dashboard:start  # Serve production build from Express
 
 ## Project structure
 
-```
+```text
 ai-model-arena/
 ├── src/
 │   ├── cli.ts                    # CLI entry (commander)

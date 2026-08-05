@@ -57,8 +57,8 @@ export function computeAverageScore(scores: JudgeScore[]): number {
   if (scores.length === 0) return 0;
   const allWeighted = scores.every((s) => typeof s.maxScore === 'number' && s.maxScore > 0);
   if (allWeighted) {
-    const weighted = scores.reduce((sum, s) => sum + s.score * s.maxScore, 0);
-    const weights = scores.reduce((sum, s) => sum + s.maxScore, 0);
+    const weighted = scores.reduce((sum, s) => sum + s.score * s.maxScore!, 0);
+    const weights = scores.reduce((sum, s) => sum + s.maxScore!, 0);
     return weighted / weights;
   }
   return scores.reduce((sum, s) => sum + s.score, 0) / scores.length;

@@ -22,7 +22,7 @@
 
 ---
 
-# Phase 0 — Green baseline
+## Phase 0 — Green baseline
 
 ### Task 0.1: Record baseline
 
@@ -54,11 +54,12 @@ git commit -am "chore: record pre-refactor baseline" --allow-empty
 
 ---
 
-# Phase 1 — Dead code sweep
+## Phase 1 — Dead code sweep
 
 ### Task 1.1: Delete dead files (no behavior loss)
 
 **Files:**
+
 - Delete: `src/providers/model-router.ts`, `src/providers/health-probe.ts`
 - Delete: `src/sandbox/signing.ts`
 - Delete: `src/security/approvals.ts`
@@ -74,6 +75,7 @@ git commit -am "chore: record pre-refactor baseline" --allow-empty
 - Delete: `docs/plans/secrets-management.md` only if referenced nowhere (KEEP — it is a live reference doc; skip this bullet)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: after this task `evaluation/index.ts` may be empty or dead — delete it too, then fix the import in `tests/`/`src` (Step 3).
 
@@ -124,11 +126,13 @@ rm src/providers/model-router.ts src/providers/health-probe.ts \
 **Rationale:** `src/worker.ts` (430L) is the legacy PM2 path with zero importers, but it holds 4 features the live `runner.ts` dropped: success-criteria validation, git diff artifact, `result.json`/`report.md` writers, and the early API-key check. Port them, then delete.
 
 **Files:**
+
 - Modify: `src/runner.ts`
 - Modify: `src/sandbox/git.ts` (delete `getLog` if truly uncalled after port — verify)
 - Delete: `src/worker.ts`
 
 **Interfaces:**
+
 - Consumes: `src/worker.ts` `runSuccessCriteria` (worker.ts:69-129), `SandboxGit.init/commitFinal/generateDiff` (`src/sandbox/git.ts`), `writeDiffPatch`, `writeResultJson`/`writeReport` (`src/logger/result-logger.js`, `src/logger/report-logger.js`), `computeCost` (`src/cost-tracking/index.js`).
 - Produces: `runSuccessCriteria(scenario, sandboxDir, ctx)` and `finalizeArtifacts(...)` helpers exported or module-local in `runner.ts`; a task that runs the loop AND writes `result.json`, `report.md`, `diff.patch`, `judge_score.json` gap closed.
 
@@ -198,6 +202,7 @@ Wrap with `activeTasks.inc()` after successful dequeue and `activeTasks.dec()` i
 ### Task 1.3: Remove dead exports in db/query.ts + dead orchestrator path
 
 **Files:**
+
 - Modify: `src/db/query.ts` (delete dead exports: `queryTable`, `getAnomalyById`, `listAnomaliesByRun`, `resolveAnomalyQuery`, `getWebhookById`, `deleteWebhookById`, `upsertModelRuntimeStat`, `insertToolCallStat`, `getPricingByModelId`, `listRuns`, `upsertRun`, `getRunById` — the live ones live in `db/runs.ts`. DO NOT delete `providersTable()` — it is used by `getModelByNameOrId` at `query.ts:454-455`)
 - Delete: `src/runner/idempotency.ts` (its only import is `getRunById`, runtime-dead — only `tests/runner/*` reach it) + `tests/runner/idempotency.test.ts`
 - Modify: `src/orchestrator/run-lifecycle.ts` (delete `spawnRunWorkers`, `getLatestPricingVersion` — replace call sites with `query.ts:getLatestPricingVersion` directly, delete `tailLogs` in `orchestrator.ts`, `saveRunIndex`/`indexPath` in `db/runs.ts`, `ensureBuilt` if reducer confirms sole caller now inline)
@@ -205,6 +210,7 @@ Wrap with `activeTasks.inc()` after successful dequeue and `activeTasks.dec()` i
 - Delete: `src/db/schema.ts` `tool_call_stats` TABLE will be removed in Phase 4.2 (NOT now — keep until raw SQL dies)
 
 **Interfaces:**
+
 - Consumes: current `query.ts` exports.
 - Produces: leaner `query.ts`. Any importer of the removed exports must switch to `db/runs.ts` or `anomaly-detection/db.ts` (the live twins).
 
@@ -229,6 +235,7 @@ Delete `queryTable`, `paginatedQuery` is NOT deleted here (Phase 3.2 replaces it
 ### Task 1.4: Stale script pairs + fix npm db:migrate
 
 **Files:**
+
 - Delete: `scripts/scheduler-tick.ts`, `scripts/db-migrate.ts`
 - Modify: `package.json` (`db:migrate` → `tsx src/scripts/db-migrate.ts`)
 
@@ -255,6 +262,7 @@ node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json
 ### Task 1.5: Remove adapter streaming surface
 
 **Files:**
+
 - Modify: `src/providers/adapters/base.ts` (remove `StreamChunk`, `sendMessageStream`, `buildCacheBreakpoints` from the interface)
 - Modify: `src/providers/adapters/openai-compat.ts` (remove `sendMessageStream` L55-98 + SSE parsing + `buildCacheBreakpoints` L37-40 + `reasoning_effort` sugar L117-119)
 - Modify: `src/providers/adapters/anthropic.ts` (remove `sendMessageStream`, `buildCacheBreakpoints` L31-34; keep cache_control logic in `sendMessage`)
@@ -263,6 +271,7 @@ node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json
 - Modify: `src/observability/instrument-loop.ts` (breakpoints wiring only if it refuses to compile; the loop never calls `sendMessageStream` so the wrap is dead — remove block)
 
 **Interfaces:**
+
 - Consumes: ProviderAdapter interface today.
 - Produces: `ProviderAdapter` = `{ sendMessage, supportsStreaming? -> false }`. Streaming removed from types in `src/providers/adapters/base.ts`.
 
@@ -282,14 +291,16 @@ Expected: definitions + tests only (if tests exist for streaming, delete those t
 
 ---
 
-# Phase 2 — Wire the exists-but-broke features
+## Phase 2 — Wire the exists-but-broke features
 
 ### Task 2.1: Fix silent_failure detector (read correct judge key)
 
 **Files:**
+
 - Modify: `src/anomaly-detection/detectors.ts` (`readJudgeScore` L27-37 → delegate to `readJudgeResult`; delete local JSON parse)
 
 **Interfaces:**
+
 - Consumes: `readJudgeResult` from `src/evaluation/judge.js`.
 - Produces: `readJudgeScore(outputDir): number | null` reads `JudgeResult.averageScore`.
 
@@ -338,6 +349,7 @@ test('readJudgeScore returns null when file missing', () => {
 ### Task 2.2: Wire judge scoring end-to-end (merged into Task 2.7 by design — this task is the judge-side only)
 
 **Files:**
+
 - Modify: `src/evaluation/judge.ts` — remove module-level `evalConfig` cache (L10, L13) so config edits apply; add clamp `averageScore = Math.min(100, Math.max(0, averageScore))`.
 - Verify-only: `loaderEvaluationConfig` defaults.
 
@@ -371,6 +383,7 @@ const averageScore = Math.min(100, Math.max(0,
 ### Task 2.3: Notifications — payload fix, anomaly case, run-completed + regression dispatch
 
 **Files:**
+
 - Modify: `src/notifications/slack.ts` (budget formatter keys; add `onAnomalyDetected` case; keep run-completed formatter)
 - Modify: `src/notifications/discord.ts` (same as slack)
 - Modify: `src/orchestrator/run-lifecycle.ts` (dispatch `onRunCompleted` in merged finalize — done in Task 2.7; here only if 2.7 not yet merged)
@@ -378,6 +391,7 @@ const averageScore = Math.min(100, Math.max(0,
 - Add test: `tests/notifications/format.test.ts`
 
 **Interfaces:**
+
 - Consumes: `dispatchNotification` (run-lifecycle-style dynamic import), `DispatchEventType` from `src/notifications/index.js`.
 - Produces: canonical budget payload keys `{ model, spentUsd, limitUsd, percentUsed }` read by formatters; `onAnomalyDetected` formatted case.
 
@@ -441,10 +455,12 @@ If `formatPayload` is not exported, export it from `slack.ts` (rename existing i
 ### Task 2.4: Webhooks — wire run_completed + budget_exceeded
 
 **Files:**
+
 - Modify: `src/orchestrator/run-lifecycle.ts` (merged finalize — see Task 2.7 — fires `run_completed`; `startRun` fires `budget_exceeded`)
 - Add test: `tests/notifications/webhooks-dispatch.test.ts`
 
 **Interfaces:**
+
 - Consumes: `dispatchWebhooks(event, payload, logger)` from `src/notifications/webhooks.js`.
 - Produces: webhook events for all 3 advertised types.
 
@@ -478,12 +494,14 @@ Mock `webhooksForEvent`/`getWebhookSecret` from `anomaly-detection/db.js` (monke
 ### Task 2.5: Wire Prometheus counters
 
 **Files:**
+
 - Modify: `src/runner.ts` (taskCounter, taskDuration, activeTasks — largely in Task 1.2)
 - Modify: `src/queue/redis.ts` + `src/queue/in-memory.ts` (queueDepth)
 - Modify: `src/scheduler/tick.ts` (scheduleFailures)
 - Modify: `src/dashboard-server/routes/queues.ts` (optional: surface queueDepth for ops)
 
 **Interfaces:**
+
 - Consumes: `taskCounter`, `taskDuration`, `activeTasks`, `queueDepth`, `scheduleFailures` from `src/observability/metrics.js`.
 - Produces: all 6 `arena_*` metrics actually mutated.
 
@@ -519,6 +537,7 @@ scheduleFailures.inc({ schedule_id: scheduleId });
 ### Task 2.6: Scheduler — populate DB table, DB-tick becomes functional
 
 **Files:**
+
 - Modify: `src/db/query.ts` (add `insertSchedule`, `deleteSchedule`, `listSchedules`)
 - Modify: `src/scheduler/manager.ts` (add `syncSchedulesToDb`; call from `addSchedule`/`removeSchedule`)
 - Modify: `src/dashboard-server/server.ts` (boot-time `syncSchedulesToDb`)
@@ -526,6 +545,7 @@ scheduleFailures.inc({ schedule_id: scheduleId });
 - Delete: `configs/webhooks.yaml` (user decision — remove file + add to `.gitignore`? No: delete; also comment references in README if any)
 
 **Interfaces:**
+
 - Consumes: `schedules` table (schema.ts L349 + schema-pg.ts L312), Drizzle `db` from `getDrizzleDb()`.
 - Produces: `insertSchedule(s: DbScheduleInput): Promise<void>`, `deleteSchedule(id: string): Promise<void>`, `listSchedules(): Promise<DbSchedule[]>`; `syncSchedulesToDb(configPath, logger?): Promise<void>` idempotent.
 
@@ -616,17 +636,21 @@ Add to `.c8-test-list.txt`.
 ### Task 2.7: Merge finalize functions (CLI alignment + judger wiring + notifications + webhooks in one core)
 
 **Files:**
+
 - Modify: `src/orchestrator/run-lifecycle.ts` (replace `finalizeRun` + `finalizeRunByRunId` with a single `finalizeCore`; keep both public wrappers)
 - Modify: caller of `writeRelative` if any (none expected)
 
 **Interfaces:**
+
 - Consumes: existing helpers `aggregate`, `patchIndexAfterFinalize`, `addSpend`, `insertCostLedgerEntry`, `analyzeRun`, `writeRunStats`, `runJudgeScoring`, `writeJudgeResult`.
 - Produces:
+
 ```ts
 async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: Logger): Promise<{ mdPath: string; jsonPath: string }>
 export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{ entries: ComparisonEntry[]; mdPath: string; jsonPath: string }>
 export async function finalizeRunByRunId(runId: string, logger: Logger): Promise<void>
 ```
+
 Behavior: merged version must now fire `onRunCompleted` notification + `run_completed` webhook; call `writeJudgeResult` after `runJudgeScoring` returns non-null.
 
 - [ ] **Step 1: Extract per-model entry builder**
@@ -740,15 +764,17 @@ Note: `aggregate` is called twice inside `finalizeRun` — acceptable (idempoten
 
 ---
 
-# Phase 3 — Consolidation & simplification
+## Phase 3 — Consolidation & simplification
 
 ### Task 3.1: Shared fs walk util
 
 **Files:**
+
 - Create: `src/fs/walk.ts` (export `walkFiles(root, opts)`).
 - Modify: `src/tools/executors.ts` (`walkFiles` L50-68 → import), `src/sandbox/artifact-manifest.ts` (`walkAndHash` → use util), `src/dashboard-server/routes/runs.ts` (`walkSandbox` → use util), `src/dashboard-server/routes/scenarios.ts` (`listStarterFiles` → use util).
 
 **Interfaces:**
+
 - Produces: `walkFiles(root: string, opts?: { dirs?: boolean; exclude?: string[]; followSymlinks?: boolean }): Promise<string[]>` returning absolute paths excluding `node_modules`, `.git`.
 - Consumes: existing walkers’ semantics (depth-first, exclude node_modules/.git).
 
@@ -792,12 +818,14 @@ export function walkFiles(root: string, opts: WalkOptions = {}): string[] {
 ### Task 3.2: Drizzle-based pagination (kills raw SQL + validators + PG shim dependency)
 
 **Files:**
+
 - Modify: `src/db/query.ts` (replace `paginatedQuery` L747-776 + `queryTable` (already deleted) + validators `validateOrderByClause`/`validateWhereClause` if still used, `transitionTaskState` L230-234, `assignUserRole`/`insertRole` `INSERT OR IGNORE`, `listSessionsWithCounts` L999-1019)
 - Modify: `src/dashboard-server/routes/{audit,cost,files,catalog}.ts` (use new helper)
 - Modify: `src/db/postgres.ts` (drop regex translation once raw SQL is gone — Phase 4.3)
 - Add test: `tests/db/pagination.test.ts`
 
 **Interfaces:**
+
 - Produces: `paginate<T>(table, q: { page; pageSize; orderBy?: string; where?: Record<string, unknown> }): Promise<{ rows: T[]; total: number }>` using Drizzle `.orderBy()` with a whitelist of columns per table and `.where()` via `and(eq(...))`.
 - Transition: `transitionTaskState` → `db.update(run_models).set(updates).where(and(eq(run_models.run_id,...), eq(run_models.model,...)))`.
 - `assignUserRole`/`insertRole` → `db.insert(...).values(...).onConflictDoNothing()` (Drizzle supports both dialects).
@@ -849,10 +877,12 @@ Route callers adapt (audit/cost/files/catalog currently use `paginatedQuery` —
 ### Task 3.3: Replace glob-matcher with fs.globSync
 
 **Files:**
+
 - Delete: `src/tools/glob-matcher.ts`
 - Modify: `src/tools/executors.ts` (glob tool → `fs.globSync` respecting `node_modules`/`.git` exclusion)
 
 **Interfaces:**
+
 - Produces: glob tool uses `fs.globSync(pattern, { cwd: sandboxDir, exclude: EXCLUDE_GLOB })` (Node ≥22).
 
 - [ ] **Step 1: Rewrite the glob executor**
@@ -874,11 +904,14 @@ Adapt to current signatures (the executor builds regex and passes through `walkF
 ### Task 3.4: Adapter shared HTTP base (dedupe fetch/retry/SSE repetition)
 
 **Files:**
+
 - Create: `src/providers/adapters/http-base.ts` (`post()`, retry, `HttpError`, SSE lines iterator)
 - Modify: `src/providers/adapters/{openai-compat,anthropic,google}.ts` and `bedrock.ts` (`sendViaGateway` reuses openai-compat path)
 
 **Interfaces:**
+
 - Produces:
+
 ```ts
 export class HttpChatBase {
   constructor(opts: { apiKey?: string; baseUrl: string; headers?: Record<string, string>; logger?: Logger; timeoutMs?: number });
@@ -887,6 +920,7 @@ export class HttpChatBase {
 }
 export class HttpError extends Error { constructor(public status: number, public body: string) { super(`HTTP ${status}: ${body.slice(0, 200)}`); } }
 ```
+
 - Consumes: existing per-wire serialization (`buildBody`/`parseResponse`) stays in each adapter.
 
 - [ ] **Step 1: Write http-base.ts.**
@@ -944,11 +978,13 @@ Each adapter subclass provides `authHeader(key)` (Authorization Bearer / `x-api-
 ### Task 3.5: Consolidate loop detection into conversation-parser
 
 **Files:**
+
 - Modify: `src/logger/conversation-parser.ts` (add canonical `detectLoops(toolCalls, min)` + `computeObjectiveMetrics`)
 - Modify: `src/anomaly-detection/detectors.ts` (loopDetector uses canonical)
 - Modify: `src/dashboard-server/routes/analytics.ts` (delete local `detectLoopsInConversation`, import canonical)
 
 **Interfaces:**
+
 - Produces: `detectLoops(toolCalls: ToolCallEntry[], minConsecutive: number): { tool: string; consecutive: number } | null`.
 - Consumes: existing `detectLoopsInConversation` behavior from analytics.ts (keep its richer turn/tool shape — see migration).
 
@@ -978,12 +1014,14 @@ export function detectLoops(toolCalls: ToolCallEntry[], minConsecutive: number):
 ### Task 3.6: Consolidate model/catalog/providers routes + fix frontend wiring
 
 **Files:**
+
 - Modify: `src/dashboard-server/routes/models.ts` (support `provider`/`sort`/`q`/`reasoning`/`tool_call` filters; return `{ data: [...] }` to match `useCatalog.ts`; drop/delegate custom-provider POST/DELETE to providers route)
 - Modify: `src/dashboard-server/server.ts` (mount `catalog.pricing` also at `/api/pricing` OR point client at `/api/catalog/pricing`; pick client fix)
 - Modify: `src/dashboard-client/src/hooks/useCatalog.ts` (expect the fixed response shape; use `/api/catalog/pricing`)
 - Modify: `src/dashboard-server/routes/catalog.ts` (remove per-handler `await import('../../db/query.js')` — hoist one static import; keep benchmark routes)
 
 **Interfaces:**
+
 - Produces: `GET /api/models` returns `{ data: CatalogModel[] }` with applied filters; pricing loaded from `/api/catalog/pricing`.
 
 - [ ] **Step 1: Confirm current shapes** `cat src/dashboard-server/routes/models.ts` (should return `{ models }` ignoring filters) and `grep -n "data\|models" src/dashboard-client/src/hooks/useCatalog.ts` (expects `{ data }`).
@@ -1003,9 +1041,11 @@ export function detectLoops(toolCalls: ToolCallEntry[], minConsecutive: number):
 ### Task 3.7: Fix maskSecrets over-masking
 
 **Files:**
+
 - Modify: `src/dashboard-server/secrets.ts` (word-boundary `token`)
 
 **Interfaces:**
+
 - Produces: only keys literally named `apiKey`/`api_key`/`secret`/`password`/`token`/`auth(.)`/`credential` masked; `tokenUsage`/`tokenCount`/`tokens` untouched.
 
 - [ ] **Step 1: Tighten regex**
@@ -1023,19 +1063,23 @@ const SENSITIVE_KEYS = /^(api_?key|secret|password|token|authorization|credentia
 ### Task 3.8: Security pass — async requireOwnership + close IDOR gaps
 
 **Files:**
+
 - Modify: `src/auth/rbac.ts` (requireOwnership → async + generic resolver)
 - Modify: `src/dashboard-server/routes/runs.ts` (reuse helper for `GET /:runId` + models/* + logs/diff, replacing `checkRunOwnership`/`allowIfRunOwner` where trivially possible — keep default-deny)
 - Modify: `src/dashboard-server/routes/traces.ts`, `routes/export.ts` (`/runs/:runId/csv`), `routes/sessions.ts` (GETs) — add ownership gate
 - Modify: `src/dashboard-server/routes/scenarios.ts` + `routes/models.ts` — owner-scoped past editors (per audit report F-023 recommendation)
 
 **Interfaces:**
+
 - Produces:
+
 ```ts
 export async function requireOwnership(
   req: ReqWithAuth,
   getOwnerId: (req: ReqWithAuth) => Promise<string | null | undefined>,
 ): Promise<boolean>
 ```
+
 Semantics: if resource has no owner → deny (default-deny, current audit-remediation default); if requester is admin or owner → allow.
 
 - [ ] **Step 1: Make `requireOwnership` async with resolver function** (update `tests/auth/require-ownership.test.ts` accordingly).
@@ -1053,12 +1097,14 @@ Semantics: if resource has no owner → deny (default-deny, current audit-remedi
 ### Task 3.9: Dedupe roles handlers + WebSocket auth + relative cleanup
 
 **Files:**
+
 - Modify: `src/dashboard-server/server.ts` (remove inline `/api/roles` at L244, keep `users.ts` `/roles`; keep killswitch inline or move to route — optional)
 - Modify: `src/dashboard-server/live.ts` + `stream.ts` (shared `verifyWsRequest` util)
 - Create: `src/dashboard-server/ws-auth.ts`
 - Modify: `src/dashboard-server/routes/cost.ts` + `routes/analytics.ts` (make analytics `/cost` read `cost_ledger`; delete `routes/cost.ts`)
 
 **Interfaces:**
+
 - Produces: `verifyWsRequest(req): { ok: boolean; user?: ...; error?: string }` used by both WS servers; single `/cost` implementation.
 
 - [ ] **Step 1: Extract WS auth** — move `verifyWsRequest`/`LiveHub.verifyUser` protocol parsing into `ws-auth.ts`, parameterized by `{ useQueryToken?: boolean }`; delete the second copies (live.ts:65-79, stream.ts:59-88).
@@ -1073,14 +1119,16 @@ Semantics: if resource has no owner → deny (default-deny, current audit-remedi
 
 ---
 
-# Phase 4 — Full Postgres migration
+## Phase 4 — Full Postgres migration
 
 ### Task 4.1: Fix schema-pg drift (parity with schema.ts)
 
 **Files:**
+
 - Modify: `src/db/schema-pg.ts`
 
 **Interfaces:**
+
 - Produces: maximal column parity between `schema.ts` and `schema-pg.ts` for: `run_models` (`claimed_at`, `started_at`, `completed_at`, `runner_id` missing today), `provider_versions` (missing in PG), `tool_call_stats` (missing in PG). Keep dialect-appropriate types (`integer` bools, `timestamp` vs `text`).
 
 - [ ] **Step 1: Diff the two schemas**
@@ -1110,11 +1158,13 @@ Expected: both apply clean. If drizzle-kit refuses multi-dialect in one project,
 ### Task 4.2: Remove remaining SQLite-only raw SQL
 
 **Files:**
+
 - Modify: `src/db/query.ts` (the last raw SQL sites: `assignUserRole`, `insertRole` — already Drizzle in 3.2; verify `getCostSummary` L949, `queryCacheLeaderboard` L1046, `transitionTaskState` — done in 3.2; audit remaining `sql.raw`/string concat)
 - Modify: `src/sandbox/...` none; `src/db/client.ts` (`applyRuntimeIndices` raw DDL → Drizzle migration; `tool_call_stats` hand DDL removed)
 - Add test: `tests/db/postgres-parity.test.ts`
 
 **Interfaces:**
+
 - Produces: zero string-built SQL in `src/db/`; `tool_call_stats` declared exactly once (Drizzle schema).
 
 - [ ] **Step 1: Sweep `sql.raw`/concatenated SQL**
@@ -1134,10 +1184,12 @@ grep -rn "sql.raw\|INSERT OR IGNORE\|\`SELECT\|\`UPDATE\|\`INSERT" src/db --incl
 ### Task 4.3: Drop the SQLite→Postgres shim in postgres.ts
 
 **Files:**
+
 - Modify: `src/db/postgres.ts` (remove `doRawQuery` regex translation L23-61; `all()`/`run()` now execute parameterized native PG via pg + drizzle only)
 - Modify: `src/db/index.ts` (remove the throwing Proxy for SQLite-isms; all consumers Postgres-ready)
 
 **Interfaces:**
+
 - Produces: `postgres.ts` exports `postgresDb` (Drizzle), `runRaw`/`allRaw` (parameterized `?`→ indexed args ONLY for any remaining legitimate dynamic SQL, no string rewriting), no regex manipulation of SQL.
 
 - [ ] **Step 1: Rewrite `doRawQuery`** — replace regex translation with parameterized `client.query(sqlText, args.map((a, i) => ({ ... })))` where `?` placeholders bind positionally (identity transform). Delete the `INSERT OR IGNORE → ON CONFLICT` special-case (no longer produced after 4.2).
@@ -1151,12 +1203,14 @@ grep -rn "sql.raw\|INSERT OR IGNORE\|\`SELECT\|\`UPDATE\|\`INSERT" src/db --incl
 ### Task 4.4: CI/dev Postgres coverage
 
 **Files:**
+
 - Modify: `.github/workflows/build-deploy.yaml` (add postgres service for `test:db-pg`)
 - Modify: `package.json` (add `test:db-pg`: `DB_DRIVER=postgres DATABASE_URL=postgres://... npm run test:db`)
 - Modify: `docker-compose.yml` (already has postgres; ensure `arena` user/db defaults match)
 - Modify: `docs/runbooks.md` + `README.md` (Postgres is production-first; note SQLite dev-only)
 
 **Interfaces:**
+
 - Produces: repo CI proves Postgres parity end-to-end.
 
 - [ ] **Step 1: Add service block** in build-deploy.yaml:
@@ -1197,11 +1251,12 @@ Fix any dialect-specific breakages surfaced (column type mismatches, bool 0/1 ha
 
 ---
 
-# Phase 5 — Verification, coverage, docs
+## Phase 5 — Verification, coverage, docs
 
 ### Task 5.1: Full regression + coverage lift
 
 **Files:**
+
 - Modify: `.c8-test-list.txt` (housekeeping — ensure every kept test file with real assertions is in the list; the coverage gate misread (48.5%) came partly from excluded files)
 - Modify: `README.md` (feature claims now true: judge wire end-to-end, scheduler functional, Postgres parity, ws rate-limit note if added)
 

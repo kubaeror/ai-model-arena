@@ -8,6 +8,7 @@ import { pricing } from '../../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { fetchSync } from '../../src/catalog/sync.js';
 import { getModelPricing, getPricing, computeCost, formatCost, resetPricingCache } from '../../src/cost-tracking/pricing.js';
+import type { CostTokenUsage } from '../../src/cost-tracking/types.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -118,7 +119,7 @@ test('computeCost handles null usage fields', async () => {
   const cleanup = freshDb();
   try {
     await seed();
-    const c = await computeCost('openai/gpt-4o', {});
+    const c = await computeCost('openai/gpt-4o', {} as unknown as CostTokenUsage);
     assert.equal(c.total, 0);
   } finally { closeDb(); cleanup(); }
 });

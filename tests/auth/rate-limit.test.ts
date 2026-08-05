@@ -51,7 +51,6 @@ test('requireRole(admin) denies unknown role', () => {
   const req = { user: { sub: 'tester', role: 'superuser' } } as unknown as Request;
   let statusCode = 200;
   const res = { status: (c: number) => { statusCode = c; return res; }, json: () => res } as unknown as Response;
-  let called = false;
-  mw(req, res, () => { called = true; });
+  mw(req, res, () => {});
   assert.equal(statusCode, 403);
 });

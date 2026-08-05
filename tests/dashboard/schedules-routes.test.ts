@@ -57,12 +57,12 @@ test('PATCH /api/schedules/:id toggles enabled, persists to YAML, and returns th
     assert.equal(updated.enabled, false, 'response returns updated record with enabled=false');
 
     const yaml = load(fs.readFileSync(configPath, 'utf8')) as { schedules: Array<{ enabled: boolean }> };
-    assert.equal(yaml.schedules[0].enabled, false, 'PATCH rewrote schedules.yaml');
+    assert.equal(yaml.schedules[0]!.enabled, false, 'PATCH rewrote schedules.yaml');
 
     const listRes = await fetch(`${base}/api/schedules`);
     assert.equal(listRes.status, 200);
     const listBody = (await listRes.json()) as { schedules: Array<{ id: string; enabled: boolean }> };
-    assert.equal(listBody.schedules[0].enabled, false, 'GET reflects disabled');
+    assert.equal(listBody.schedules[0]!.enabled, false, 'GET reflects disabled');
 
     const nf = await patch('does-not-exist', { enabled: false });
     assert.equal(nf.status, 404);
@@ -74,7 +74,7 @@ test('PATCH /api/schedules/:id toggles enabled, persists to YAML, and returns th
     assert.equal(on.status, 200);
     assert.equal((await on.json() as { enabled: boolean }).enabled, true, 're-enable returns updated record');
 
-    assert.equal((await listSchedules())[0].enabled, 1, 'DB row re-enabled');
+    assert.equal((await listSchedules())[0]!.enabled, 1, 'DB row re-enabled');
   } finally {
     server.close();
     resetSchedulesCache();

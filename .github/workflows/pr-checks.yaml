@@ -5,10 +5,28 @@ on:
   push:
     branches-ignore: [main]
 
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate conventional PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "PR title: $PR_TITLE"
+          if ! echo "$PR_TITLE" | grep -qE '^(feat|fix|docs|ci|chore|test|refactor)(\([a-zA-Z0-9-]+\))?: .+$'; then
+            echo "::error::PR title must match 'type(optional scope): description' with type in: feat, fix, docs, ci, chore, test, refactor"
+            exit 1
+          fi
+
   typecheck:
     runs-on: ubuntu-latest
     steps:
@@ -16,8 +34,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run typecheck:tests
 
   lint:
     runs-on: ubuntu-latest
@@ -26,6 +46,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm run lint
 
@@ -36,18 +57,78 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm run audit
 
   test-backend:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22, 24]
+      fail-fast: false
+    permissions:
+      checks: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
+          cache: npm
       - run: npm ci
       - run: npm run test:coverage
+      - run: npm run test:tap
+      - name: Upload TAP results
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          # Per-leg names: upload-artifact v4+ rejects same-name uploads
+          # across matrix legs (409 conflict) and every PR gate would fail.
+          name: test-results-tap-${{ matrix.node-version }}
+          path: tap.out
+          if-no-files-found: warn
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: coverage-report-${{ matrix.node-version }}
+          path: coverage/lcov.info
+          if-no-files-found: warn
+
+  test-report:
+    needs: test-backend
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Download TAP results
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: test-results-tap-*
+          path: tap-results
+      - name: Publish TAP summary as check run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # node:test TAP (one file per matrix leg) — aggregate counts and
+          # publish a single check run on the commit. gh CLI is preinstalled.
+          TOTAL=0; PASS=0; FAIL=0
+          for f in tap-results/*/tap.out; do
+            [ -f "$f" ] || continue
+            t=$(grep -E '^# tests ' "$f" | tail -1 | awk '{print $3}'); TOTAL=$((TOTAL + ${t:-0}))
+            p=$(grep -E '^# pass ' "$f" | tail -1 | awk '{print $3}'); PASS=$((PASS + ${p:-0}))
+            fl=$(grep -E '^# fail ' "$f" | tail -1 | awk '{print $3}'); FAIL=$((FAIL + ${fl:-0}))
+          done
+          echo "total=$TOTAL pass=$PASS fail=$FAIL"
+          if [ "$FAIL" = "0" ] && [ "$TOTAL" -gt 0 ]; then CONCLUSION=success; else CONCLUSION=failure; fi
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name="Backend Test Report" \
+            -f head_sha="$GITHUB_SHA" \
+            -f status=completed \
+            -f conclusion="$CONCLUSION" \
+            -f "output[title]=Backend tests: $PASS passed / $FAIL failed" \
+            -f "output[summary]=Backend test summary (node 22 + node 24): **$TOTAL** tests, **$PASS** passed, **$FAIL** failed."
 
   test-frontend:
     runs-on: ubuntu-latest
@@ -56,10 +137,31 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
       - run: npm ci
       - run: npm ci --prefix src/dashboard-client
       - run: npm --prefix src/dashboard-client run typecheck
       - run: npm --prefix src/dashboard-client run test
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix src/dashboard-client
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: warn
 
   k8s-validate:
     runs-on: ubuntu-latest
@@ -73,6 +175,8 @@ jobs:
         run: kubectl kustomize k8s/overlays/prod > .tmp/k8s-prod.yaml
       - name: Render kustomize (observability)
         run: kubectl kustomize k8s/observability > .tmp/k8s-observability.yaml
+      - name: Render kustomize (e2e)
+        run: kubectl kustomize k8s/overlays/e2e > .tmp/k8s-e2e.yaml
       - uses: docker://ghcr.io/yannh/kubeconform:latest
         with:
           args: >-
@@ -93,7 +197,79 @@ jobs:
             -verbose -summary
             -schema-location default
             -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+            .tmp/k8s-e2e.yaml
+      - uses: docker://ghcr.io/yannh/kubeconform:latest
+        with:
+          args: >-
+            -verbose -summary
+            -schema-location default
+            -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
             .tmp/k8s-observability.yaml
+
+  k8s-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Render kustomize (dev)
+        run: |
+          mkdir -p .tmp
+          kubectl kustomize k8s/overlays/dev > .tmp/k8s-dev.yaml
+      - name: Render kustomize (prod)
+        run: kubectl kustomize k8s/overlays/prod > .tmp/k8s-prod.yaml
+      - name: Render kustomize (observability)
+        run: kubectl kustomize k8s/observability > .tmp/k8s-observability.yaml
+      - name: Render kustomize (e2e)
+        run: kubectl kustomize k8s/overlays/e2e > .tmp/k8s-e2e.yaml
+      - uses: docker://openpolicyagent/conftest:latest
+        with:
+          args: test -p policy/k8s .tmp/k8s-dev.yaml
+      - uses: docker://openpolicyagent/conftest:latest
+        with:
+          args: test -p policy/k8s .tmp/k8s-prod.yaml
+      - uses: docker://openpolicyagent/conftest:latest
+        with:
+          args: test -p policy/k8s .tmp/k8s-observability.yaml
+      - uses: docker://openpolicyagent/conftest:latest
+        with:
+          args: test -p policy/k8s .tmp/k8s-e2e.yaml
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate docker compose config
+        run: docker compose config -q
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Shellcheck scripts
+        # docker:// actions do not glob-expand args; docker run on the
+        # checked-out repo mirrors the local invocation exactly.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            koalaman/shellcheck:stable \
+            -x scripts/backup/*.sh scripts/k8s/*.sh scripts/restore/*.sh
+
+  yaml-markdown-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Yamllint
+        # docker:// actions do not glob-expand args; docker run on the
+        # checked-out repo mirrors the local invocation exactly.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            cytopia/yamllint:latest -f parsable \
+            k8s configs .github/workflows .github/dependabot.yml docker-compose.yml
+      - name: Markdownlint
+        # Vendored skill trees (.agents/, .opencode/, .superpowers/) and
+        # node_modules are excluded by linting project docs explicitly.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            davidanson/markdownlint-cli2:latest --config .markdownlint.json \
+            README.md AGENTS.md docs k8s/README.md src/dashboard-client/DESIGN.md
 
   dockerfile-lint:
     runs-on: ubuntu-latest
@@ -102,3 +278,9 @@ jobs:
       - uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: Dockerfile
+
+  workflow-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker://rhysd/actionlint:latest

@@ -73,7 +73,9 @@ test('smoke: agent loop completes with stub adapter', { timeout: 30_000 }, async
   assert.throws(() => safeResolve(sandboxDir, '../../etc/passwd'), /escape/i);
 
   // read_file executor works
-  const readResult = await buildToolExecutors().read_file(
+  const executors = buildToolExecutors();
+  const readFile = executors.read_file!;
+  const readResult = await readFile(
     { path: 'hello.txt' },
     { sandboxDir, logger, shellTimeoutMs: 5000, maxShellOutputBytes: 65536 },
   );

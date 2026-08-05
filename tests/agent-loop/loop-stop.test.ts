@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runAgentLoop } from '../../src/agent-loop/loop.js';
-import type { ModelAdapter, ModelResponse, ChatMessage, ToolDefinition } from '../../src/types.js';
+import type { ModelAdapter } from '../../src/providers/adapters/base.js';
+import type { ModelResponse, ChatMessage, ToolDefinition } from '../../src/types.js';
 import type { ConversationLogger } from '../../src/logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../../src/tools/schema.js';
 
@@ -11,7 +12,7 @@ function stubAdapter(responses: ModelResponse[]): ModelAdapter & { sendCalls: ()
   return {
     sendMessage: async () => {
       sent++;
-      const r = responses[i++] ?? { text: '', toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, stopReason: 'no_tool_calls' };
+      const r = responses[i++] ?? { text: '', toolCalls: [], usage: { prompt: 0, completion: 0 }, stopReason: 'no_tool_calls' };
       return r;
     },
     supportsReasoning: () => false,

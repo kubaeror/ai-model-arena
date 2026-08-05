@@ -1,0 +1,180 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  actions: read
+  attestations: write
+
+concurrency:
+  # Shared group across all v* tags: promotions push to main and must be
+  # serialized (two releases racing a rebase would otherwise conflict).
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:coverage
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@4574d27a4764455b42196d70a065bc6853246a25 # v3.4.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+      - name: Build and push multi-arch image
+        id: build
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+      - name: Generate SBOM (CycloneDX JSON)
+        uses: anchore/sbom-action@df80a981bc6edbc4e220a492d3cbe9f5547a6e75 # v0.17.9
+        with:
+          image: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-${{ github.ref_name }}.cdx.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: sbom-${{ github.ref_name }}
+          path: sbom-${{ github.ref_name }}.cdx.json
+          retention-days: 90
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:${{ github.ref_name }}
+          format: table
+          exit-code: 1
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign Docker image
+        run: |
+          cosign sign --yes ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner@${{ steps.build.outputs.digest }}
+        env:
+          COSIGN_EXPERIMENTAL: "1"  # keyless signing via GitHub OIDC
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes
+      - name: Download SBOM artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: sbom-${{ github.ref_name }}
+      - name: Attach SBOM to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" sbom-${{ github.ref_name }}.cdx.json
+      - name: Promote tag image to prod overlay
+        run: |
+          git remote set-branches origin main
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Tag $GITHUB_REF_NAME points to a commit not on main — refusing to promote."
+            exit 1
+          }
+          git checkout -b main origin/main
+          sed -i "s|newTag: .*|newTag: ${{ github.sha }}|" k8s/overlays/prod/kustomization.yaml
+          if git diff --quiet k8s/overlays/prod/kustomization.yaml; then
+            echo "prod newTag already at ${{ github.sha }}; nothing to commit"
+            exit 0
+          fi
+          git add k8s/overlays/prod/kustomization.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci: promote ${{ github.ref_name }} image to prod"
+          # A conflict stops the rebase in-progress; a second pull --rebase
+          # would then fail ("rebase in progress") and prod would silently
+          # stay on the old image. Abort loudly instead.
+          git pull --rebase origin main || {
+            echo "rebase of the promotion commit conflicted; aborting"
+            git rebase --abort
+            exit 1
+          }
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  slsa:
+    needs: release
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+      attestations: write
+      # Required by the SLSA generator's nested jobs — without it GitHub
+      # rejects the whole workflow at parse time (startup_failure, 0 jobs).
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+    with:
+      image: ${{ needs.release.outputs.image }}
+      digest: ${{ needs.release.outputs.digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  # The container SLSA generator does not upload an "attestation" workflow
+  # artifact; it publishes the attestation to the container registry via
+  # `cosign attest` (generator_container_slsa3.yml v2.0.0/v2.1.0). Pull it
+  # back down and attach it to the GitHub release. Skipped when the release
+  # job failed (nothing to attach and no valid digest); a missing attestation
+  # is tolerated with the test -f guard below (and uploaded when present).
+  attach-attestation:
+    needs: [release, slsa]
+    if: needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Download SLSA attestation from registry
+        id: fetch-attestation
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cosign login ghcr.io -u "${{ github.actor }}" -p "$GITHUB_TOKEN"
+          cosign download attestation "ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner@${{ needs.release.outputs.digest }}" > attestation.jsonl
+      - name: Attach attestation to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -s attestation.jsonl ]; then
+            gh release upload "$GITHUB_REF_NAME" attestation.jsonl
+          else
+            echo "No SLSA attestation found in registry; skipping release attach"
+          fi
