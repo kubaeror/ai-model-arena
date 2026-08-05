@@ -84,7 +84,7 @@ test('computeAverageScore falls back to unweighted when maxScore is missing', ()
   assert.equal(computeAverageScore(scores), 6);
 });
 
-test('runJudgeScoring persists a row to judge_scores when scoring succeeds', async (t) => {
+test('runJudgeScoring returns a verdict but does not persist judge_scores (single persistence site is run-lifecycle)', async (t) => {
   if (typeof (t.mock as { module?: unknown }).module !== 'function') {
     t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
     return;
@@ -112,14 +112,8 @@ test('runJudgeScoring persists a row to judge_scores when scoring succeeds', asy
     assert.ok(result, 'expected a JudgeResult');
     assert.ok(Math.abs(result!.averageScore - 100 / 30) < 0.001);
 
-    const row = getDb().prepare('SELECT * FROM judge_scores WHERE run_id = ?').get('run-123') as any;
-    assert.ok(row, 'expected a judge_scores row for run-123');
-    assert.equal(row.model, 'gpt-4o');
-    assert.equal(row.judge_model, 'gpt-4o');
-    assert.ok(Math.abs(row.average_score - 100 / 30) < 0.001);
-    assert.equal(row.summary, 'Solid work');
-    assert.ok(row.scores_json.includes('correctness'));
-    assert.ok(row.judged_at);
+    const rows = getDb().prepare('SELECT * FROM judge_scores WHERE run_id = ?').all('run-123') as any[];
+    assert.equal(rows.length, 0, 'runJudgeScoring must not persist judge_scores rows directly');
   } finally {
     closeDb();
   }

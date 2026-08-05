@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { initDb, closeDb, getDrizzleDb } from '../../src/db/index.js';
+import { initDb, closeDb, getDb, getDrizzleDb } from '../../src/db/index.js';
 import { resetBudgetCache, loadBudgetConfig, getBudgetStatus } from '../../src/cost-tracking/budget.js';
 import { cost_ledger } from '../../src/db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -220,6 +220,80 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const judgeFile = path.join(alpha.outputDir, 'judge_score.json');
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.strictEqual(fs.existsSync(judgeFile), false, 'judge_score.json not written when judge disabled');
+  });
+
+  it('finalizeCore judge step persists a judge_scores row for each judged model (single persistence site)', async (t) => {
+    if (typeof (t.mock as { module?: unknown }).module !== 'function') {
+      t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
+      return;
+    }
+    const cfgDir = path.join(root, 'configs');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'evaluation.yaml'), [
+      'judge:',
+      '  model: gpt-4o',
+      '  enabled: true',
+      'rubric:',
+      '  correctness:',
+      '    description: "code correctness"',
+      '    maxScore: 10',
+      '',
+    ].join('\n'));
+
+    const now = new Date().toISOString();
+    const dbRaw = getDb();
+    dbRaw.prepare(
+      `INSERT INTO providers (id, name, api_base, auth_scheme, is_builtin, adapter, created_at, updated_at)
+       VALUES ('openai', 'OpenAI', 'https://api.openai.com/v1', 'bearer', 1, 'openai-compat', ?, ?)`,
+    ).run(now, now);
+    dbRaw.prepare(
+      `INSERT INTO models (id, name, provider_id, status, last_synced_at)
+       VALUES ('gpt-4o', 'GPT-4o', 'openai', 'active', ?)`,
+    ).run(now);
+    dbRaw.prepare(
+      `INSERT INTO model_providers (model_id, provider_id, api_model_id)
+       VALUES ('gpt-4o', 'openai', 'gpt-4o')`,
+    ).run();
+
+    t.mock.module('../../src/providers/index.js', {
+      exports: {
+        ProviderRegistry: class {
+          async loadCustomFromDb(): Promise<void> {}
+          createAdapter(): { sendMessage: () => Promise<{ text: string }> } {
+            return {
+              sendMessage: async () => ({
+                text: '```json\n{"scores": [{"category": "correctness", "score": 10, "maxScore": 10}], "summary": "Solid work"}\n```',
+              }),
+            };
+          }
+        },
+        loadBuiltins(): void {},
+      },
+    });
+
+    const runId = 'run_judge_enabled';
+    const alpha = makePerModel(runId, 'alpha', root, 't-judge-on');
+    writeResult(alpha, { costUsd: 0.01 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+
+    await finalizeRun(spec, logger);
+
+    const deadline = Date.now() + 2000;
+    let row: any = null;
+    while (Date.now() < deadline) {
+      row = dbRaw.prepare('SELECT * FROM judge_scores WHERE run_id = ? AND model = ?').get(runId, 'alpha');
+      if (row) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    assert.ok(row, 'judge step persists a judge_scores row for the model');
+    assert.equal(row.judge_model, 'gpt-4o');
+    assert.equal(row.average_score, 10);
+    assert.equal(row.summary, 'Solid work');
+    assert.ok(row.scores_json.includes('correctness'));
+    const count = (dbRaw.prepare('SELECT COUNT(*) AS c FROM judge_scores WHERE run_id = ? AND model = ?').get(runId, 'alpha') as any).c;
+    assert.equal(count, 1, 'exactly one judge_scores row per run+model');
   });
 
   it('writeJudgeResult persists judge_score.json (the finalizeCore persist step)', () => {

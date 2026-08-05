@@ -152,21 +152,6 @@ export async function runJudgeScoring(
       judgeModel: judgeConfig.model,
     };
 
-    try {
-      const { insertJudgeScore } = await import('../db/query.js');
-      await insertJudgeScore({
-        runId,
-        model,
-        judgeModel: result.judgeModel,
-        averageScore,
-        summary: result.summary,
-        scoresJson: JSON.stringify(scores),
-        judgedAt: result.judgedAt,
-      });
-    } catch (err) {
-      logger?.warn('Judge score DB persistence failed (non-fatal)', { error: String(err) });
-    }
-
     return result;
   } catch (err) {
     logger?.error('Judge scoring failed', { error: String(err) });

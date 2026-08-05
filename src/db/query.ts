@@ -294,7 +294,16 @@ export async function insertJudgeScore(data: {
     run_id: data.runId, model: data.model, judge_model: data.judgeModel,
     average_score: data.averageScore, summary: data.summary,
     scores_json: data.scoresJson, judged_at: data.judgedAt,
-  }).onConflictDoNothing({ target: [judge_scores.run_id, judge_scores.model] });
+  }).onConflictDoUpdate({
+    target: [judge_scores.run_id, judge_scores.model],
+    set: {
+      judge_model: data.judgeModel,
+      average_score: data.averageScore,
+      summary: data.summary,
+      scores_json: data.scoresJson,
+      judged_at: data.judgedAt,
+    },
+  });
 }
 
 export async function listJudgeScores(runId?: string): Promise<DbJudgeScore[]> {
