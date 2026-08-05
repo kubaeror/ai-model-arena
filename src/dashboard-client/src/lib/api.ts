@@ -299,6 +299,12 @@ export async function createSchedule(opts: {
 export async function deleteSchedule(id: string): Promise<void> {
   await apiFetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
+export async function updateSchedule(id: string, opts: { enabled: boolean }): Promise<Schedule> {
+  return apiFetch<Schedule>(`/api/schedules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(opts),
+  });
+}
 
 // ── Regression ───────────────────────────────────────────────────────────────
 export interface RegressionResult {

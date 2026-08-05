@@ -271,6 +271,11 @@ export async function updateScheduleRun(id: string, lastRun: string, nextRun: st
   await db.update(schedules).set({ last_run: lastRun, next_run: nextRun }).where(eq(schedules.id, id));
 }
 
+export async function updateScheduleEnabled(id: string, enabled: boolean): Promise<void> {
+  const db = getDrizzleDb();
+  await db.update(schedules).set({ enabled: enabled ? 1 : 0 }).where(eq(schedules.id, id));
+}
+
 export interface ScheduleInput {
   id: string;
   scenario: string;

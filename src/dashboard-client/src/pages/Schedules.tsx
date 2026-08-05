@@ -8,7 +8,7 @@ import { Spinner } from '../components/ui/Spinner';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-import { listSchedules, createSchedule, deleteSchedule, listScenarios, listModels } from '../lib/api';
+import { listSchedules, createSchedule, deleteSchedule, updateSchedule, listScenarios, listModels } from '../lib/api';
 import type { Column } from '../components/ui/DataTable';
 import type { Schedule } from '../lib/api';
 
@@ -56,12 +56,24 @@ export function Schedules() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['schedules'] }),
   });
 
+  const updateMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => updateSchedule(id, { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['schedules'] }),
+  });
+
   const columns: Column<Schedule>[] = [
     { key: 'id', header: 'ID', sortable: true },
     { key: 'scenario', header: 'Scenario', sortable: true },
     { key: 'models', header: 'Models', render: r => <span className="font-mono text-12">{r.models.join(', ')}</span> },
     { key: 'cron', header: 'Cron', render: r => <code className="text-12">{r.cron}</code>, sortable: true },
-    { key: 'enabled', header: 'Status', render: r => r.enabled ? <Badge variant="status" value="enabled" className="text-accent" /> : <Badge variant="status" value="disabled" className="text-fg-1" /> },
+    {
+      key: 'enabled', header: 'Status', render: r => (
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={r.enabled} onChange={() => updateMut.mutate({ id: r.id, enabled: !r.enabled })} />
+          {r.enabled ? <Badge variant="status" value="enabled" className="text-accent" /> : <Badge variant="status" value="disabled" className="text-fg-1" />}
+        </label>
+      ),
+    },
     { key: 'state', header: 'State', render: r => r.state ? <span className="text-12">{r.state.status}{r.state.totalRuns > 0 ? ` (${r.state.totalRuns} runs)` : ''}</span> : '—' },
     {
       key: 'actions', header: 'Actions', render: r => (

@@ -92,6 +92,26 @@ export async function removeSchedule(configPath: string, id: string, logger?: Lo
   return true;
 }
 
+export async function setScheduleEnabled(configPath: string, id: string, enabled: boolean, logger?: Logger): Promise<boolean> {
+  const config = loadSchedulesConfig(configPath, logger);
+  const schedule = config.schedules.find(s => s.id === id);
+  if (!schedule) return false;
+
+  schedule.enabled = enabled;
+
+  const resolvedPath = path.resolve(configPath);
+  fs.writeFileSync(resolvedPath, dump(config));
+
+  try {
+    const { updateScheduleEnabled } = await import('../db/query.js');
+    await updateScheduleEnabled(id, enabled);
+  } catch (err) {
+    logger?.warn('updateScheduleEnabled failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+  }
+
+  return true;
+}
+
 export async function syncSchedulesToDb(configPath: string, logger?: Logger): Promise<void> {
   try {
     const config = loadSchedulesConfig(configPath, logger);
