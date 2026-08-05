@@ -4,6 +4,10 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -25,7 +29,7 @@ jobs:
           docker run -d --name pg -p 5432:5432 \
             -e POSTGRES_USER=arena -e POSTGRES_PASSWORD=arena -e POSTGRES_DB=arena \
             postgres:16.8-alpine
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             docker exec pg pg_isready -U arena && break; sleep 1;
           done
           npm run test:db-pg
@@ -43,7 +47,7 @@ jobs:
       - name: Docker compose smoke
         run: |
           docker compose up -d
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl -sf http://localhost:4000/health; then break; fi
             sleep 1
           done
