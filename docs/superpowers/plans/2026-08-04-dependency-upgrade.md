@@ -25,11 +25,13 @@
 ### Task 1: Root in-range updates (fixes brace-expansion + ip-address vulnerabilities)
 
 **Files:**
+
 - Modify: `package.json` (only via npm, no hand edits)
 - Modify: `package-lock.json` (via npm)
 - Test: `npm audit`, `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`
 
 **Interfaces:**
+
 - Consumes: current root package.json (versions listed in Global Constraints context).
 - Produces: updated lockfile where `brace-expansion` = 5.0.9, `ip-address` = 10.4.0; in-range bumps for: `@aws-sdk/client-bedrock-runtime` → 3.1102.0, `@aws-sdk/credential-provider-node` → 3.972.77, `argon2` → 0.45.1, `better-sqlite3` → 13.0.2, `cron-parser` → 5.7.0, `eslint` → 10.8.0, `express-rate-limit` → 8.6.1, `tsx` → 4.23.5, `ws` → 8.21.2, `@types/node` → 26.1.2, `@types/pg` → 8.20.3, `@typescript-eslint/*` → 8.66.0.
 
@@ -74,10 +76,12 @@ git commit -m "chore(deps): npm update — fix brace-expansion and ip-address ad
 ### Task 2: Resolve or accept the esbuild/drizzle-kit moderate advisory
 
 **Files:**
+
 - Modify: `package.json` (add `overrides` block; update `allowScripts`)
 - Test: `npm audit`, `npm run db:generate`, `npm run typecheck`
 
 **Interfaces:**
+
 - Consumes: Task 1 lockfile.
 - Produces: decision recorded — either (A) `overrides` forcing esbuild ≥ 0.25 under `@esbuild-kit/core-utils`, or (B) a documented accepted-risk entry in the commit message.
 
@@ -130,11 +134,13 @@ git commit -m "chore(deps): pin esbuild >=0.25 under @esbuild-kit to clear moder
 ### Task 3: ioredis 5 → 6 (RESP3 default change)
 
 **Files:**
+
 - Modify: `package.json` (`"ioredis": "^5.11.1"` → `"^6.0.0"`)
 - Modify: `src/queue/redis.ts:16` (add `protocol: 2` to constructor options)
 - Test: `npm run typecheck`, `npm test`, `tests/queue/redis.test.ts`
 
 **Interfaces:**
+
 - Consumes: `RedisStreamQueue` constructor signature (unchanged).
 - Produces: `new Redis(config.url, { ...options, protocol: 2 })`.
 
@@ -179,10 +185,12 @@ git commit -m "chore(deps): ioredis 6 — keep RESP2 wire protocol via protocol:
 ### Task 4: @types/better-sqlite3 7 → 9 (align with runtime 13.x)
 
 **Files:**
+
 - Modify: `package.json` (`"@types/better-sqlite3": "^7.6.13"` → `"^9.6.0"`)
 - Test: `npm run typecheck`
 
 **Interfaces:**
+
 - Consumes: existing better-sqlite3 usage in `src/session/store.ts` etc.
 - Produces: typecheck-clean result against types for runtime 13.x.
 
@@ -214,10 +222,12 @@ git commit -m "chore(deps): @types/better-sqlite3 9.x to match runtime 13"
 ### Task 5: OTel package lockstep bump to 0.221.0 / 2.10.0
 
 **Files:**
+
 - Modify: `package.json` — `@opentelemetry/exporter-trace-otlp-http` `^0.220.0` → `^0.221.0`, `@opentelemetry/instrumentation-http` `^0.220.0` → `^0.221.0`, `@opentelemetry/sdk-node` `^0.220.0` → `^0.221.0`, `@opentelemetry/resources` `^2.9.0` → `^2.10.0`
 - Test: `npm run typecheck`, `npm run build`
 
 **Interfaces:**
+
 - Consumes: existing OTel init code (wherever `NodeSDK` is constructed).
 - Produces: synchronized 0.221.0 stack (these packages must never mix versions).
 
@@ -247,11 +257,13 @@ git commit -m "chore(deps): bump OTel SDK stack to 0.221.0 (resources 2.10.0)"
 ### Task 6: Dashboard client — install + in-range updates
 
 **Files:**
+
 - Modify: `src/dashboard-client/package.json` (via npm only)
 - Modify: `src/dashboard-client/package-lock.json` (via npm)
 - Test: `npm --prefix src/dashboard-client run typecheck && npm --prefix src/dashboard-client run build && npm --prefix src/dashboard-client test`
 
 **Interfaces:**
+
 - Consumes: `src/dashboard-client/package.json` + existing lockfile; node_modules absent — must install first.
 - Produces: fresh node_modules; in-range bumps: `@codemirror/lang-javascript` → 6.2.5, `@tanstack/react-query` → 5.101.4, `@uiw/react-codemirror` → 4.25.11, `class-variance-authority` → 0.7.1, `clsx` → 2.1.1, `tailwind-merge` → 3.6.0, `react`/`react-dom` → 19.2.8.
 
@@ -283,11 +295,13 @@ git commit -m "chore(deps): dashboard in-range updates (react 19.2.8, react-quer
 ### Task 7: Dashboard — echarts 5 → 6
 
 **Files:**
+
 - Modify: `src/dashboard-client/package.json` (`"echarts": "^5.5.0"` → `"^6.1.0"`)
 - Possibly fix: `src/dashboard-client/src/components/ui/{Heatmap,LineChart,Sankey,Sparkline,StackedBar}.tsx`
 - Test: `npm --prefix src/dashboard-client run build && npm --prefix src/dashboard-client test`
 
 **Interfaces:**
+
 - Consumes: `ReactECharts` from `echarts-for-react@3.0.6` (peer range `echarts: ^3||^4||^5||^6` — verified compatible).
 - Produces: echarts 6.1.0 with all five chart components rendering (option API is stable; deprecated series/features removed).
 
@@ -323,10 +337,12 @@ git commit -m "chore(deps): echarts 6 (supported by echarts-for-react 3)"
 ### Task 8: Dashboard — lucide-react 0.456 → 1.x
 
 **Files:**
+
 - Modify: `src/dashboard-client/package.json` (`"lucide-react": "^0.456.0"` → `"^1.28.0"`)
 - Test: `npm --prefix src/dashboard-client run typecheck && npm --prefix src/dashboard-client run build`
 
 **Interfaces:**
+
 - Consumes: icons in use — `ChevronDown, ChevronRight, Eye, EyeOff, Menu, X, Plus, Pencil, Trash2, Search` (all current names, stable in 1.x).
 - Produces: lucide-react 1.28.0; build-time named-export validation catches any renamed icon.
 
@@ -356,10 +372,12 @@ git commit -m "chore(deps): lucide-react 1.x"
 ### Task 9: Dashboard — react-router-dom 6 → 7
 
 **Files:**
+
 - Modify: `src/dashboard-client/package.json` (`"react-router-dom": "^6.27.0"` → `"^7.18.2"`)
 - Test: `npm --prefix src/dashboard-client run typecheck && npm --prefix src/dashboard-client run build && npm --prefix src/dashboard-client test`
 
 **Interfaces:**
+
 - Consumes: API surface in use — `BrowserRouter, Routes, Route` (App.tsx), `useNavigate` (4 files), `Link` (5 files), `NavLink`, `useParams` (2), `useLocation` (2). All unchanged in v7 library mode.
 - Produces: react-router-dom 7.18.2, no code changes expected.
 

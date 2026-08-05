@@ -7,7 +7,7 @@ committing an image tag bump that Argo CD picks up from `main`.
 
 ## Pipeline diagram
 
-```
+```text
 pull request ──▶ pr-checks ────────────────────────────────────────────┐
    (branch)      typecheck · lint · audit · test-backend (coverage)    │
                  test-frontend · k8s-validate (kubeconform)            │

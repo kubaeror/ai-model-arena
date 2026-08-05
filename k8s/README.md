@@ -2,7 +2,7 @@
 
 ## Layout
 
-```
+```text
 k8s/
 ├── argocd/
 │   └── ai-arena-app.yaml              # Argo CD Application
@@ -53,9 +53,11 @@ kubectl -n ai-arena create secret generic webhook-secret \
 > the `webhook-secret` secret above — create it or webhook create/delete will
 > fail in every containerized deployment.
 
-# Deploy via kustomize
+## Deploy via kustomize
+
 kubectl apply -k k8s/overlays/dev
-```
+
+```bash
 
 ### Production (Argo CD)
 
@@ -100,7 +102,7 @@ via the dashboard. Until then, providers requiring API keys will fail.
 The arena uses a **dual approach** to secrets:
 
 | Category | Secret | Method | Managed By | ArgoCD |
-|----------|--------|--------|------------|--------|
+| ---------- | -------- | -------- | ------------ | -------- |
 | **Infrastructure** | `arena-db-auth` (DB/Redis URLs, JWT secret), `postgres-auth` (username, password) | [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) | `kubeseal` CLI → git commit | Yes |
 | **Provider API keys** | `provider-keys` (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.) | Dashboard → k8s API directly | Dashboard UI (Settings → API Keys) | No |
 
@@ -111,6 +113,7 @@ Encrypted at rest in git, decrypted at deploy time by the Sealed Secrets control
 These are consumed via `envFrom.secretRef` in all workloads (dashboard, runners, scheduler).
 
 **Rotating infra secrets**:
+
 1. Update the plain secret values on the cluster
 2. Re-seal with `kubeseal`
 3. Commit the updated `arena-secrets-sealed.yaml`
@@ -123,6 +126,7 @@ API keys for LLM providers are set through the dashboard UI. The dashboard pod h
 Runners mount the Secret as files at `/etc/arena/secrets/` (not `envFrom`), so kubelet auto-refreshes them within ~60s of a dashboard update — no pod restart needed. The application's `SecretStore` reads individual key files from this mount point.
 
 This approach keeps API keys out of ArgoCD's GitOps scope, preventing:
+
 - Accidental overwrites from stale git state after a UI edit
 - API keys in git history (even encrypted)
 - Requiring kubeseal for routine key rotations

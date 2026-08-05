@@ -5,6 +5,7 @@
 **Goal:** Upgrade `src/dashboard-client` test infra from vitest 2.1.x to 4.1.x and routing from react-router-dom 7.18.x to react-router 8.3.x with zero behavior change, clearing two deferred items from `docs/superpowers/plans/2026-08-04-dependency-upgrade.md` (Addendum).
 
 **Architecture:** Both migrations are confined to `src/dashboard-client` (its own package.json + lockfile + node_modules). The root repo uses node:test + tsx and is untouched except for the `engines` floor. Vitest first (test infra), then react-router (source + test imports) — each task ends with the existing 86-test suite green. Verified export surface research:
+
 - `react-router-dom` has NO v8 (latest = 7.18.2). v8 ships as `react-router` (core) + `react-router/dom` (only `RouterProvider`, `HydratedRouter`, RSC internals — not used here). `BrowserRouter`, `Routes`, `Route`, `Link`, `NavLink`, `MemoryRouter`, `useNavigate`, `useLocation`, `useParams` are ALL in the core `react-router` entry (verified against react-router@8.3.0 `dist/production/index.d.ts` and `dom-export.d.ts`).
 - vitest@4.1.10 peer-depends on `vite ^6 || ^7 || ^8` (project: vite 8.1.5 ✓), needs Node ≥ 20 (env: v26.5.0 ✓).
 
@@ -24,11 +25,13 @@
 ### Task 1: Vitest 2 → 4 (deps + config + allowScripts)
 
 **Files:**
+
 - Modify: `src/dashboard-client/package.json` (devDependencies `vitest`, `@testing-library/jest-dom`; `allowScripts` esbuild entry)
 - Modify: `src/dashboard-client/vitest.config.ts` (restore `dist` exclude — vitest 4 narrowed default excludes to `node_modules` + `.git` only)
 - Test: `npm --prefix src/dashboard-client test`, `npm --prefix src/dashboard-client run typecheck`, `npm --prefix src/dashboard-client run build`
 
 **Interfaces:**
+
 - Consumes: current `vitest@2.1.9` (via `vite@5` + `esbuild@0.21.5` bundled), `@testing-library/jest-dom@6.x`, vite 8.1.5.
 - Produces: `vitest@4.1.10` (bundles its own `vite@^6||^7||^8`; prunes esbuild 0.21.5), jest-dom 6.9.1, vitest 4 config with `configDefaults.exclude` + `**/dist/**`.
 
@@ -96,17 +99,20 @@ git commit -m "chore(deps): vitest 2->4 (resolves esbuild advisory under bundled
 ### Task 2: react-router-dom 7 → react-router 8 (import swap + package swap)
 
 **Files:**
+
 - Modify: `src/dashboard-client/package.json` (remove `react-router-dom`, add `react-router`)
 - Modify: 23 import lines across 14 source files + 9 test files (list below)
 - Test: full suite (MemoryRouter-based tests are the migration check), typecheck, build
 
 **Interfaces:**
+
 - Consumes: current `react-router-dom@7.18.2` (re-exports from `react-router@7`).
 - Produces: `react-router@8.3.0`; all imports now resolve to the core entry. Also clears deferred advisory GHSA-qwww-vcr4-c8h2 (high, affects react-router-dom 7.12.0–8.2.0; fixed in react-router 8.3.0).
 
 **File list (all are a single import-line change `'react-router-dom'` → `'react-router'`):**
 
 Source (named exports unchanged in v8 core):
+
 1. `src/App.tsx` — `BrowserRouter, Routes, Route`
 2. `src/components/Launcher.tsx` — `useNavigate`
 3. `src/components/CommandPalette.tsx` — `useNavigate`
@@ -176,9 +182,11 @@ git commit -m "chore(deps): react-router 8 — drop react-router-dom (clears GHS
 ### Task 3: Bump engine floor for react-router 8
 
 **Files:**
+
 - Modify: `package.json` (root, `engines`)
 
 **Interfaces:**
+
 - Consumes: root `engines.node = ">=22.0.0"` (currently misleading — react-router 8 requires ≥ 22.22.0).
 - Produces: `engines.node = ">=22.22.0"`.
 

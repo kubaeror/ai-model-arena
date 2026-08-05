@@ -212,6 +212,25 @@ jobs:
             koalaman/shellcheck:stable \
             -x scripts/backup/*.sh scripts/k8s/*.sh scripts/restore/*.sh
 
+  yaml-markdown-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Yamllint
+        # docker:// actions do not glob-expand args; docker run on the
+        # checked-out repo mirrors the local invocation exactly.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            cytopia/yamllint:latest -f parsable \
+            k8s configs .github/workflows .github/dependabot.yml docker-compose.yml
+      - name: Markdownlint
+        # Vendored skill trees (.agents/, .opencode/, .superpowers/) and
+        # node_modules are excluded by linting project docs explicitly.
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            davidanson/markdownlint-cli2:latest --config .markdownlint.json \
+            README.md AGENTS.md docs k8s/README.md src/dashboard-client/DESIGN.md
+
   dockerfile-lint:
     runs-on: ubuntu-latest
     steps:

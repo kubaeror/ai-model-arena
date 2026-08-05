@@ -12,17 +12,17 @@ rubric:
   correctness:
     description: "Code correctness: Does the implementation work as specified? Are there bugs or edge cases?"
     maxScore: 10
-  
+
   # Instruction fidelity (0-10): Did the model follow instructions?
   fidelity:
     description: "Instruction fidelity: Did the model follow the task instructions precisely?"
     maxScore: 10
-  
+
   # Code quality/style (0-10): Clean, maintainable code
   style:
     description: "Code quality and style: Is the code clean, well-structured, and maintainable?"
     maxScore: 10
-  
+
   # Efficiency (0-10): Optimal approach
   efficiency:
     description: "Efficiency of approach: Is the solution efficient and elegant?"

@@ -14,7 +14,7 @@
 
 ### Production Readiness: **Not Ready**
 
-### Final Recommendation: **GO ONLY AFTER BLOCKERS ARE RESOLVED** — an exceptional foundation exists, but multiple critical security and reliability gaps must be closed before any production deployment.
+### Final Recommendation: **GO ONLY AFTER BLOCKERS ARE RESOLVED** — an exceptional foundation exists, but multiple critical security and reliability gaps must be closed before any production deployment
 
 ### Top 10 Production Blockers
 
@@ -63,6 +63,7 @@ The codebase demonstrates strong engineering across container hardening, network
 ### Minimum Safe Production Scope
 
 Single-tenant, single-cluster deployment with:
+
 - All unauthenticated routes secured
 - Kill switch functional
 - PDBs reconfigured for drainability
@@ -78,7 +79,7 @@ Single-tenant, single-cluster deployment with:
 ### Component Inventory
 
 | Component | Location | Role |
-|---|---|---|
+| --- | --- | --- |
 | **CLI** | `src/cli.ts` | Command-line interface (commander-based) |
 | **Runner** | `src/runner.ts`, `src/runner-entry.ts` | Long-lived queue-driven agent executor |
 | **Worker (Legacy)** | `src/worker.ts` | PM2-based parallel worker (bypasses queue) |
@@ -108,7 +109,7 @@ Single-tenant, single-cluster deployment with:
 ### Technology Inventory
 
 | Technology | Version | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | Node.js | 20-bookworm-slim (SHA: 2cf067cfed83) | Runtime |
 | TypeScript | 7.x (root), 5.6.3 (client) | Language |
 | Express | 5.x | API server |
@@ -135,7 +136,7 @@ Single-tenant, single-cluster deployment with:
 ### Kubernetes Inventory
 
 | Resource | Count | Details |
-|---|---|---|
+| --- | --- | --- |
 | Namespaces | 2 | ai-arena, observability |
 | Deployments | 5 | dashboard, runner-openai, postgres (StatefulSet), redis, scheduler (CronJob) |
 | Services | 6 | dashboard, postgres, redis, prometheus, loki, grafana, otel-collector |
@@ -154,7 +155,7 @@ Single-tenant, single-cluster deployment with:
 ### Provider/Authentication Inventory
 
 | Provider ID | Adapter Type | Auth Mechanism |
-|---|---|---|
+| --- | --- | --- |
 | openai | openai-compat | Bearer token (OPENAI_API_KEY) |
 | anthropic | anthropic | x-api-key header (ANTHROPIC_API_KEY) |
 | google | google | Query param ?key= (GOOGLE_API_KEY) ⚠️ log leakage risk |
@@ -177,7 +178,7 @@ Single-tenant, single-cluster deployment with:
 ### GitHub Actions Inventory
 
 | Workflow | Trigger | Jobs | Permissions |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | build-deploy.yaml | push to main | typecheck, lint, test, build, docker, trivy, smoke, push | contents: read, packages: write |
 | pr-checks.yaml | PR to main | dependency-review, typecheck, lint, audit, test-backend, test-frontend | contents: read |
 | nightly.yaml | cron + manual | build, test, smoke | contents: read |
@@ -373,7 +374,7 @@ graph LR
 ## 3. Findings Register
 
 | ID | Severity | Area | Status | Evidence | Risk / Impact | Recommendation | Effort | Priority |
-|---|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | F-001 | CRITICAL | Auth | Unsafe | `src/dashboard-server/routes/runners.ts` — `registerRunnerRoutes(app)` with zero middleware | Unauthenticated K8s infrastructure control, pod log reading, runner scaling/draining | Wrap with `requireAuth(auth)` + `requireRole('admin')` | Low | P0 |
 | F-002 | CRITICAL | Auth | Unsafe | `src/dashboard-server/routes/queues.ts` — queues routes unauthenticated | Unauthenticated DLQ inspection, task retry | Wrap with `requireAuth(auth)` + `requireRole('admin')` | Low | P0 |
 | F-003 | CRITICAL | Runner | Missing | `src/runner.ts:67-73` — kill switch flag never checked; `src/orchestrator/run-lifecycle.ts:432` sets `killSwitchActive = true` but runner loop never reads it | Kill switch is complete no-op. Cannot globally stop task processing. | Add `if (killSwitchActive) return` in runner dequeue loop + skip new dequeue | Low | P0 |
@@ -424,7 +425,7 @@ graph LR
 ## 4. Feature Coverage Matrix
 
 | Requirement | Current State | Evidence | Gaps | Risks | Recommended Design |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | Versioned prompt registry | Implemented | `prompts` + `prompt_versions` tables with FK, version numbering, system_prompt, task, config, created_by | No approval workflow; no prompt policy scanning for dangerous tool instructions | Malicious prompt could instruct agent to exfiltrate data | Add approval workflow; add prompt policy scanner |
 | Prompt parameter validation | Missing | No parameter schemas in prompt versions | Templates are free-text; no validation before execution | Invalid parameters cause silent failures | Add Zod parameter schemas to prompt_versions.config |
 | Prompt secret placeholders | Missing | No placeholder mechanism exists | Secrets must be manually injected | Hardcoded secrets in prompts | Add `${SECRET:name}` placeholders resolved at runtime |
@@ -494,7 +495,7 @@ graph LR
 ## 5. Provider Compatibility Matrix
 
 | Provider / Type | Auth | Model Discovery | Streaming | Tools | Structured Output | Usage Data | Cost Data | Context Limits | Region Controls | Health Check | Fallback Ready | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **OpenAI** (openai-compat) | Bearer token via env | models.dev API sync ✅ | ✅ SSE streaming | ✅ function calling | ❌ JSON mode not exposed | ✅ input/output/cached tokens | ✅ per-1K pricing from catalog | ✅ from catalog | ❌ No region control | ❌ No dedicated health check | ✅ In runner path | 12 providers share this adapter |
 | **Anthropic** (native) | x-api-key header | models.dev API sync ✅ | ✅ SSE streaming | ✅ tool_use blocks | ❌ Not exposed | ✅ cache_read/write/input/output | ✅ from catalog | ✅ from catalog | ❌ No region control | ❌ No dedicated health check | ✅ In runner path | Native adapter with Anthropic-specific content block parsing |
 | **Google** (native) | `?key=` query param ⚠️ log risk | models.dev API sync ✅ | ✅ SSE streaming | ✅ functionCall parts | ❌ Not exposed | ✅ cachedContentTokenCount | ✅ from catalog | ✅ from catalog | ❌ No region control | ❌ No dedicated health check | ✅ In runner path | Key in URL is log leakage concern |
@@ -538,7 +539,7 @@ graph LR
 
 ### Target Component Boundaries
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        INGRESS / API GW                          │
 │  (TLS termination, rate limiting, WAF, auth passthrough)         │
@@ -615,7 +616,7 @@ graph LR
 ### Data Ownership
 
 | Domain | Owner | Storage Strategy |
-|---|---|---|
+| --- | --- | --- |
 | **Provider config** | Provider Registry | DB with immutable versioning |
 | **Model catalog** | Catalog Sync | DB with effective-date versioning |
 | **Pricing** | Catalog Sync → Pricing Resolver | DB with snapshot versioning |
@@ -640,7 +641,7 @@ graph LR
 
 ### Bedrock Security Model (Target)
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │              AWS ACCOUNT (Production)             │
 │                                                   │
@@ -670,7 +671,7 @@ graph LR
 
 ### Custom Provider Security Model (Target)
 
-```
+```text
 Create Provider Request
         │
         ▼
@@ -775,7 +776,7 @@ ON USE (per-runner startup):
 
 ### Queue Design
 
-```
+```text
 Priority Levels (proposed):
   P0 — Critical / admin operations
   P1 — User-submitted runs
@@ -822,7 +823,7 @@ stateDiagram-v2
 
 ### Idempotency
 
-```
+```text
 Enqueue flow:
 1. Generate SHA256 hash of: scenario + models + params + run config → idempotencyKey
 2. Redis: SETNX arena:dedup:<key> runId EX 86400
@@ -832,7 +833,7 @@ Enqueue flow:
 
 ### Concurrency Model
 
-```
+```text
 Per-runner concurrency: 1 (single-threaded dequeue→execute→ack loop)
 Per-deployment replicas: KEDA-scaled 1→10 (by queue depth)
 Per-provider concurrency cap: configurable per api-keys.yaml
@@ -842,7 +843,7 @@ Global concurrency cap: admission controller check against active runs count
 
 ### Backpressure
 
-```
+```text
 Admission control pipeline:
 1. Check global active runs < MAX_GLOBAL_CONCURRENT
 2. Check per-user active runs < MAX_USER_CONCURRENT
@@ -855,7 +856,7 @@ Admission control pipeline:
 
 ### Rate Limits
 
-```
+```text
 API: 300 req/min (configurable)
 Login: 20 attempts / 15 min window
 Health: 60 req/min
@@ -870,7 +871,7 @@ Provider rate limits: per-provider adapter configuration
 
 ### Timeout Hierarchy
 
-```
+```text
 | Layer                                    | Timeout   | On Timeout     |
 |------------------------------------------|-----------|----------------|
 | Provider adapter HTTP request            | 60s       | Retry or fail  |
@@ -885,7 +886,7 @@ Provider rate limits: per-provider adapter configuration
 
 ### Retry/Fallback/Circuit-Breaker Rules
 
-```
+```text
 Retry:
   3 attempts, exponential backoff (1s → 2s → 4s), jitter ±25%
   Retryable: 429, 5xx, network errors (ECONNRESET, ETIMEDOUT, etc.)
@@ -909,7 +910,7 @@ Circuit Breaker:
 
 ### Autoscaling
 
-```
+```text
 KEDA ScaledObject per runner deployment:
   Triggers:
     - Redis Streams: target queue length 5 items/pod
@@ -925,7 +926,7 @@ HPA (alternative):
 
 ### Runner Drain Behavior
 
-```
+```text
 Drain sequence (triggered by /api/runners/:name/drain or K8s eviction):
 1. Stop dequeue loop (close AbortController)
 2. Wait for current task to complete (or 30s grace)
@@ -937,7 +938,7 @@ Drain sequence (triggered by /api/runners/:name/drain or K8s eviction):
 ### SLOs/SLIs
 
 | SLO | SLI | Target |
-|---|---|---|
+| --- | --- | --- |
 | Task acceptance rate | accepted / submitted | > 99.9% |
 | Task completion rate | completed / accepted | > 99% |
 | Task completion latency p95 | time(completed - submitted) | < 10 min |
@@ -949,7 +950,7 @@ Drain sequence (triggered by /api/runners/:name/drain or K8s eviction):
 ### Alerts (Proposed)
 
 | Alert | Expression | Severity | For |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | TaskCompletionRateLow | rate(completed[5m]) / rate(submitted[5m]) < 0.95 | critical | 5m |
 | QueueDepthHigh | queue_depth > 500 | warning | 10m |
 | QueueAgeHigh | max(queue_wait_seconds) > 300 | warning | 5m |
@@ -968,7 +969,8 @@ Drain sequence (triggered by /api/runners/:name/drain or K8s eviction):
 ### Normalized Schemas
 
 #### Provider
-```
+
+```text
 provider:
   id: string (PK, immutable)
   name: string
@@ -990,7 +992,8 @@ provider:
 ```
 
 #### Provider Configuration Version (NEW)
-```
+
+```text
 provider_config_version:
   provider_id: string (FK → provider.id)
   version: integer
@@ -1006,7 +1009,8 @@ provider_config_version:
 ```
 
 #### Model
-```
+
+```text
 model:
   id: string (PK, canonical "provider/modelId")
   name: string
@@ -1033,7 +1037,8 @@ model:
 ```
 
 #### Pricing Version (REVISED)
-```
+
+```text
 pricing_snapshot:
   id: string (PK)
   model_id: string (FK → model.id)
@@ -1055,7 +1060,8 @@ pricing_snapshot:
 ```
 
 #### Credential Reference (NEW — never stored in DB as plaintext)
-```
+
+```text
 credential_reference:
   id: string (PK)
   provider_id: string (FK → provider.id)
@@ -1069,7 +1075,8 @@ credential_reference:
 ```
 
 #### Prompt Template / Version
-```
+
+```text
 prompt:
   id: string (PK)
   tenant_id: string (FK → tenant.id)
@@ -1097,7 +1104,8 @@ prompt_version:
 ```
 
 #### Job / Run
-```
+
+```text
 run:
   id: string (PK, UUIDv7)
   tenant_id: string (FK → tenant.id)
@@ -1136,7 +1144,8 @@ run_model:
 ```
 
 #### Attempt
-```
+
+```text
 attempt:
   id: string (PK)
   run_id: string (FK → run.id)
@@ -1173,7 +1182,8 @@ attempt:
 ```
 
 #### Usage Record
-```
+
+```text
 usage_record:
   id: string (PK)
   attempt_id: string (FK → attempt.id)
@@ -1192,7 +1202,8 @@ usage_record:
 ```
 
 #### Cost Ledger Entry
-```
+
+```text
 cost_ledger:
   id: string (PK)
   run_id: string (FK → run.id)
@@ -1215,7 +1226,8 @@ cost_ledger:
 ```
 
 #### Quality Result
-```
+
+```text
 quality_result:
   id: string (PK)
   run_id: string (FK → run.id)
@@ -1239,7 +1251,8 @@ quality_result:
 ```
 
 #### Error Event
-```
+
+```text
 error_event:
   id: string (PK)
   attempt_id: string (FK → attempt.id, nullable)
@@ -1257,7 +1270,8 @@ error_event:
 ```
 
 #### Audit Event
-```
+
+```text
 audit_event:
   id: string (PK)
   tenant_id: string (FK → tenant.id)
@@ -1277,7 +1291,7 @@ audit_event:
 ### Sensitive Field Marking
 
 | Field | Classification | Protection |
-|---|---|---|
+| --- | --- | --- |
 | `provider.env_var` | SENSITIVE | Credential reference only; never raw value |
 | `credential_reference.reference` | SENSITIVE | Reference only; actual secret in secrets manager |
 | `attempt.tokens_output` | SENSITIVE | Aggregated counts only; no per-call breakdown |
@@ -1291,7 +1305,7 @@ audit_event:
 ### Storage, Encryption, Access, and Retention Rules
 
 | Data Class | Storage | Encryption | Access | Retention |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Runs metadata | Postgres | TLS in transit; encryption at rest (storage class) | Tenant-scoped RBAC | 90 days (configurable) |
 | Cost ledger | Postgres | Same | Admin + billing roles | 7 years (compliance) |
 | Audit events | Postgres | Same | Admin only | 1 year (configurable) |
@@ -1312,7 +1326,7 @@ audit_event:
 **Scope:** Resolve critical blockers that prevent any safe deployment.
 
 | Task | Dependencies | Acceptance Criteria | Security Criteria | Test Requirements |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Secure runner + queue routes | None | All `/api/runners/*` and `/api/queues/*` require admin JWT | Auth middleware in place; 401/403 on unauthenticated requests | Auth route tests; 401 smoke test |
 | Fix kill switch | None | `activateKillSwitch()` stops runner dequeue within 1 loop iteration | No tasks processed after kill switch activated | Integration test: enqueue, activate kill switch, verify no dequeue |
 | Fix PDBs | None | All PDBs allow voluntary evictions | Nodes can drain without forced pod deletion | `kubectl drain` simulation test |
@@ -1333,7 +1347,7 @@ audit_event:
 **Scope:** Production-grade queue reliability, job lifecycle, cost integrity.
 
 | Task | Dependencies | Acceptance Criteria | Security Criteria | Test Requirements |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Add idempotency | Phase 0 | Same logical run never executes twice | SETNX guard prevents duplicate enqueue | Duplicate submission test |
 | Fix Redis nack race | Phase 0 | Atomic nack via Lua script; no duplicate messages | No task duplication across reclaim cycles | Multi-consumer chaos test |
 | Fix runner shutdown nack | Phase 0 | Abandoned tasks properly nacked on timeout | PEL entries cleaned on graceful shutdown | Shutdown timeout test |
@@ -1356,7 +1370,7 @@ audit_event:
 **Scope:** Production-grade provider integration with versioned configs and Bedrock first-class support.
 
 | Task | Dependencies | Acceptance Criteria | Security Criteria | Test Requirements |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Add provider config versioning | Phase 1 | Old provider config preserved on update; effective dates | Rollback to historical config version | Version history test |
 | Add pricing snapshot versioning | Phase 1 | Pricing history preserved; cost_ledger references resolvable | Historical cost verification | Pricing version audit test |
 | Fix Bedrock as any casts | Phase 1 | Proper Converse API types; no type assertions | Type safety for all Bedrock SDK calls | Bedrock adapter typecheck |
@@ -1377,7 +1391,7 @@ audit_event:
 **Scope:** Full observability pipeline, cost dashboards, operator tooling.
 
 | Task | Dependencies | Acceptance Criteria | Test Requirements |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Unify OTel tracing | Phase 1 | Agent-loop spans use OTel SDK; correlation IDs link traces end-to-end | Trace correlation test |
 | Add DB/Redis/FS instrumentation | Phase 1 | Database queries, Redis operations, filesystem operations traced | Span coverage test |
 | Add GenAI semantic conventions | Phase 1 | gen_ai.* attributes on all LLM call spans | Attribute conformance test |
@@ -1400,7 +1414,7 @@ audit_event:
 **Scope:** Quality measurement, intelligent routing, A/B experimentation.
 
 | Task | Dependencies | Acceptance Criteria | Test Requirements |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Create regression suite configs | Phase 1 | At least 5 benchmark scenarios with golden task datasets | Regression pass/fail test |
 | Persist objective metrics to DB | Phase 1 | Loop detection, tool stats, turn efficiency stored and queryable | Metrics persistence test |
 | Implement ensemble judging | Phase 1 | Multiple judge models; inter-judge agreement metrics | Agreement score test |
@@ -1421,7 +1435,7 @@ audit_event:
 **Scope:** Production hardening, failure injection, capacity planning.
 
 | Task | Dependencies | Acceptance Criteria | Test Requirements |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Chaos engineering harness | Phase 3 observability | Failure injection for: pod kill, network partition, Redis restart, provider outage | Scenario pass/fail |
 | Multi-tenant isolation | Phase 1 | tenant_id enforced on all queries; cross-tenant access impossible | Tenant isolation penetration test |
 | Service mesh (mTLS) | Phase 1 | Istio/Linkerd with strict mTLS between all services | mTLS verification test |
@@ -1442,7 +1456,7 @@ audit_event:
 ### P0 — Production Blockers
 
 | ID | Objective | Why | Components | Acceptance Criteria | Test Strategy | Complexity | Dependencies |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | P0-01 | Secure unauthenticated routes | Anyone can control K8s infrastructure via `/api/runners/*` | dashboard-server routes, auth middleware | Admin JWT required; 403 for viewers/editors; 401 for unauthenticated | Auth route tests; penetration test | Low | None |
 | P0-02 | Fix kill switch | `activateKillSwitch()` is a no-op — critical safety control | runner.ts, run-lifecycle.ts | Kill switch stops dequeue within 1 loop iteration; no new tasks processed | Integration test with enqueue + kill switch | Low | None |
 | P0-03 | Fix PDBs to allow node drains | Single-replica PDBs with maxUnavailable:1 block all evictions | k8s/pdb.yaml | All PDBs allow voluntary evictions; nodes drain cleanly | kubectl drain test | Low | None |
@@ -1454,7 +1468,7 @@ audit_event:
 ### P1 — Required for First Safe Production Release
 
 | ID | Objective | Why | Components | Acceptance Criteria | Test Strategy | Complexity | Dependencies |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | P1-01 | Fix cost_ledger completeness | Immutable audit ledger has NULL for all audit fields | cost-tracking, run-lifecycle | Token counts + pricing version populated; CLI path writes to ledger | Ledger population test | Low | P0 |
 | P1-02 | Fix Redis nack race condition | Multiple consumers can produce duplicate messages | queue/redis.ts | Atomic nack via Lua script; no duplicates under reclaim | Multi-consumer chaos test | Medium | P0 |
 | P1-03 | Fix runner shutdown nack | Abandoned tasks sit in PEL for 60s with no failure record | runner.ts | nack called on shutdown timeout; attempt incremented | Shutdown timeout test | Low | P0 |
@@ -1470,7 +1484,7 @@ audit_event:
 ### P2 — High-Value Platform Features
 
 | ID | Objective | Why | Components | Acceptance Criteria | Test Strategy | Complexity | Dependencies |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | P2-01 | Bedrock first-class support (streaming, discovery, IAM) | Bedrock integration is incomplete and unsafe | providers/adapters/bedrock, IAM, catalog | Streaming works; models auto-discovered; least-privilege IAM | Bedrock integration + IAM validation test | High | P1 |
 | P2-02 | Custom provider framework expansion | Only openai-compat supported for custom providers | providers/custom, url-validator, adapters | All adapter types available; SSRF re-validated on use | Custom provider creation + execution test | High | P1 |
 | P2-03 | Wire budget threshold notifications | Config exists but never delivers alerts | notifications, cost-tracking/budget | Slack/Discord notified at 80% budget threshold | Notification integration test | Low | P1 |
@@ -1490,7 +1504,7 @@ audit_event:
 ### P3 — Advanced Optimization and Scale
 
 | ID | Objective | Why | Components | Acceptance Criteria | Test Strategy | Complexity | Dependencies |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | P3-01 | Multi-tenant isolation | Required for SaaS product | Entire db schema, all middleware | Tenant-scoped queries; cross-tenant access impossible | Tenant isolation pen test | Very High | P2 |
 | P3-02 | A/B testing framework | No statistical model comparison exists | evaluation, routing | Experiments with randomization, significance testing | Statistical correctness test | High | P2 |
 | P3-03 | Tournament / ELO ranking | "Arena" in name but no internal arena | evaluation, dashboard | Pairwise comparison + ELO ratings | Tournament ranking test | High | P2 |
@@ -1563,4 +1577,3 @@ However, **7 critical and 9 high-severity findings** must be resolved before any
 ---
 
 *Audit completed 2026-07-22. This report is evidence-based; all findings reference specific files, line ranges, and configurations. No implementation code was produced in this pass.*
-
