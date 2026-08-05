@@ -8,6 +8,8 @@ import path from 'node:path';
  * (e.g. `dist/orchestrator/orchestrator.js` is two levels under root).
  */
 export function findProjectRoot(): string {
+  const envRoot = process.env.AI_ARENA_ROOT;
+  if (envRoot) return envRoot;
   let dir = import.meta.dirname;
   for (let i = 0; i < 12; i++) {
     if (fs.existsSync(path.join(dir, 'package.json'))) {

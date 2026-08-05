@@ -11,12 +11,7 @@ import { initDb, closeDb } from '../../src/db/index.js';
 import { listSchedules } from '../../src/db/query.js';
 import { resetSchedulesCache } from '../../src/scheduler/manager.js';
 
-test('PATCH /api/schedules/:id toggles enabled, persists to YAML, and returns the updated record', async (t) => {
-  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
-    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
-    return;
-  }
-
+test('PATCH /api/schedules/:id toggles enabled, persists to YAML, and returns the updated record', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-sched-routes-'));
   const configPath = path.join(dir, 'configs', 'schedules.yaml');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -26,13 +21,8 @@ test('PATCH /api/schedules/:id toggles enabled, persists to YAML, and returns th
     ],
   }));
 
-  t.mock.module('../../src/paths.js', {
-    exports: {
-      findProjectRoot: () => dir,
-      outputRoot: () => dir,
-      dbPath: () => path.join(dir, 'arena.db'),
-    },
-  });
+  process.env.AI_ARENA_ROOT = dir;
+  process.env.OUTPUT_ROOT = dir;
   resetSchedulesCache();
   initDb(path.join(dir, 'arena.db'));
   const { syncSchedulesToDb } = await import('../../src/scheduler/manager.js');

@@ -21,12 +21,7 @@ function suiteResult(overrides: Partial<SuiteResult>): SuiteResult {
   };
 }
 
-test('GET /api/regression/results returns newest saved results across suites', async (t) => {
-  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
-    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
-    return;
-  }
-
+test('GET /api/regression/results returns newest saved results across suites', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-regression-routes-'));
   const regressionDir = path.join(dir, 'regression');
 
@@ -50,13 +45,8 @@ test('GET /api/regression/results returns newest saved results across suites', a
   fs.writeFileSync(path.join(regressionDir, 'broken', 'regression-results.json'), '{not-json');
   fs.writeFileSync(path.join(regressionDir, 'stray.json'), '{}');
 
-  t.mock.module('../../src/paths.js', {
-    exports: {
-      findProjectRoot: () => dir,
-      outputRoot: () => dir,
-      dbPath: () => path.join(dir, 'arena.db'),
-    },
-  });
+  process.env.AI_ARENA_ROOT = dir;
+  process.env.OUTPUT_ROOT = dir;
   initDb(path.join(dir, 'arena.db'));
 
   const { createRegressionRouter } = await import('../../src/dashboard-server/routes/regression.js');

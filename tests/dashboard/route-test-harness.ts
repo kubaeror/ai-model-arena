@@ -98,12 +98,10 @@ export interface ArenaHarness {
 }
 
 export async function boot(t: TestContext, options: BootOptions = {}): Promise<ArenaHarness> {
-  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
-    throw new Error('boot() requires --experimental-test-module-mocks (provided by npm test)');
-  }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-routes-'));
   const savedEnv = new Map(ENV_KEYS.map((k) => [k, process.env[k]]));
 
+  process.env.AI_ARENA_ROOT = dir;
   process.env.ARENA_DB_PATH = path.join(dir, 'arena.db');
   process.env.OUTPUT_ROOT = path.join(dir, 'outputs');
   process.env.DASHBOARD_JWT_SECRET = 'test-jwt-secret-0123456789abcdef';
@@ -111,14 +109,6 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   process.env.DASHBOARD_PASSWORD = 'admin-pass-123';
   delete process.env.DASHBOARD_REDIS_URL;
   delete process.env.QUEUE_DRIVER;
-
-  t.mock.module('../../src/paths.js', {
-    exports: {
-      findProjectRoot: () => dir,
-      outputRoot: () => path.join(dir, 'outputs'),
-      dbPath: () => path.join(dir, 'arena.db'),
-    },
-  });
 
   initDb(path.join(dir, 'arena.db'));
   await seedRolesAndUsers(options.seedViewerUser ? TEST_VIEWER : undefined);

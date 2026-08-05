@@ -1,5 +1,4 @@
 import { test } from 'node:test';
-import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,12 +7,7 @@ import { getDrizzleDb } from '../../src/db/index.js';
 import { insertAuditEntry } from '../../src/db/query.js';
 import { models, pricing, providers, run_models, runs } from '../../src/db/schema.js';
 
-function requiresModuleMocks(t: TestContext): boolean {
-  return typeof (t.mock as { module?: unknown }).module === 'function';
-}
-
 test('POST /api/auth/login authenticates env and DB users, rejects bad credentials', async (t) => {
-  if (!requiresModuleMocks(t)) { t.skip('requires --experimental-test-module-mocks (provided by npm test)'); return; }
   const h = await boot(t);
 
   const dbUser = await postJson(h.base, null, '/api/auth/login', { username: TEST_ADMIN.username, password: TEST_ADMIN.password });
@@ -35,7 +29,6 @@ test('POST /api/auth/login authenticates env and DB users, rejects bad credentia
 });
 
 test('GET /api/models requires auth; POST /api/models registers a provider and lists models', async (t) => {
-  if (!requiresModuleMocks(t)) { t.skip('requires --experimental-test-module-mocks (provided by npm test)'); return; }
   const h = await boot(t);
   const db = getDrizzleDb();
   const now = new Date().toISOString();
@@ -69,7 +62,6 @@ test('GET /api/models requires auth; POST /api/models registers a provider and l
 });
 
 test('POST /api/scenarios then GET /api/scenarios/:name round-trips a scenario YAML', async (t) => {
-  if (!requiresModuleMocks(t)) { t.skip('requires --experimental-test-module-mocks (provided by npm test)'); return; }
   const h = await boot(t);
 
   const created = await postJson(h.base, h.adminToken, '/api/scenarios', {
@@ -100,7 +92,6 @@ test('POST /api/scenarios then GET /api/scenarios/:name round-trips a scenario Y
 });
 
 test('GET /api/runs returns seeded runs', async (t) => {
-  if (!requiresModuleMocks(t)) { t.skip('requires --experimental-test-module-mocks (provided by npm test)'); return; }
   const h = await boot(t);
   const db = getDrizzleDb();
   await db.insert(runs).values({
@@ -139,7 +130,6 @@ test('GET /api/runs returns seeded runs', async (t) => {
 });
 
 test('GET /api/queues reports queue entries, admin only', async (t) => {
-  if (!requiresModuleMocks(t)) { t.skip('requires --experimental-test-module-mocks (provided by npm test)'); return; }
   const h = await boot(t, { seedViewerUser: true });
 
   const anon = await fetch(`${h.base}/api/queues`);
@@ -161,7 +151,6 @@ test('GET /api/queues reports queue entries, admin only', async (t) => {
 });
 
 test('GET /api/secrets masks values, admin only', async (t) => {
-  if (!requiresModuleMocks(t)) { t.skip('requires --experimental-test-module-mocks (provided by npm test)'); return; }
   const h = await boot(t, { seedViewerUser: true });
   t.after(() => { delete process.env.ARENA_TEST_API_KEY; });
   process.env.ARENA_TEST_API_KEY = 'sk-test-1234567890';
@@ -184,7 +173,6 @@ test('GET /api/secrets masks values, admin only', async (t) => {
 });
 
 test('GET /api/roles lists seeded roles', async (t) => {
-  if (!requiresModuleMocks(t)) { t.skip('requires --experimental-test-module-mocks (provided by npm test)'); return; }
   const h = await boot(t);
 
   const res = await authedGet(h.base, h.adminToken, '/api/roles');
@@ -194,7 +182,6 @@ test('GET /api/roles lists seeded roles', async (t) => {
 });
 
 test('GET /api/audit returns paginated audit entries', async (t) => {
-  if (!requiresModuleMocks(t)) { t.skip('requires --experimental-test-module-mocks (provided by npm test)'); return; }
   const h = await boot(t);
   await insertAuditEntry({
     actor: 'tester', action: 'model.create', entityType: 'model', entityId: 'm1',
