@@ -103,7 +103,15 @@ export async function upsertModelCall(data: {
     usage: data.usage, latency_ms: data.latencyMs, ttft_ms: data.ttftMs ?? null, created_at: data.createdAt,
   }).onConflictDoUpdate({
     target: [model_calls.session_id, model_calls.turn],
-    set: { response_text: data.responseText, usage: data.usage, latency_ms: data.latencyMs, ttft_ms: data.ttftMs ?? null, created_at: data.createdAt },
+    set: {
+      response_text: data.responseText,
+      usage: data.usage,
+      latency_ms: data.latencyMs,
+      // Skip ttft_ms when absent so a re-record without it doesn't clobber
+      // the original first-token latency.
+      ...(data.ttftMs !== undefined ? { ttft_ms: data.ttftMs } : {}),
+      created_at: data.createdAt,
+    },
   });
 }
 
@@ -287,11 +295,17 @@ export interface ScheduleInput {
 
 export async function insertSchedule(s: ScheduleInput): Promise<void> {
   const db = getDrizzleDb();
-  const existing = await db.select({ id: schedules.id }).from(schedules).where(eq(schedules.id, s.id)).limit(1);
-  if (existing.length > 0) return;
   await db.insert(schedules).values({
     id: s.id, scenario: s.scenario, models: JSON.stringify(s.models),
     cron: s.cron, enabled: s.enabled ? 1 : 0, created_at: s.createdAt ?? new Date().toISOString(),
+  }).onConflictDoUpdate({
+    target: schedules.id,
+    set: {
+      scenario: s.scenario,
+      models: JSON.stringify(s.models),
+      cron: s.cron,
+      enabled: s.enabled ? 1 : 0,
+    },
   });
 }
 

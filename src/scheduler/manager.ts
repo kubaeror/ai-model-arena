@@ -103,10 +103,11 @@ export async function setScheduleEnabled(configPath: string, id: string, enabled
   fs.writeFileSync(resolvedPath, dump(config));
 
   try {
-    const { updateScheduleEnabled } = await import('../db/query.js');
-    await updateScheduleEnabled(id, enabled);
+    // Full re-sync so the edited YAML (enabled, scenario, cron, models)
+    // propagates to the DB the ticker reads, not just the enabled flag.
+    await syncSchedulesToDb(configPath, logger);
   } catch (err) {
-    logger?.warn('updateScheduleEnabled failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+    logger?.warn('syncSchedulesToDb failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
   }
 
   return true;

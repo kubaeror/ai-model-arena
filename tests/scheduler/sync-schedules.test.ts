@@ -38,6 +38,44 @@ test('syncSchedulesToDb mirrors YAML schedules idempotently', async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('syncSchedulesToDb upserts hand-edited YAML changes into the DB', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-sync-'));
+  const configPath = path.join(dir, 'schedules.yaml');
+  fs.writeFileSync(configPath, dump({
+    schedules: [
+      { id: 's1', scenario: 'x', models: ['gpt-4o'], cron: '0 3 * * *', enabled: true },
+    ],
+  }));
+  initDb(path.join(dir, 'arena.db'));
+
+  loadSchedulesConfig(configPath);
+  await syncSchedulesToDb(configPath);
+  let row = (await listSchedules())[0];
+  assert.equal(row.id, 's1');
+  assert.equal(row.enabled, 1);
+  assert.equal(row.scenario, 'x');
+  assert.equal(row.cron, '0 3 * * *');
+
+  // Operator hand-edits the YAML (disables + changes scenario/cron/models).
+  fs.writeFileSync(configPath, dump({
+    schedules: [
+      { id: 's1', scenario: 'y', models: ['claude-sonnet-4'], cron: '0 6 * * *', enabled: false },
+    ],
+  }));
+  resetSchedulesCache(); // simulate restart: config reloaded from disk
+  await syncSchedulesToDb(configPath);
+
+  row = (await listSchedules())[0];
+  assert.equal(row.id, 's1', 'upsert keeps the single row');
+  assert.equal((await listSchedules()).length, 1);
+  assert.equal(row.enabled, 0, 'hand-edited enabled=false propagates');
+  assert.equal(row.scenario, 'y', 'hand-edited scenario propagates');
+  assert.equal(row.cron, '0 6 * * *', 'hand-edited cron propagates');
+  assert.equal(JSON.parse(row.models as unknown as string)[0], 'claude-sonnet-4', 'hand-edited models propagate');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('setScheduleEnabled persists enabled flag to YAML, memory, and DB', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-sync-'));
   const configPath = path.join(dir, 'schedules.yaml');
