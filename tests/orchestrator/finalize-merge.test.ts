@@ -13,6 +13,7 @@ import {
   finalizeRunByRunId,
   registerRun,
   isRunComplete,
+  isRunCompleteByRunId,
   type RunSpec,
   type PerModelSpec,
 } from '../../src/orchestrator/run-lifecycle.js';
@@ -343,5 +344,41 @@ describe('finalize merge (run-lifecycle single core)', () => {
       r.perModel.find((m) => m.model === 'beta')!.status = 'failed';
     });
     assert.strictEqual(await isRunComplete(spec), true);
+  });
+
+  it('isRunCompleteByRunId is false when the run record is absent', async () => {
+    assert.strictEqual(await isRunCompleteByRunId('run_absent_by_id'), false);
+  });
+
+  it('isRunCompleteByRunId is false while a model is running or claimed', async () => {
+    const runId = 'run_inflight_by_id';
+    const alpha = makePerModel(runId, 'alpha', root, 't-byid');
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+    assert.strictEqual(await isRunCompleteByRunId(runId), false, 'running is not complete');
+    await updateRun(runId, (r) => { r.perModel[0]!.status = 'claimed'; });
+    assert.strictEqual(await isRunCompleteByRunId(runId), false, 'claimed is not complete');
+  });
+
+  it('isRunCompleteByRunId is false when any model has an unknown status', async () => {
+    const runId = 'run_unknown_by_id';
+    const alpha = makePerModel(runId, 'alpha', root, 't-byid');
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+    await updateRun(runId, (r) => { r.perModel[0]!.status = 'unknown'; });
+    assert.strictEqual(await isRunCompleteByRunId(runId), false, 'unknown is not complete');
+  });
+
+  it('isRunCompleteByRunId is true when every model reached a terminal status', async () => {
+    const runId = 'run_terminal_by_id';
+    const alpha = makePerModel(runId, 'alpha', root, 't-byid');
+    const beta = makePerModel(runId, 'beta', root, 't-byid');
+    const spec = buildSpec(runId, root, [alpha, beta]);
+    await registerRun(spec, 'cli');
+    await updateRun(runId, (r) => {
+      r.perModel.find((m) => m.model === 'alpha')!.status = 'completed';
+      r.perModel.find((m) => m.model === 'beta')!.status = 'failed';
+    });
+    assert.strictEqual(await isRunCompleteByRunId(runId), true);
   });
 });

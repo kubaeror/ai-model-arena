@@ -277,20 +277,21 @@ export async function checkRunStatus(spec: RunSpec): Promise<PerModelStatus[]> {
   });
 }
 
+/** Statuses that mean a model's task reached an end state (never restarts on its own). */
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'dead', 'errored']);
+
 export function isRunComplete(spec: RunSpec): Promise<boolean> {
   const statuses = checkRunStatus(spec);
   return statuses.then((ss) => ss.every((s: PerModelStatus) =>
-    !s.online &&
-    (s.status === 'completed' || s.status === 'failed' || s.status === 'stopped' ||
-     s.status === 'dead' || s.status === 'errored'),
+    !s.online && TERMINAL_STATUSES.has(s.status),
   ));
 }
 
-/** True iff every model in a run is stopped (from the runs table). */
+/** True iff every model in a run reached a terminal status (from the runs table). */
 export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
   const rec = await getRunRecord(runId);
-  if (!rec || rec.perModel.length === 0) return true;
-  return rec.perModel.every((m) => m.status !== 'running');
+  if (!rec || rec.perModel.length === 0) return false;
+  return rec.perModel.every((m) => TERMINAL_STATUSES.has(m.status));
 }
 
 interface AggregateInput {
