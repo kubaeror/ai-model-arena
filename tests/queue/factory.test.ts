@@ -26,6 +26,12 @@ test('createQueue returns in-memory queue for QUEUE_DRIVER=memory', (t) => {
   assert.ok(createQueue() instanceof InMemoryQueue);
 });
 
+test('createQueue ignores the provider param for the in-memory driver', (t) => {
+  t.after(saveEnv());
+  delete process.env.QUEUE_DRIVER;
+  assert.ok(createQueue('groq') instanceof InMemoryQueue);
+});
+
 test('createQueue throws when QUEUE_DRIVER=redis without REDIS_URL', (t) => {
   t.after(saveEnv());
   process.env.QUEUE_DRIVER = 'redis';

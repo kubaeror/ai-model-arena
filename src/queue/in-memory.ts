@@ -92,6 +92,10 @@ export class InMemoryQueue implements TaskQueue {
     return this.pending.length + this.inFlight.size;
   }
 
+  async pendingCount(): Promise<number> {
+    return this.pending.length;
+  }
+
   async deadLetterSize(): Promise<number> {
     return this.dead.length;
   }

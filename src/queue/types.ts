@@ -23,6 +23,8 @@ export interface TaskQueue {
   ack(taskId: string): Promise<void>;
   nack(taskId: string, reason?: string): Promise<void>;
   size(): Promise<number>;
+  /** Number of tasks waiting to be processed (not in-flight). */
+  pendingCount?(): Promise<number>;
   deadLetterSize?(): Promise<number>;
   deadLetterPeek?(limit: number): Promise<Task[]>;
   deadLetterRetry?(taskId: string): Promise<boolean>;

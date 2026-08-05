@@ -35,3 +35,6 @@ export function dlqStreamKey(prefix: string, provider: string): string {
 }
 
 export { PROVIDER_ADAPTER_FAMILIES };
+
+/** All known provider IDs, in declaration order — used to enumerate per-provider queues. */
+export const knownProviders = Object.keys(PROVIDER_ADAPTER_FAMILIES);

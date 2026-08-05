@@ -148,7 +148,7 @@ test('enqueue with the same idempotencyKey is a no-op', async () => {
   await q.close();
 });
 
-test('deadLetterRetry re-enqueues a DLQ message and resets its attempts', async () => {
+test('deadLetterRetry re-enqueues a DLQ message by task id and resets its attempts', async () => {
   const fake = createFakeRedis();
   const q = makeQueue(fake);
   await q.enqueue(mkTask('t1'));
@@ -159,11 +159,9 @@ test('deadLetterRetry re-enqueues a DLQ message and resets its attempts', async 
   }
   assert.equal(await q.deadLetterSize(), 1);
 
-  // NOTE: redis.ts addresses DLQ messages by their stream entry id, not the
-  // task id (see report: deadLetterPeek does not currently expose it).
-  const dlqIds = fake.getStreamIds(DLQ_STREAM);
-  assert.equal(dlqIds.length, 1);
-  assert.equal(await q.deadLetterRetry(dlqIds[0]!), true);
+  // DLQ entries carry opaque auto-ids from XADD '*', so retry must match the
+  // embedded taskId field (deadLetterPeek exposes task ids, not stream ids).
+  assert.equal(await q.deadLetterRetry('t1'), true);
   assert.equal(await q.deadLetterSize(), 0, 'DLQ entry removed after retry');
 
   const retried = await q.dequeue(0);
@@ -173,9 +171,58 @@ test('deadLetterRetry re-enqueues a DLQ message and resets its attempts', async 
   await q.close();
 });
 
-test('deadLetterRetry returns false for an unknown message id', async () => {
+test('deadLetterRetry returns false for a task id never in the DLQ', async () => {
   const fake = createFakeRedis();
   const q = makeQueue(fake);
-  assert.equal(await q.deadLetterRetry('does-not-exist'), false);
+  assert.equal(await q.deadLetterRetry('t1'), false);
+  assert.equal(await q.deadLetterSize(), 0, 'nothing moved');
+  await q.close();
+});
+
+test('enqueue routes tasks to the provider family stream from the router', async () => {
+  const fake = createFakeRedis();
+  const q = makeQueue(fake, { providerFilter: 'groq' });
+  const t = { ...mkTask('t1'), provider: 'groq' };
+  await q.enqueue(t);
+
+  // groq belongs to the openai-compat family — never its own literal stream
+  assert.equal(streamKey(PREFIX, 'groq'), streamKey(PREFIX, 'openai'));
+  assert.equal(fake.getStreamIds(`${PREFIX}:openai-compat`).length, 1);
+  assert.equal(fake.getStreamIds(`${PREFIX}:groq`).length, 0, 'no literal provider stream');
+  await q.close();
+});
+
+test('DLQ ops target the provider family DLQ stream', async () => {
+  const fake = createFakeRedis();
+  const q = makeQueue(fake, { providerFilter: 'groq' });
+  await q.enqueue({ ...mkTask('t1'), provider: 'groq' });
+  for (let i = 0; i < 5; i++) {
+    const task = await q.dequeue(0);
+    assert.ok(task);
+    await q.nack(task!._redisId!, 'boom');
+  }
+  assert.equal(await q.deadLetterSize(), 1);
+  assert.equal(fake.getStreamIds(dlqStreamKey(PREFIX, 'groq')).length, 1, 'dead-lettered on the provider DLQ stream');
+
+  const peeked = (await q.deadLetterPeek(10)) as Array<Task & { dlqReason?: string }>;
+  assert.equal(peeked.length, 1);
+  assert.equal(peeked[0]!.taskId, 't1');
+  assert.equal(peeked[0]!.dlqReason, 'boom');
+  await q.close();
+});
+
+test('pending reports waiting (not in-flight) task count', async () => {
+  const fake = createFakeRedis();
+  const q = makeQueue(fake);
+  await q.enqueue(mkTask('t1'));
+  await q.enqueue(mkTask('t2'));
+  assert.equal(await q.pendingCount(), 2, 'xlen - xpending = 2 - 0');
+
+  const first = await q.dequeue(0);
+  assert.ok(first);
+  assert.equal(await q.pendingCount(), 1, 'delivered-but-unacked message is not waiting');
+
+  await q.ack(first!._redisId!);
+  assert.equal(await q.pendingCount(), 2, 'acked message is waiting again');
   await q.close();
 });
