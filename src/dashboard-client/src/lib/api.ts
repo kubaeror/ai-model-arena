@@ -502,13 +502,13 @@ export async function listOutputMappings(): Promise<OutputMappingRow[]> {
 }
 export async function createOutputMapping(input: {
   scope: string; scopeId: string; parentFolder: string; perModelPattern: string;
-}): Promise<{ ok: boolean }> {
+}): Promise<OutputMappingRow> {
   return apiFetch('/api/output-mappings', { method: 'POST', body: JSON.stringify(input) });
 }
 export async function updateOutputMapping(
   id: string,
   input: { scope?: string; scopeId?: string; parentFolder?: string; perModelPattern?: string },
-): Promise<{ ok: boolean }> {
+): Promise<OutputMappingRow> {
   return apiFetch(`/api/output-mappings/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify(input),
