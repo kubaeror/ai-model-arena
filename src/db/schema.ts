@@ -356,6 +356,19 @@ export const schedules = sqliteTable('schedules', {
   created_at: text('created_at').notNull(),
 });
 
+export const judge_scores = sqliteTable('judge_scores', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  run_id: text('run_id').notNull(),
+  model: text('model').notNull(),
+  judge_model: text('judge_model').notNull(),
+  average_score: real('average_score').notNull(),
+  summary: text('summary').notNull(),
+  scores_json: text('scores_json').notNull(),
+  judged_at: text('judged_at').notNull(),
+}, (table) => [
+  uniqueIndex('uq_judge_scores_run_model').on(table.run_id, table.model),
+]);
+
 // ── Legacy type exports (kept for existing consumers of these interfaces) ──
 
 export interface ProviderRow {
@@ -482,3 +495,4 @@ export type DbPromptVersion = InferSelectModel<typeof prompt_versions>;
 export type DbOutputMapping = InferSelectModel<typeof output_mappings>;
 export type DbSchedule = InferSelectModel<typeof schedules>;
 export type DbToolCallStat = InferSelectModel<typeof tool_call_stats>;
+export type DbJudgeScore = InferSelectModel<typeof judge_scores>;

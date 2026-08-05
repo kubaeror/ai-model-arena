@@ -21,6 +21,7 @@ import {
 } from './run-index.js';
 import { analyzeRun } from '../anomaly-detection/index.js';
 import { runJudgeScoring, loadEvaluationConfig, writeJudgeResult } from '../evaluation/judge.js';
+import { insertJudgeScore } from '../db/query.js';
 
 function makeIdempotencyKey(scenario: string, models: string[]): string {
   return crypto.createHash('sha256').update(`${scenario}:${models.join(',')}`).digest('hex').slice(0, 32);
@@ -435,7 +436,22 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
             }
           } catch { /* sandbox may not exist */ }
           const verdict = await runJudgeScoring(m.model, runId, task, files, evalCfg, logger);
-          if (verdict) writeJudgeResult(m.outputDir, verdict, logger);
+          if (verdict) {
+            writeJudgeResult(m.outputDir, verdict, logger);
+            try {
+              await insertJudgeScore({
+                runId,
+                model: m.model,
+                judgeModel: verdict.judgeModel,
+                averageScore: verdict.averageScore,
+                summary: verdict.summary,
+                scoresJson: JSON.stringify(verdict.scores),
+                judgedAt: verdict.judgedAt,
+              });
+            } catch (e) {
+              logger.warn('judge score DB persist failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e) });
+            }
+          }
         }
       }
     } catch (e) {

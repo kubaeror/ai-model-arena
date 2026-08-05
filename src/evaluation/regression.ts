@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { outputRoot, findProjectRoot } from '../paths.js';
 import type { Logger } from '../types.js';
 import type { BaselineSnapshot, RegressionResult, JudgeResult } from './types.js';
@@ -56,19 +57,29 @@ export function saveBaselineSnapshot(
 export function createBaselineSnapshot(
   result: RunResult,
   judgeResult: JudgeResult | null
-): BaselineSnapshot {
+): BaselineSnapshot | null {
+  if (!judgeResult) return null;
   return {
     runId: result.runId,
     model: result.model,
     scenario: result.scenario,
     timestamp: result.finishedAt,
     metrics: {
-      averageScore: judgeResult?.averageScore ?? 0,
+      averageScore: judgeResult.averageScore,
       totalTokens: (result.tokenUsage.prompt ?? 0) + (result.tokenUsage.completion ?? 0),
       durationMs: result.durationMs,
       success: result.success,
     },
   };
+}
+
+/**
+ * Relative change from baseline, guarded against division by zero.
+ * Returns 0 when the baseline is zero (no sane percentage exists) instead of
+ * +∞ or a fabricated ratio.
+ */
+function relativeChange(current: number, baseline: number): number {
+  return baseline > 0 ? (current - baseline) / baseline : 0;
 }
 
 export function compareBaseline(
@@ -98,7 +109,7 @@ export function compareBaseline(
     }
   }
   
-  const tokenIncrease = (currentMetrics.totalTokens - baseline.metrics.totalTokens) / Math.max(baseline.metrics.totalTokens, 1);
+  const tokenIncrease = relativeChange(currentMetrics.totalTokens, baseline.metrics.totalTokens);
   if (tokenIncrease > thresholds.tokenIncrease) {
     regressions.push({
       metric: 'totalTokens',
@@ -109,7 +120,7 @@ export function compareBaseline(
     });
   }
   
-  const timeIncrease = (currentMetrics.durationMs - baseline.metrics.durationMs) / Math.max(baseline.metrics.durationMs, 1);
+  const timeIncrease = relativeChange(currentMetrics.durationMs, baseline.metrics.durationMs);
   if (timeIncrease > thresholds.timeIncrease) {
     regressions.push({
       metric: 'durationMs',
@@ -153,7 +164,7 @@ export async function runRegressionSuite(
 ): Promise<SuiteResult> {
   const suiteResult: SuiteResult = {
     suite: suiteName,
-    runId: `regress-${Date.now()}`,
+    runId: `regress-${randomUUID()}`,
     model: models.join(','),
     scenarioResults: [],
     passed: true,

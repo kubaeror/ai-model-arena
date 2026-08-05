@@ -55,24 +55,6 @@ export interface JudgeResult {
 
 export type { JudgeResult as JudgeResultType };
 
-export interface ObjectiveMetrics {
-  accepted_change_rate: number;
-  turns_used: number;
-  max_turns: number;
-  turns_remaining: number;
-  turn_efficiency: number;
-  cycle_time_seconds: number;
-  tool_call_stats: {
-    total: number;
-    failed: number;
-    redundant: number;
-    loops: number;
-    validation_errors: number;
-  };
-  success: boolean;
-  cost_usd: number;
-}
-
 export interface BaselineSnapshot {
   runId: string;
   model: string;
@@ -95,18 +77,4 @@ export interface RegressionResult {
     change: number;
     threshold: number;
   }>;
-}
-
-export interface ToolCallRecord {
-  turn: number;
-  name: string;
-  arguments: Record<string, unknown>;
-  success: boolean;
-}
-
-export interface LoopDetection {
-  type: 'back_to_back' | 'cycle';
-  turns: number[];
-  tools: string[];
-  description: string;
 }

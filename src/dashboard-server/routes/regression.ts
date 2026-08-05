@@ -123,8 +123,10 @@ export function createRegressionRouter(): Router {
       for (const sr of result.scenarioResults) {
         if (sr.success && sr.current) {
           const snap = createBaselineSnapshot(sr.current, sr.judge ?? null);
-          const bPath = getBaselinePath(baselineDir, sr.current.model, sr.scenario);
-          saveBaselineSnapshot(bPath, snap, logger);
+          if (snap) {
+            const bPath = getBaselinePath(baselineDir, sr.current.model, sr.scenario);
+            saveBaselineSnapshot(bPath, snap, logger);
+          }
         }
       }
     }

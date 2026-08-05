@@ -26,12 +26,14 @@ import {
   users, roles, user_roles,
   providers, models, model_providers, pricing, model_runtime_stats,
   schedules,
+  judge_scores,
 } from './schema.js';
 import type {
   DbSession, DbMessage, DbModelCall,
   DbPrompt, DbPromptVersion,
   DbUser, DbRole,
   DbOutputMapping, DbSchedule, DbModel,
+  DbJudgeScore,
 } from './schema.js';
 
 // ── Sessions ──────────────────────────────────────────────────────────────
@@ -279,6 +281,28 @@ export async function insertSchedule(s: ScheduleInput): Promise<void> {
 export async function deleteSchedule(id: string): Promise<void> {
   const db = getDrizzleDb();
   await db.delete(schedules).where(eq(schedules.id, id));
+}
+
+// ── Judge Scores ───────────────────────────────────────────────────────────
+
+export async function insertJudgeScore(data: {
+  runId: string; model: string; judgeModel: string;
+  averageScore: number; summary: string; scoresJson: string; judgedAt: string;
+}): Promise<void> {
+  const db = getDrizzleDb();
+  await db.insert(judge_scores).values({
+    run_id: data.runId, model: data.model, judge_model: data.judgeModel,
+    average_score: data.averageScore, summary: data.summary,
+    scores_json: data.scoresJson, judged_at: data.judgedAt,
+  }).onConflictDoNothing({ target: [judge_scores.run_id, judge_scores.model] });
+}
+
+export async function listJudgeScores(runId?: string): Promise<DbJudgeScore[]> {
+  const db = getDrizzleDb();
+  const rows = runId
+    ? await db.select().from(judge_scores).where(eq(judge_scores.run_id, runId))
+    : await db.select().from(judge_scores);
+  return rows as DbJudgeScore[];
 }
 
 export async function listSchedules(): Promise<DbSchedule[]> {
