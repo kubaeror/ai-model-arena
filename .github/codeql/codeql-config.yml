@@ -1,0 +1,9 @@
+name: "Arena CodeQL config"
+
+# Test harnesses and dev-only scripts are excluded from analysis: their
+# alerts (e.g. js/missing-rate-limiting in route-test-harness.ts) are
+# false positives by design and would otherwise keep the dashboard red.
+paths-ignore:
+  - 'tests/**'
+  - '**/*.test.ts'
+  - 'scripts/ws-smoke.mjs'
