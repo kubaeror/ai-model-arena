@@ -214,9 +214,28 @@ export function releaseReservation(
     const entries = state.reservations?.[modelName];
     if (entries && entries.length > 0) {
       const today = DAY_KEY();
-      const idx = entries.findIndex((entry) => entry.dailyKey === today);
-      entries.splice(idx >= 0 ? idx : 0, 1);
-      saveBudgetState(rootDir, logger);
+      // Match the persisted entry by amount so out-of-order releases of
+      // different amounts remove the right entry. Removing the FIRST today
+      // entry would untether the file from the in-memory total when releases
+      // arrive out of order (e.g. reserve 2 then 5, release the 5 first).
+      const idx = entries.findIndex((entry) => entry.dailyKey === today && entry.amount === estimatedCostUsd);
+      if (idx >= 0) {
+        entries.splice(idx, 1);
+        saveBudgetState(rootDir, logger);
+      } else if (entries.some((entry) => entry.dailyKey === today)) {
+        // A today entry exists but none matches the released amount. Safest
+        // option: leave persisted entries untouched — deleting the wrong one
+        // corrupts the persisted total, and reserve/release amounts are
+        // expected to match. The in-memory decrement above still applies.
+        logger?.warn('No persisted reservation entry matches released amount; leaving persisted reservations untouched', {
+          model: modelName,
+          estimatedCost: estimatedCostUsd,
+          today,
+          persistedEntries: entries.length,
+        });
+      }
+      // No today-matching entry at all: the reservation was never persisted
+      // (in-memory only) — nothing to remove, skip persistence entirely.
     }
   }
 

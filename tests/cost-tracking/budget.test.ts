@@ -95,3 +95,61 @@ test('releaseReservation removes the persisted reservation', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('releaseReservation removes the entry matching the released amount, not the first today entry', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  try {
+    writeState(statePath, { models: {} });
+    loadBudgetConfig(configPath);
+    assert.equal(reserveBudget('gpt-4o', 2, rootDir).ok, true);
+    assert.equal(reserveBudget('gpt-4o', 5, rootDir).ok, true);
+
+    // Release the LATER reservation (5) before the earlier one (2).
+    releaseReservation('gpt-4o', 5, 0, rootDir);
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    const entries = persisted.reservations?.['gpt-4o'] ?? [];
+    assert.equal(entries.length, 1, 'only the released reservation is removed');
+    assert.equal(entries[0].amount, 2, 'the unreleased reservation (2) survives, not the released one (5)');
+
+    // A fresh instance over the same file must count only the remaining 2.
+    resetBudgetCache();
+    loadBudgetConfig(configPath);
+    // 2 remaining + 6 = 8 <= 10 -> allowed. If 5 had been left behind, 5 + 6 = 11 would block.
+    assert.equal(reserveBudget('gpt-4o', 6, rootDir).ok, true, 'remaining reservation is 2, not 5');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('releaseReservation for a never-persisted amount leaves the state file untouched', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  try {
+    writeState(statePath, { models: {} });
+    loadBudgetConfig(configPath);
+    assert.equal(reserveBudget('gpt-4o', 4, rootDir).ok, true);
+
+    // Fresh instance hydrates the persisted reservation (4) into memory.
+    resetBudgetCache();
+    loadBudgetConfig(configPath);
+
+    // Release an amount that was never reserved or persisted (3 != 4).
+    releaseReservation('gpt-4o', 3, 0, rootDir);
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    const entries = persisted.reservations?.['gpt-4o'] ?? [];
+    assert.equal(entries.length, 1, 'no persisted entry is removed');
+    assert.equal(entries[0].amount, 4, 'unrelated persisted entry survives');
+
+    // The 4 reservation must still count after restart.
+    resetBudgetCache();
+    loadBudgetConfig(configPath);
+    assert.equal(reserveBudget('gpt-4o', 7, rootDir).ok, false, 'reservation remains counted after restart');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
