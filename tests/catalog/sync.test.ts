@@ -101,6 +101,37 @@ test('fetchSync does not duplicate pricing rows on repeated sync', async () => {
   }
 });
 
+test('fetchSync with fresh cache skips network unless force is set', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls++;
+    return {
+      status: 200, ok: true,
+      json: async () => FAKE_MODELS_DEV,
+      text: async () => JSON.stringify(FAKE_MODELS_DEV),
+    } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    const now = new Date();
+    getDb().prepare('INSERT INTO catalog_cache_state (source, last_fetch, last_status, count, next_refresh) VALUES (?, ?, ?, ?, ?)')
+      .run('models.dev', now.toISOString(), 'ok', 2, new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString());
+
+    const skipped = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json' });
+    assert.equal(skipped.skipped, true);
+    assert.equal(fetchCalls, 0);
+
+    const forced = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    assert.equal(forced.skipped, undefined);
+    assert.equal(fetchCalls, 1);
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
 test('fetchSync records error status on fetch failure', async () => {
   const cleanup = freshDb();
   const origFetch = globalThis.fetch;

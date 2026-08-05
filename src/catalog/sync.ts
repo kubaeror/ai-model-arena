@@ -1,4 +1,5 @@
 import { getDrizzleDb } from '../db/index.js';
+import { isStale } from './cache.js';
 import { ModelsDevResponseSchema, type ModelsDevResponse } from './types.js';
 import { normalizeModelId } from './match.js';
 import {
@@ -10,6 +11,7 @@ export interface SyncResult {
   source: string;
   ok: boolean;
   count: number;
+  skipped?: boolean;
   error?: string;
 }
 
@@ -39,6 +41,9 @@ function getRefreshIntervalMs(): number {
 export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl: getApiUrl() }): Promise<SyncResult> {
   void source;
   const db = getDrizzleDb();
+  if (!opts.force && !(await isStale('models.dev'))) {
+    return { source: 'models.dev', ok: true, count: 0, skipped: true };
+  }
   try {
     const res = await fetch(opts.apiUrl);
     if (!res.ok) {
