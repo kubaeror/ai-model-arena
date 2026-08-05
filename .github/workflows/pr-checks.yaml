@@ -16,15 +16,15 @@ jobs:
   pr-title:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
     steps:
-      - uses: amannn/action-semantic-pull-request@0723387faaf9b38adef4775cd42cfd5155ed6017 # v5.5.3
-        with:
-          token: ${{ github.token }}
-          types: feat, fix, docs, ci, chore, test, refactor
-          requireScope: false
-          validateSingleCommit: false
+      - name: Validate conventional PR title
+        run: |
+          TITLE="${{ github.event.pull_request.title }}"
+          echo "PR title: $TITLE"
+          if ! echo "$TITLE" | grep -qE '^(feat|fix|docs|ci|chore|test|refactor)(\([a-zA-Z0-9-]+\))?: .+$'; then
+            echo "::error::PR title must match 'type(optional scope): description' with type in: feat, fix, docs, ci, chore, test, refactor"
+            exit 1
+          fi
 
   typecheck:
     runs-on: ubuntu-latest
