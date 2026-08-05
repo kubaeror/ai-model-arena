@@ -1,6 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createBaselineSnapshot, compareBaseline, runRegressionSuite } from '../../src/evaluation/regression.js';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
+import {
+  createBaselineSnapshot,
+  compareBaseline,
+  runRegressionSuite,
+  saveSuiteResult,
+  listSavedSuiteResults,
+} from '../../src/evaluation/regression.js';
+import type { SuiteResult } from '../../src/evaluation/regression.js';
 import type { RunResult } from '../../src/logger/result-logger.js';
 import type { JudgeResult, BaselineSnapshot } from '../../src/evaluation/types.js';
 
@@ -90,4 +100,75 @@ test('runRegressionSuite generates a unique runId per call', async () => {
   assert.match(first.runId, /^regress-/);
   assert.match(second.runId, /^regress-/);
   assert.notEqual(first.runId, second.runId);
+});
+
+function sampleSuiteResult(): SuiteResult {
+  return {
+    suite: 'suite-a',
+    runId: 'regress-1',
+    model: 'gpt-4o',
+    scenarioResults: [],
+    passed: true,
+    timestamp: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+function recordingLogger() {
+  const warns: Array<{ msg: string; data?: unknown }> = [];
+  const logger = {
+    info: () => {},
+    warn: (msg: string, data?: unknown) => { warns.push({ msg, data }); },
+    error: () => {},
+    debug: () => {},
+    child: () => logger,
+  };
+  return { logger, warns };
+}
+
+test('saveSuiteResult does not throw when the results directory cannot be created', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-regression-save-'));
+  const prev = process.env.OUTPUT_ROOT;
+  process.env.OUTPUT_ROOT = root;
+  try {
+    // A FILE at <root>/regression makes mkdirSync(<root>/regression/<suite>) throw ENOTDIR.
+    fs.mkdirSync(path.join(root, 'regression'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'regression', 'suite-a'), '');
+    const { logger, warns } = recordingLogger();
+    assert.doesNotThrow(() => saveSuiteResult(sampleSuiteResult(), logger));
+    assert.ok(warns.some((w) => w.msg.includes('Failed to save')), 'expected a warn log on save failure');
+  } finally {
+    if (prev === undefined) delete process.env.OUTPUT_ROOT;
+    else process.env.OUTPUT_ROOT = prev;
+  }
+});
+
+test('saveSuiteResult does not throw when writing the result file fails', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-regression-save-'));
+  const prev = process.env.OUTPUT_ROOT;
+  process.env.OUTPUT_ROOT = root;
+  try {
+    // A DIRECTORY at the file path makes writeFileSync throw EISDIR.
+    fs.mkdirSync(path.join(root, 'regression', 'suite-a', 'regression-results.json'), { recursive: true });
+    const { logger, warns } = recordingLogger();
+    assert.doesNotThrow(() => saveSuiteResult(sampleSuiteResult(), logger));
+    assert.ok(warns.some((w) => w.msg.includes('Failed to save')), 'expected a warn log on save failure');
+  } finally {
+    if (prev === undefined) delete process.env.OUTPUT_ROOT;
+    else process.env.OUTPUT_ROOT = prev;
+  }
+});
+
+test('listSavedSuiteResults returns [] when the results root cannot be read', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-regression-list-'));
+  const prev = process.env.OUTPUT_ROOT;
+  process.env.OUTPUT_ROOT = root;
+  try {
+    // A FILE at <root>/regression passes existsSync but makes readdirSync throw ENOTDIR.
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, 'regression'), '');
+    assert.deepEqual(listSavedSuiteResults(), []);
+  } finally {
+    if (prev === undefined) delete process.env.OUTPUT_ROOT;
+    else process.env.OUTPUT_ROOT = prev;
+  }
 });

@@ -171,23 +171,41 @@ function suiteDirName(suite: string): string {
 }
 
 export function saveSuiteResult(result: SuiteResult, logger?: Logger): void {
-  const dir = path.join(regressionResultsDir(), suiteDirName(result.suite));
-  fs.mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, 'regression-results.json');
-  fs.writeFileSync(filePath, JSON.stringify(result, null, 2));
-  logger?.info('Saved regression suite result', { suite: result.suite, runId: result.runId, path: filePath });
+  try {
+    const dir = path.join(regressionResultsDir(), suiteDirName(result.suite));
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, 'regression-results.json');
+    fs.writeFileSync(filePath, JSON.stringify(result, null, 2));
+    logger?.info('Saved regression suite result', { suite: result.suite, runId: result.runId, path: filePath });
+  } catch (err) {
+    logger?.warn('Failed to save regression suite result', {
+      suite: result.suite,
+      runId: result.runId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
  * Read the newest `limit` saved results across all suites, newest first.
  * Corrupt or malformed files are skipped. `limit` is clamped to [1, 100].
  */
-export function listSavedSuiteResults(limit = 10): SuiteResult[] {
+export function listSavedSuiteResults(limit = 10, logger?: Logger): SuiteResult[] {
   const clamped = Math.min(Math.max(Math.trunc(limit), 1), 100);
   const root = regressionResultsDir();
   if (!fs.existsSync(root)) return [];
   const results: SuiteResult[] = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch (err) {
+    logger?.warn('Failed to list saved regression suite results', {
+      path: root,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const filePath = path.join(root, entry.name, 'regression-results.json');
     if (!fs.existsSync(filePath)) continue;
