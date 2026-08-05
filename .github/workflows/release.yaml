@@ -11,14 +11,16 @@ permissions:
   attestations: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  # Shared group across all v* tags: promotions push to main and must be
+  # serialized (two releases racing a rebase would otherwise conflict).
+  group: release-main
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     outputs:
-      image: ghcr.io/${{ github.repository }}
+      image: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,16 +50,16 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
       - name: Generate SBOM (CycloneDX JSON)
-        uses: anchore/sbom-action@4a30bbadbe35d73a1729ee95a9196544192d905e # v0.17.9
+        uses: anchore/sbom-action@df80a981bc6edbc4e220a492d3cbe9f5547a6e75 # v0.17.9
         with:
-          image-ref: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          image: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner@${{ steps.build.outputs.digest }}
           format: cyclonedx-json
           output-file: sbom-${{ github.ref_name }}.cdx.json
       - name: Upload SBOM
@@ -67,9 +69,9 @@ jobs:
           path: sbom-${{ github.ref_name }}.cdx.json
           retention-days: 90
       - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@2736533278103862a861f4a35ebac3e97854d956 # v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          image-ref: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:${{ github.ref_name }}
           format: table
           exit-code: 1
           ignore-unfixed: true
@@ -78,7 +80,7 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign Docker image
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          cosign sign --yes ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner@${{ steps.build.outputs.digest }}
         env:
           COSIGN_EXPERIMENTAL: "1"  # keyless signing via GitHub OIDC
       - name: Create GitHub release
@@ -113,7 +115,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "ci: promote ${{ github.ref_name }} image to prod"
-          git pull --rebase origin main || git pull --rebase origin main
+          # A conflict stops the rebase in-progress; a second pull --rebase
+          # would then fail ("rebase in progress") and prod would silently
+          # stay on the old image. Abort loudly instead.
+          git pull --rebase origin main || {
+            echo "rebase of the promotion commit conflicted; aborting"
+            git rebase --abort
+            exit 1
+          }
           git push origin main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -139,12 +148,12 @@ jobs:
   # The container SLSA generator does not upload an "attestation" workflow
   # artifact; it publishes the attestation to the container registry via
   # `cosign attest` (generator_container_slsa3.yml v2.0.0/v2.1.0). Pull it
-  # back down and attach it to the GitHub release. Runs `if: always()` so a
-  # failed/skipped slsa job cannot fail the release; a missing attestation is
-  # tolerated with the test -f guard below (and uploaded when present).
+  # back down and attach it to the GitHub release. Skipped when the release
+  # job failed (nothing to attach and no valid digest); a missing attestation
+  # is tolerated with the test -f guard below (and uploaded when present).
   attach-attestation:
     needs: [release, slsa]
-    if: always()
+    if: needs.release.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -159,7 +168,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cosign login ghcr.io -u "${{ github.actor }}" -p "$GITHUB_TOKEN"
-          cosign download attestation "ghcr.io/${{ github.repository }}@${{ needs.release.outputs.digest }}" > attestation.jsonl
+          cosign download attestation "ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner@${{ needs.release.outputs.digest }}" > attestation.jsonl
       - name: Attach attestation to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

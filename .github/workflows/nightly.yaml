@@ -64,11 +64,6 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
       - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
       - name: Build runner image
         run: docker buildx build --platform linux/amd64 --load -t ghcr.io/kubaeror/ai-model-arena-runner:latest .
@@ -84,7 +79,9 @@ jobs:
       - name: Install KEDA
         run: |
           helm repo add kedacore https://kedacore.github.io/charts
-          helm upgrade --install keda kedacore/keda -n keda --create-namespace
+          # Pinned to the latest stable KEDA v2.x (chart appVersion tracks the
+          # release); keda.sh/v1alpha1 CRs in k8s/base require v2 semantics.
+          helm upgrade --install keda kedacore/keda -n keda --create-namespace --version 2.20.2
           kubectl -n keda rollout status deploy/keda-operator --timeout=180s
           kubectl -n keda rollout status deploy/keda-operator-metrics-apiserver --timeout=180s
           kubectl -n keda rollout status deploy/keda-admission-webhooks --timeout=180s
@@ -134,4 +131,5 @@ jobs:
         with:
           name: kind-cluster-logs
           path: /tmp/kind-logs
+          if-no-files-found: warn
           retention-days: 7
