@@ -112,6 +112,36 @@ test('maxTurns=0 returns stopReason max_turns without invoking the model', async
   assert.equal(adapter.sendCalls(), 0);
 });
 
+test('no_tool_calls completion calls onTurnComplete once with the turn usage', async () => {
+  const adapter = stubAdapter([
+    { text: 'done', toolCalls: [], usage: { prompt: 10, completion: 5 }, stopReason: 'no_tool_calls' },
+  ]);
+  let calls = 0;
+  let capturedUsage: { prompt?: number } | undefined;
+  await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, maxTurns: 5,
+    onTurnComplete: async (_turn: number, _messages: ChatMessage[], usage: { prompt?: number }) => { calls++; capturedUsage = usage; },
+  });
+  assert.equal(calls, 1);
+  assert.equal(capturedUsage?.prompt, 10);
+});
+
+test('api_error does not call onTurnComplete', async () => {
+  const adapter: ModelAdapter = {
+    sendMessage: async () => { throw new Error('API down'); },
+    supportsReasoning: () => false,
+    supportsPromptCaching: () => false,
+  };
+  let calls = 0;
+  await runAgentLoop({
+    ...baseOpts(),
+    adapter, maxTurns: 5,
+    onTurnComplete: async () => { calls++; },
+  });
+  assert.equal(calls, 0);
+});
+
 test('onTurnComplete receives the model response durationMs for ttft capture', async () => {
   const tool: ToolDefinition = { name: 'list_files', description: '', parameters: {} };
   const adapter: ModelAdapter = {

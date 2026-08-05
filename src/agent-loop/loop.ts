@@ -204,65 +204,64 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       usage.total = (usage.total ?? 0) + (response.usage.total ?? 0);
     }
 
+    const wantsComplete = response.toolCalls ? response.toolCalls.some((tc) => tc.name === TASK_COMPLETE_TOOL) : false;
+
     if (!response.toolCalls || response.toolCalls.length === 0) {
       stopReason = 'no_tool_calls';
       logger.info('Agent finished (no tool calls)', { turn });
-      break;
-    }
+    } else {
+      for (const tc of response.toolCalls) {
+        totalToolCalls++;
+        toolCounts.set(tc.name, (toolCounts.get(tc.name) ?? 0) + 1);
+        conv.append({ type: 'tool_call', turn, toolCallId: tc.id, toolName: tc.name, meta: { args: tc.arguments } });
 
-    const wantsComplete = response.toolCalls.some((tc) => tc.name === TASK_COMPLETE_TOOL);
-
-    for (const tc of response.toolCalls) {
-      totalToolCalls++;
-      toolCounts.set(tc.name, (toolCounts.get(tc.name) ?? 0) + 1);
-      conv.append({ type: 'tool_call', turn, toolCallId: tc.id, toolName: tc.name, meta: { args: tc.arguments } });
-
-      const executor = executors[tc.name];
-      let content: string;
-      let isError = false;
-      if (!executor) {
-        content = `Error: unknown tool "${tc.name}". Available: ${tools.map((t) => t.name).join(', ')}`;
-        isError = true;
-        errors.push(`Turn ${turn}: unknown tool "${tc.name}"`);
-      } else {
-        try {
-          const toolSpan = startToolSpan(tc.name);
-          const res = await executor(tc.arguments, toolCtx);
-          endSpan(toolSpan);
-          content = res.content;
-          isError = res.isError;
-          if (isError) errors.push(`Turn ${turn}: tool "${tc.name}" reported an error`);
-        } catch (err) {
-          const toolSpan = startToolSpan(tc.name);
-          endSpan(toolSpan, err instanceof Error ? err : new Error(String(err)));
-          content = `Error executing "${tc.name}": ${err instanceof Error ? err.message : String(err)}`;
+        const executor = executors[tc.name];
+        let content: string;
+        let isError = false;
+        if (!executor) {
+          content = `Error: unknown tool "${tc.name}". Available: ${tools.map((t) => t.name).join(', ')}`;
           isError = true;
-          errors.push(`Turn ${turn}: tool "${tc.name}" threw: ${content}`);
+          errors.push(`Turn ${turn}: unknown tool "${tc.name}"`);
+        } else {
+          try {
+            const toolSpan = startToolSpan(tc.name);
+            const res = await executor(tc.arguments, toolCtx);
+            endSpan(toolSpan);
+            content = res.content;
+            isError = res.isError;
+            if (isError) errors.push(`Turn ${turn}: tool "${tc.name}" reported an error`);
+          } catch (err) {
+            const toolSpan = startToolSpan(tc.name);
+            endSpan(toolSpan, err instanceof Error ? err : new Error(String(err)));
+            content = `Error executing "${tc.name}": ${err instanceof Error ? err.message : String(err)}`;
+            isError = true;
+            errors.push(`Turn ${turn}: tool "${tc.name}" threw: ${content}`);
+          }
         }
-      }
 
-      content = truncate(content);
-      conv.append({ type: 'tool_result', turn, toolCallId: tc.id, toolName: tc.name, toolResult: content, isError });
-      messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content });
+        content = truncate(content);
+        conv.append({ type: 'tool_result', turn, toolCallId: tc.id, toolName: tc.name, toolResult: content, isError });
+        messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content });
 
-      // Track per-tool success/fail rates
-      const rate = toolSuccessRates[tc.name] ?? { success: 0, fail: 0 };
-      if (isError) rate.fail++;
-      else rate.success++;
-      toolSuccessRates[tc.name] = rate;
+        // Track per-tool success/fail rates
+        const rate = toolSuccessRates[tc.name] ?? { success: 0, fail: 0 };
+        if (isError) rate.fail++;
+        else rate.success++;
+        toolSuccessRates[tc.name] = rate;
 
-      // Scan tool output for indirect prompt injection patterns
-      const scan = scanToolResult(content);
-      if (scan.flagged) {
-        logger.warn('Tool output flagged for injection patterns', {
-          toolName: tc.name,
-          turn,
-          reasons: scan.reasons,
-        });
-        conv.append({
-          type: 'info',
-          content: `⚠ Tool output from "${tc.name}" flagged for injection patterns: ${scan.reasons?.join(', ')}`,
-        });
+        // Scan tool output for indirect prompt injection patterns
+        const scan = scanToolResult(content);
+        if (scan.flagged) {
+          logger.warn('Tool output flagged for injection patterns', {
+            toolName: tc.name,
+            turn,
+            reasons: scan.reasons,
+          });
+          conv.append({
+            type: 'info',
+            content: `⚠ Tool output from "${tc.name}" flagged for injection patterns: ${scan.reasons?.join(', ')}`,
+          });
+        }
       }
     }
 
@@ -278,10 +277,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       conv.append({ type: 'info', turn, content: `⚠ Context window compacted: oldest ${prevLen - messages.length} messages dropped to stay under ${MAX_CONTEXT_CHARS} chars.` });
     }
 
-    // Persist this turn BEFORE the completion break so the final assistant
-    // message survives a crash — checkpoint/resume depends on it.
+    // Persist this turn BEFORE either completion break so the final assistant
+    // message survives a crash — checkpoint/resume depends on it. Fires once
+    // per completed model turn; not for api_error, where the send failed.
     if (onTurnComplete) {
       try { await onTurnComplete(turn, turnMessages, usage, responseDurationMs); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
+    }
+
+    if (stopReason === 'no_tool_calls') {
+      break;
     }
 
     if (wantsComplete) {
