@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { validateProviderUrl } from '../../providers/url-validator.js';
-import { probeOpenAICompatEndpoint } from '../../providers/capability-probe.js';
+import { probeProvider } from '../../providers/capability-probe.js';
 import { auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import type { ApiKeyRequest } from '../auth-api-types.js';
@@ -40,17 +40,27 @@ export function createProvidersRouter(): Router {
       return;
     }
 
-    // Runtime capability detection for OpenAI-compatible providers
+    // Runtime reachability probe, dispatched per adapter kind (openai-compat
+    // GET /models, anthropic count_tokens, google models.list, bedrock gateway
+    // /health). Probes run only when an apiBase is configured (native-SigV4
+    // bedrock and keyless providers skip probing).
     let health: { reachable?: boolean; error?: string } | null = null;
-    if (parsed.data.adapter === 'openai-compat' && parsed.data.apiBase) {
+    if (parsed.data.apiBase) {
       const apiKey = parsed.data.envVar ? process.env[parsed.data.envVar] : undefined;
-      if (apiKey) {
-        try {
-          const result = await probeOpenAICompatEndpoint(parsed.data.apiBase, apiKey, 5_000);
-          health = { reachable: result.reachable, error: result.error };
-        } catch {
-          health = { reachable: false, error: 'probe failed' };
-        }
+      try {
+        const result = await probeProvider({
+          id: parsed.data.id,
+          name: parsed.data.name,
+          apiBase: parsed.data.apiBase,
+          authScheme: parsed.data.authScheme,
+          envVar: parsed.data.envVar,
+          headerName: parsed.data.headerName,
+          adapter: parsed.data.adapter,
+          isBuiltin: false,
+        }, { apiKey, timeoutMs: 5_000 });
+        health = { reachable: result.reachable, error: result.error };
+      } catch {
+        health = { reachable: false, error: 'probe failed' };
       }
     }
 
