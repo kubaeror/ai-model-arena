@@ -18,7 +18,7 @@ import { writeResultJson, type RunResult } from './logger/result-logger.js';
 import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
-import { generateManifest, writeManifest } from './sandbox/artifact-manifest.js';
+import { generateManifest, writeManifest, buildProducedByTool } from './sandbox/artifact-manifest.js';
 import { getProfile, getAllowedTools } from './profiles/definitions.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
@@ -536,7 +536,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         logger.warn('Failed to write final state', { error: String(e) }),
       );
       try {
-        const manifest = generateManifest(sandboxDir, modelRunId, modelName);
+        const producedByTool = buildProducedByTool(conv.entries);
+        const manifest = generateManifest(sandboxDir, modelRunId, modelName, producedByTool);
         writeManifest(manifest, runOutputDir, logger);
         // Persist per-file rows so the dashboard Files page has lineage data.
         // Replaced per runId so restarts do not duplicate rows.
