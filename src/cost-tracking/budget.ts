@@ -13,6 +13,13 @@ let spendQueue: Promise<void> = Promise.resolve();
 const DAY_KEY = () => new Date().toISOString().slice(0, 10);
 const MONTH_KEY = () => new Date().toISOString().slice(0, 7);
 
+/** Object.prototype keys that a model name must never write through. */
+const LEDGER_RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function safeLedgerModel(modelName: string): boolean {
+  return !LEDGER_RESERVED_KEYS.has(modelName);
+}
+
 function getEmptyState(): BudgetState {
   return {
     global: { daily: {}, monthly: {} },
@@ -86,6 +93,11 @@ export function addSpend(modelName: string, usd: number, rootDir: string, logger
   // Serialize through a promise chain to prevent concurrent read-modify-write races
   spendQueue = spendQueue.then(() => {
     if (!budgetConfig) return;
+
+    if (!safeLedgerModel(modelName)) {
+      logger?.warn('Ignoring spend for unsafe model name', { modelName });
+      return;
+    }
     
     const state = loadBudgetState(budgetConfig, rootDir, logger);
     const dayKey = DAY_KEY();
@@ -137,6 +149,11 @@ export function reserveBudget(
   logger?: Logger,
 ): { ok: boolean; reason?: string } {
   if (!budgetConfig) return { ok: true };
+
+  if (!safeLedgerModel(modelName)) {
+    logger?.warn('Ignoring reservation for unsafe model name', { modelName });
+    return { ok: true };
+  }
 
   const state = loadBudgetState(budgetConfig, rootDir, logger);
   const modelLimits = budgetConfig.models?.[modelName];
@@ -210,7 +227,7 @@ export function releaseReservation(
     pendingReservations.delete(reservationKey);
   }
 
-  if (budgetConfig) {
+  if (budgetConfig && safeLedgerModel(modelName)) {
     const state = loadBudgetState(budgetConfig, rootDir, logger);
     const entries = state.reservations?.[modelName];
     if (entries && entries.length > 0) {
