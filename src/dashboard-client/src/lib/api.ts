@@ -46,10 +46,11 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   return fetch(API_BASE + path, { ...init, headers });
 }
 
-/** Low-level HTTP namespace (get/post/patch/del) returning a `Response`. */
+/** Low-level HTTP namespace (get/post/put/patch/del) returning a `Response`. */
 export const api = {
   get: (path: string, init?: RequestInit) => request(path, { ...init, method: 'GET' }),
   post: (path: string, init?: RequestInit) => request(path, { ...init, method: 'POST' }),
+  put: (path: string, init?: RequestInit) => request(path, { ...init, method: 'PUT' }),
   patch: (path: string, init?: RequestInit) => request(path, { ...init, method: 'PATCH' }),
   del: (path: string, init?: RequestInit) => request(path, { ...init, method: 'DELETE' }),
 };

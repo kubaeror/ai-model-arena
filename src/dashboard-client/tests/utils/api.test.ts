@@ -8,7 +8,13 @@ vi.stubGlobal('localStorage', {
   clear: () => store.clear(),
 });
 
-import { getToken, setToken, clearToken, getUser } from '../../src/lib/api.js';
+import { getToken, setToken, clearToken, getUser, api } from '../../src/lib/api.js';
+
+describe('api namespace', () => {
+  it('exposes put used by SecretsPanel', () => {
+    expect(typeof api.put).toBe('function');
+  });
+});
 
 describe('getToken / setToken / clearToken', () => {
   beforeEach(() => store.clear());
