@@ -99,6 +99,17 @@ export function isWithin(sandboxDir: string, targetAbs: string): boolean {
 }
 
 /**
+ * Resolve a scenario starterFiles value against a sandbox/workspace root,
+ * returning the resolved template dir ONLY if it stays within the root.
+ * Returns null for empty, dot-only, or escaping values (path traversal).
+ */
+export function resolveSeedDir(sandboxRoot: string, starterFiles: string): string | null {
+  if (!starterFiles || starterFiles === '.' || starterFiles === '..') return null;
+  const resolved = path.resolve(sandboxRoot, starterFiles);
+  return isWithin(sandboxRoot, resolved) ? resolved : null;
+}
+
+/**
  * Sensitive environment variable names/prefixes stripped from sandboxed commands.
  *
  * Matching: `key === prefix` (exact) OR `key.startsWith(prefix)` (prefix).

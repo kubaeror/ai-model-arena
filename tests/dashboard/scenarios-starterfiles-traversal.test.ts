@@ -92,3 +92,32 @@ test('DELETE /api/scenarios/:name must not remove directories outside scenariosD
   assert.ok(!fs.existsSync(path.join(h.tmpDir, 'configs', 'scenarios', 'evil.yaml')));
   assert.ok(fs.existsSync(sentinel), 'configs/ contents must survive');
 });
+
+test('GET /api/scenarios/:name must not serve the scenarios dir itself (starterFiles: ".")', async (t) => {
+  const h = await boot(t);
+  const scenariosDir = path.join(h.tmpDir, 'configs', 'scenarios');
+  fs.mkdirSync(scenariosDir, { recursive: true });
+  const yaml = path.join(scenariosDir, 'dot.yaml');
+  fs.writeFileSync(yaml, 'name: dot\nsystemPrompt: x\ntask: y\nstarterFiles: .\n');
+  const res = await authedGet(h.base, h.adminToken, '/api/scenarios/dot');
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { starterFiles: unknown[] };
+  assert.deepEqual(body.starterFiles, [], 'must not walk scenariosDir() itself');
+});
+
+test('DELETE /api/scenarios/:name must not remove the scenarios dir (starterFiles: ".")', async (t) => {
+  const h = await boot(t);
+  const scenariosDir = path.join(h.tmpDir, 'configs', 'scenarios');
+  fs.mkdirSync(scenariosDir, { recursive: true });
+  const keep = path.join(scenariosDir, 'keep-me.yaml');
+  fs.writeFileSync(keep, 'name: keep\nsystemPrompt: x\ntask: y\n');
+  const evil = path.join(scenariosDir, 'dot.yaml');
+  fs.writeFileSync(evil, 'name: dot\nsystemPrompt: x\ntask: y\nstarterFiles: .\n');
+  const res = await fetch(`${h.base}/api/scenarios/dot`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${h.adminToken}` },
+  });
+  assert.equal(res.status, 200);
+  assert.ok(!fs.existsSync(evil), 'deleted scenario file is gone');
+  assert.ok(fs.existsSync(keep), 'other scenario files must survive');
+});

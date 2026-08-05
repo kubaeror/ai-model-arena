@@ -15,7 +15,7 @@ import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { writeReport } from './logger/report-logger.js';
 import { writeResultJson, type RunResult } from './logger/result-logger.js';
-import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
+import { Sandbox, sandboxEnv, resolveSeedDir } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
 import { generateManifest, writeManifest, buildProducedByTool } from './sandbox/artifact-manifest.js';
@@ -343,8 +343,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const sandbox = new Sandbox(sandboxDir);
       sandbox.ensure();
       if (scenario.starterFiles) {
-        const templateDir = path.resolve(scenarioDir, scenario.starterFiles);
-        sandbox.seedFrom(templateDir);
+        const templateDir = resolveSeedDir(scenarioDir, scenario.starterFiles);
+        if (templateDir) sandbox.seedFrom(templateDir);
       }
 
       // Ported from worker.ts: init git after seeding so the final diff.patch
