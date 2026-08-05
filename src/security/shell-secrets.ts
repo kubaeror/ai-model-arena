@@ -11,7 +11,7 @@ const SECRET_PATTERNS: Array<{ name: string; regex: RegExp }> = [
   { name: 'private_key_header', regex: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g },
   { name: 'bearer_token', regex: /Bearer\s+[A-Za-z0-9-._~+/]+=*/gi },
   { name: 'db_connection_string', regex: /(?:postgres|mysql|mongodb|redis):\/\/[^\s"']+/gi },
-  { name: 'generic_api_key', regex: /[A-Za-z0-9-_]{20,64}\b/g },
+  { name: 'generic_api_key', regex: /(?<=(?:key|token|secret|password|bearer)?\s*[:=]\s*)[A-Za-z0-9-_]{20,64}\b/gi },
 ];
 
 /**
