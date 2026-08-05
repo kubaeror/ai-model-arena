@@ -43,7 +43,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
   supportsPromptCaching(): boolean { return true; }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const body = this.buildBody(messages, tools, opts);
       const res = await this.fetchEndpoint('/chat/completions', body);
       if (!res.ok) {
@@ -52,7 +52,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
       }
       const json = (await res.json()) as OpenAIResponse;
       return this.parseResponse(json);
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {

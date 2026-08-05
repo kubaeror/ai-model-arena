@@ -253,7 +253,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       let session = await store.loadSession(task.sessionId);
       let resumedMessages: ChatMessage[] | undefined;
       if (!session) {
-        session = await store.createSession({ model: task.model });
+        session = await store.createSession({ id: task.sessionId, model: task.model });
         // Nothing to resume — nothing persisted yet.
       } else {
         const resumed = await resumeFrom(session.id);
@@ -421,7 +421,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             runId: modelRunId,
             modelConfig: modelName,
             outputDir: runOutputDir,
-            onTurnComplete: async (turn, newMessages, usage) => {
+            onTurnComplete: async (turn, newMessages, usage, durationMs) => {
               // Persist the real conversation so checkpoint/resume replays
               // actual content instead of empty stubs.
               for (const m of newMessages) {
@@ -437,6 +437,29 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                   tokenOutput: usage.completion ?? null,
                   createdAt: new Date().toISOString(),
                 });
+              }
+              // Record the model call for this turn; the request latency is
+              // the TTFT for non-streaming sends (first byte ≈ full latency).
+              try {
+                const assistantMsg = [...newMessages].reverse().find((m) => m.role === 'assistant');
+                await store.recordModelCall({
+                  sessionId: session.id,
+                  turn,
+                  provider: currentProvider,
+                  model: currentModel,
+                  requestHash: `${task!.taskId}:${turn}`,
+                  responseText: assistantMsg?.content ?? null,
+                  usage: {
+                    prompt: usage.prompt ?? 0,
+                    completion: usage.completion ?? 0,
+                    total: usage.total ?? 0,
+                    cacheReadTokens: usage.cacheReadTokens ?? 0,
+                  },
+                  latencyMs: durationMs ?? null,
+                  ttftMs: durationMs ?? null,
+                });
+              } catch (e) {
+                logger.warn('Failed to record model call (non-fatal)', { turn, err: String(e) });
               }
               // Track this run's spend so the per-turn budget check below can
               // trip on it (spend only reaches the ledger at finalize time).

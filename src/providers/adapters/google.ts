@@ -36,7 +36,7 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
   supportsPromptCaching(): boolean { return true; }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const body = this.buildBody(messages, tools, opts);
       // Key goes in the x-goog-api-key header, not the URL: query-string keys
       // leak into proxy/access logs. Model id is URL-encoded so Vertex-style
@@ -49,7 +49,7 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
       }
       const json = (await res.json()) as GeminiResponse;
       return this.parseResponse(json);
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {

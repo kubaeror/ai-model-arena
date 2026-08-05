@@ -25,7 +25,7 @@ export interface AgentLoopOptions {
   /** Pre-existing messages to replay (checkpoint resume). Skips system+task injection. */
   initialMessages?: ChatMessage[];
   /** Called after each turn with ONLY the messages appended this turn. */
-  onTurnComplete?: (turn: number, newMessages: ChatMessage[], tokenUsage: TokenUsage) => Promise<void>;
+  onTurnComplete?: (turn: number, newMessages: ChatMessage[], tokenUsage: TokenUsage, durationMs?: number) => Promise<void>;
   /** If provided, called after each turn to check budget. Return false to abort the run. */
   onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean>;
   /** Model-send options forwarded to every adapter.sendMessage call (e.g. reasoning). */
@@ -168,8 +168,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     const turnStartIndex = messages.length;
 
     let response;
+    let responseDurationMs: number | undefined;
     try {
       response = await adapter.sendMessage(messages, tools, sendOpts);
+      responseDurationMs = response.durationMs;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Model API call failed', { turn, error: msg });
@@ -279,7 +281,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     // Persist this turn BEFORE the completion break so the final assistant
     // message survives a crash — checkpoint/resume depends on it.
     if (onTurnComplete) {
-      try { await onTurnComplete(turn, turnMessages, usage); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
+      try { await onTurnComplete(turn, turnMessages, usage, responseDurationMs); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
     }
 
     if (wantsComplete) {

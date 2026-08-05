@@ -136,6 +136,22 @@ test('OpenAICompatAdapter.supportsPromptCaching returns true', () => {
   assert.equal(adapter.supportsPromptCaching(), true);
 });
 
+test('OpenAICompatAdapter.sendMessage attaches durationMs to the response', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => mockResponse({
+    choices: [{ message: { role: 'assistant', content: 'Hello' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  }) as Response) as typeof fetch;
+  try {
+    const result = await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.equal(typeof result.durationMs, 'number');
+    assert.ok(result.durationMs! >= 0);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('OpenAICompatAdapter tolerates non-JSON tool call arguments', async () => {
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   const origFetch = globalThis.fetch;

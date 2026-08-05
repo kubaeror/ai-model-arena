@@ -111,3 +111,22 @@ test('maxTurns=0 returns stopReason max_turns without invoking the model', async
   assert.equal(result.stopReason, 'max_turns');
   assert.equal(adapter.sendCalls(), 0);
 });
+
+test('onTurnComplete receives the model response durationMs for ttft capture', async () => {
+  const tool: ToolDefinition = { name: 'list_files', description: '', parameters: {} };
+  const adapter: ModelAdapter = {
+    sendMessage: async () => ({
+      text: '', toolCalls: [{ id: 'tc1', name: 'list_files', arguments: {} }],
+      usage: { prompt: 10, completion: 5 }, stopReason: 'tool_call', durationMs: 777,
+    }),
+    supportsReasoning: () => false,
+    supportsPromptCaching: () => false,
+  };
+  let captured: number | undefined;
+  await runAgentLoop({
+    ...baseOpts(),
+    adapter, tools: [tool], executors: { list_files: async () => ({ content: 'files', isError: false }) },
+    onTurnComplete: async (_turn: number, _messages: ChatMessage[], _usage: { prompt?: number }, durationMs?: number) => { captured = durationMs; },
+  });
+  assert.equal(captured, 777);
+});

@@ -49,6 +49,18 @@ export abstract class BaseAdapter {
     return false;
   }
 
+  /**
+   * Measure the wall-clock latency of a single (non-streaming) model request
+   * and attach it to the result as `durationMs`. Non-streaming APIs only
+   * deliver the first byte together with the full response, so the request
+   * duration ≈ time-to-first-token (TTFT).
+   */
+  protected async timed<T>(fn: () => Promise<T>): Promise<T & { durationMs: number }> {
+    const start = performance.now();
+    const result = await fn();
+    return { ...result, durationMs: Math.round(performance.now() - start) };
+  }
+
   protected async withRetry<T>(
     fn: () => Promise<T>,
     opts: { maxRetries: number; initialDelayMs: number; maxDelayMs: number },

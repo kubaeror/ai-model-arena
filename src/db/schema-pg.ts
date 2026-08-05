@@ -267,6 +267,7 @@ export const model_calls = pgTable('model_calls', {
   response_text: text('response_text'),
   usage: text('usage'),
   latency_ms: integer('latency_ms'),
+  ttft_ms: integer('ttft_ms'),
   created_at: text('created_at').notNull(),
 }, (table) => [
   uniqueIndex('uq_model_calls_session_turn').on(table.session_id, table.turn),

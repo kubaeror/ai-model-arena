@@ -94,7 +94,7 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
 
   /** Native SigV4 via AWS SDK Converse API */
   private async sendViaSdk(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const client = await this.getClient();
 
       const converseMessages: Array<{
@@ -188,12 +188,12 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
         stopReason: response.stopReason,
         raw: response,
       };
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
   /** Gateway proxy fallback (backward compatible) */
   private async sendViaGateway(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const body: Record<string, unknown> = {
         model: this.modelId,
         messages: messages.map(m => ({
@@ -243,6 +243,6 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
         stopReason: choice.finish_reason,
         raw: json,
       };
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 }
