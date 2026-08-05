@@ -61,11 +61,14 @@ Token-flow Sankey on Home. `prompt` → `cache_read | cache_write | completion` 
 - `Button` — primary (accent), ghost (transparent), danger (red). Scale on press.
 - `Tabs` — keyboard-accessible, `role="tablist"`, arrow keys.
 - `Modal` — focus trap, ESC close, click-outside close.
-- `Sparkline` — ECharts line mini, no axes.
 - `LineChart` — ECharts line wrapper.
 - `StackedBar` — ECharts bar wrapper.
-- `Heatmap` — ECharts calendar-style.
 - `Sankey` — ECharts Sankey wrapper, signature.
+
+## Future work
+
+- `Sparkline` — ECharts line mini, no axes (not yet shipped).
+- `Heatmap` — ECharts calendar-style (not yet shipped).
 
 ## Accessibility
 
