@@ -16,12 +16,6 @@ import {
   verifyCredentials,
 } from '../../src/dashboard-server/auth.js';
 import { requireRole } from '../../src/auth/rbac.js';
-import type { createModelsRouter } from '../../src/dashboard-server/routes/models.js';
-import type { createScenariosRouter } from '../../src/dashboard-server/routes/scenarios.js';
-import type { createRunsRouter } from '../../src/dashboard-server/routes/runs.js';
-import type { createSecretsRouter } from '../../src/dashboard-server/routes/secrets.js';
-import type { createAuditRouter } from '../../src/dashboard-server/routes/audit.js';
-import type { registerQueueRoutes } from '../../src/dashboard-server/routes/queues.js';
 
 export interface TestUser {
   username: string;

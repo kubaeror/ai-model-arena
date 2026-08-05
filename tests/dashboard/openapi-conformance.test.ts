@@ -245,7 +245,7 @@ test('WebSocket endpoints are documented as ws entries with descriptions', () =>
     .sort();
   assert.deepEqual(wsPaths, [...WS_PATHS].sort(), 'ws entries must be exactly /ws, /runner, /lobby');
   for (const wsPath of WS_PATHS) {
-    assert.ok(typeof spec.paths[wsPath].ws?.description === 'string', `${wsPath} ws entry has a description`);
-    assert.ok((spec.paths[wsPath].ws?.description ?? '').length > 0, `${wsPath} ws description is non-empty`);
+    assert.ok(typeof spec.paths[wsPath]!.ws?.description === 'string', `${wsPath} ws entry has a description`);
+    assert.ok((spec.paths[wsPath]!.ws?.description ?? '').length > 0, `${wsPath} ws description is non-empty`);
   }
 });

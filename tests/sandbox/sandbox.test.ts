@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { safeResolve, isWithin } from '../../src/sandbox/sandbox.js';
 
-import { SHELL_METACHAR_RE, isShellCommandAllowed } from '../../src/sandbox/shell-policy.js';
+import { isShellCommandAllowed } from '../../src/sandbox/shell-policy.js';
 
 describe('shell policy newline injection', () => {
   it('should reject commands containing literal newline characters', () => {

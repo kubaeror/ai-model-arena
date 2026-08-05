@@ -89,7 +89,7 @@ test('slack regression payload includes baseline/current/threshold values', () =
   });
   const fields = slackFields(payload);
   const rendered = fields.find((f) => f.title === 'Regressions')?.value ?? '';
-  const numbers = rendered.match(/\d+(\.\d+)?/g) ?? [];
+  const numbers: string[] = rendered.match(/\d+(\.\d+)?/g) ?? [];
   assert.ok(numbers.includes('80'), `baseline 80 missing from rendered text: ${rendered}`);
   assert.ok(numbers.includes('60'), `current 60 missing from rendered text: ${rendered}`);
   assert.ok(numbers.includes('10'), `threshold 10 missing from rendered text: ${rendered}`);
@@ -112,7 +112,7 @@ test('discord budget payload escalates when percentUsed >= 100', () => {
     type: DispatchEventType.onBudgetThreshold,
     data: { model: 'gpt-4o', spentUsd: 110, limitUsd: 100, percentUsed: 110 },
   }) as { embeds: Array<{ color: number }> };
-  assert.equal(payload.embeds[0].color, 0xff0000);
+  assert.equal(payload.embeds[0]!.color, 0xff0000);
 });
 
 test('discord anomaly payload renders fields (not JSON dump)', () => {
@@ -120,8 +120,8 @@ test('discord anomaly payload renders fields (not JSON dump)', () => {
     type: DispatchEventType.onAnomalyDetected,
     data: { type: 'loop', severity: 'medium', model: 'gpt-4o', runId: 'run-9', description: 'tool loop detected' },
   }) as { embeds: Array<{ title: string; description: string }> };
-  assert.equal(payload.embeds[0].title, 'Anomaly Detected');
-  assert.equal(payload.embeds[0].description, 'tool loop detected');
+  assert.equal(payload.embeds[0]!.title, 'Anomaly Detected');
+  assert.equal(payload.embeds[0]!.description, 'tool loop detected');
   const fields = discordFields(payload);
   const byName = new Map(fields.map((f) => [f.name, f.value]));
   assert.equal(byName.get('Type'), 'loop');
@@ -154,7 +154,7 @@ test('discord regression payload includes baseline/current/threshold values', ()
   });
   const fields = discordFields(payload);
   const rendered = fields.find((f) => f.name === 'Regressions')?.value ?? '';
-  const numbers = rendered.match(/\d+(\.\d+)?/g) ?? [];
+  const numbers: string[] = rendered.match(/\d+(\.\d+)?/g) ?? [];
   assert.ok(numbers.includes('80'), `baseline 80 missing from rendered text: ${rendered}`);
   assert.ok(numbers.includes('60'), `current 60 missing from rendered text: ${rendered}`);
   assert.ok(numbers.includes('10'), `threshold 10 missing from rendered text: ${rendered}`);

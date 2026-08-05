@@ -34,7 +34,6 @@ const PREFIX = 'arena:tasks';
 const GROUP = 'g';
 const CONSUMER = 'c';
 const MAIN_STREAM = streamKey(PREFIX, 'openai');
-const DLQ_STREAM = dlqStreamKey(PREFIX, 'openai');
 
 function mkTask(taskId: string): Task {
   return {

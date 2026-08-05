@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GoogleAdapter } from '../../../src/providers/adapters/google.js';
 import type { ProviderDescriptor } from '../../../src/providers/types.js';
+import type { FetchInput } from '../../helpers/fetch-types.js';
 
 const googleDescriptor: ProviderDescriptor = {
   id: 'google', name: 'Google AI Studio', apiBase: 'https://generativelanguage.googleapis.com',
@@ -17,7 +18,7 @@ test('GoogleAdapter.sendMessage parses generateContent response', async () => {
   let capturedUrl = '';
   let capturedHeaders: Record<string, string> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (input: FetchInput, init?: RequestInit) => {
     capturedUrl = String(input);
     capturedHeaders = (init?.headers as Record<string, string>) ?? {};
     return mockResponse({
@@ -45,7 +46,7 @@ test('GoogleAdapter.sendMessage maps budget_tokens into thinkingConfig', async (
   const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
   }) as typeof fetch;
@@ -62,7 +63,7 @@ test('GoogleAdapter.sendMessage maps toggle into thinkingConfig', async () => {
   const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
   }) as typeof fetch;
@@ -79,7 +80,7 @@ test('GoogleAdapter.sendMessage leaves body unchanged when reasoning is absent',
   const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
   }) as typeof fetch;
@@ -106,8 +107,8 @@ test('GoogleAdapter.sendMessage parses functionCall', async () => {
   try {
     const result = await adapter.sendMessage([{ role: 'user', content: 'read file' }], []);
     assert.equal(result.toolCalls.length, 1);
-    assert.equal(result.toolCalls[0].name, 'read_file');
-    assert.deepEqual(result.toolCalls[0].arguments, { path: 'a.ts' });
+    assert.equal(result.toolCalls[0]!.name, 'read_file');
+    assert.deepEqual(result.toolCalls[0]!.arguments, { path: 'a.ts' });
   } finally {
     globalThis.fetch = origFetch;
   }
@@ -117,7 +118,7 @@ test('GoogleAdapter.sendMessage builds contents, tools, and generationConfig fro
   const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] });
   }) as typeof fetch;
@@ -125,7 +126,7 @@ test('GoogleAdapter.sendMessage builds contents, tools, and generationConfig fro
     await adapter.sendMessage([
       { role: 'system', content: 'You are a test agent.' },
       { role: 'user', content: 'read a.ts' },
-      { role: 'assistant', toolCalls: [{ id: 'tc1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+      { role: 'assistant', content: null, toolCalls: [{ id: 'tc1', name: 'read_file', arguments: { path: 'a.ts' } }] },
       { role: 'tool', toolCallId: 'tc1', name: 'read_file', content: 'file contents' },
     ], [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object' } }], {
       temperature: 0.7, maxTokens: 100,

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AnthropicAdapter } from '../../../src/providers/adapters/anthropic.js';
 import type { ProviderDescriptor } from '../../../src/providers/types.js';
+import type { FetchInput } from '../../helpers/fetch-types.js';
 
 const anthropicDescriptor: ProviderDescriptor = {
   id: 'anthropic', name: 'Anthropic', apiBase: 'https://api.anthropic.com',
@@ -16,7 +17,7 @@ test('AnthropicAdapter.sendMessage parses text response', async () => {
   const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-5-sonnet-20241022', { apiKey: 'sk-ant' });
   let capturedHeaders: Record<string, string> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedHeaders = init?.headers as Record<string, string>;
     return mockResponse({
       id: 'msg_1', role: 'assistant',
@@ -55,9 +56,9 @@ test('AnthropicAdapter.sendMessage parses tool_use blocks', async () => {
     const result = await adapter.sendMessage([{ role: 'user', content: 'read file' }], []);
     assert.equal(result.text, 'Reading file');
     assert.equal(result.toolCalls.length, 1);
-    assert.equal(result.toolCalls[0].id, 'toolu_1');
-    assert.equal(result.toolCalls[0].name, 'read_file');
-    assert.deepEqual(result.toolCalls[0].arguments, { path: 'a.ts' });
+    assert.equal(result.toolCalls[0]!.id, 'toolu_1');
+    assert.equal(result.toolCalls[0]!.name, 'read_file');
+    assert.deepEqual(result.toolCalls[0]!.arguments, { path: 'a.ts' });
     assert.equal(result.stopReason, 'tool_use');
   } finally {
     globalThis.fetch = origFetch;
@@ -92,7 +93,7 @@ test('AnthropicAdapter.sendMessage maps system/assistant-tool/tool messages and 
   const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-5-sonnet-20241022', { apiKey: 'sk-ant' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } });
   }) as typeof fetch;
@@ -130,7 +131,7 @@ test('AnthropicAdapter defaults thinking budget when reasoning value is not a nu
   const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-7-sonnet-20250219', { apiKey: 'sk-ant' });
   let capturedBody: Record<string, unknown> = {};
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return mockResponse({ role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } });
   }) as typeof fetch;

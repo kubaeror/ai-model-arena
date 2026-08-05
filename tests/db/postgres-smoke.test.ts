@@ -30,7 +30,7 @@ test('postgres: migrations + Drizzle round-trip + task transition columns', { sk
       runId, model: 'gpt-4o', costUsd: 0.5,
       inputTokens: 100, outputTokens: 20, recordedAt: new Date().toISOString(),
     });
-    const byMonth = await getCostSummary('month', 'gpt-4o');
+    const byMonth = await getCostSummary('day', 'gpt-4o');
     assert.ok(Array.isArray(byMonth), 'cost summary (previously SQLite date()) runs on PG');
 
     await transitionTaskState(runId, 'gpt-4o', 'running', 'runner-test');

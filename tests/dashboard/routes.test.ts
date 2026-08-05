@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { boot, login, authedGet, postJson, TEST_ADMIN } from './route-test-harness.js';
+import { boot, authedGet, postJson, TEST_ADMIN } from './route-test-harness.js';
 import { getDrizzleDb } from '../../src/db/index.js';
 import { insertAuditEntry } from '../../src/db/query.js';
 import { models, pricing, providers, run_models, runs } from '../../src/db/schema.js';

@@ -19,12 +19,12 @@ test('insertJudgeScore upserts: second verdict for same run+model updates the ro
 
   const rows = await listJudgeScores('run-1');
   assert.equal(rows.length, 1, 're-judging the same run+model must not duplicate the row');
-  assert.equal(rows[0].model, 'gpt-4o');
-  assert.equal(rows[0].judge_model, 'claude-3.7');
-  assert.equal(rows[0].average_score, 88);
-  assert.equal(rows[0].summary, 'second verdict');
-  assert.equal(rows[0].scores_json.includes('correctness'), true);
-  assert.equal(rows[0].judged_at, '2026-01-02T00:00:00.000Z');
+  assert.equal(rows[0]!.model, 'gpt-4o');
+  assert.equal(rows[0]!.judge_model, 'claude-3.7');
+  assert.equal(rows[0]!.average_score, 88);
+  assert.equal(rows[0]!.summary, 'second verdict');
+  assert.equal(rows[0]!.scores_json.includes('correctness'), true);
+  assert.equal(rows[0]!.judged_at, '2026-01-02T00:00:00.000Z');
 
   closeDb();
 });

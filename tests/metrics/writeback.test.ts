@@ -8,6 +8,7 @@ import { fetchSync } from '../../src/catalog/sync.js';
 import { writeRunStats } from '../../src/metrics/writeback.js';
 import { upsertRun } from '../../src/db/runs.js';
 import { createSessionStore } from '../../src/session/store.js';
+import type { FetchInput } from '../helpers/fetch-types.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -19,7 +20,7 @@ const MODELS_DEV = {
 };
 
 function mockFetch(urlMap: Record<string, () => unknown>): typeof fetch {
-  return (async (input: RequestInfo | URL) => {
+  return (async (input: FetchInput) => {
     const u = String(input);
     for (const [key, factory] of Object.entries(urlMap)) {
       if (u.includes(key)) return { status: 200, ok: true, json: async () => factory(), text: async () => JSON.stringify(factory()) } as unknown as Response;

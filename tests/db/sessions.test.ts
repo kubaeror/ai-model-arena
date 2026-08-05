@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initDb, closeDb, getDb } from '../../src/db/client.js';
+import { initDb, closeDb } from '../../src/db/client.js';
 import { createSessionStore } from '../../src/session/store.js';
 
 test('createSession → loadSession round-trips', async () => {

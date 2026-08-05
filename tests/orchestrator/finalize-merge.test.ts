@@ -20,7 +20,7 @@ import {
 import { getRunRecord, updateRun } from '../../src/orchestrator/run-index.js';
 import { writeJudgeResult } from '../../src/evaluation/judge.js';
 
-function makePerModel(runId: string, model: string, root: string, ts: string): PerModelSpec {
+function makePerModel(runId: string, model: string, root: string, _ts: string): PerModelSpec {
   const outputDir = path.join(root, 'outputs', model, runId);
   return {
     model,
@@ -132,8 +132,8 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const rec = await getRunRecord(runId);
     assert.ok(rec, 'run record exists');
     assert.strictEqual(rec.status, 'completed');
-    assert.strictEqual(rec.perModel[0].status, 'completed');
-    assert.strictEqual(rec.perModel[0].success, false);
+    assert.strictEqual(rec.perModel[0]!.status, 'completed');
+    assert.strictEqual(rec.perModel[0]!.success, false);
   });
 
   it('errored per-model is surfaced (missing result.json) without throwing', async () => {
@@ -192,7 +192,7 @@ describe('finalize merge (run-lifecycle single core)', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     const status = getBudgetStatus(root, logger);
-    assert.strictEqual(status.models.alpha.daily.spent, 0.02, 'budget daily spend credited once (0.02, not 0.04)');
+    assert.strictEqual(status.models.alpha!.daily.spent, 0.02, 'budget daily spend credited once (0.02, not 0.04)');
     assert.strictEqual(status.global.daily.spent, 0.02, 'global budget daily spend credited once');
   });
 
@@ -319,8 +319,8 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const spec = buildSpec(runId, root, [alpha]);
     await registerRun(spec, 'cli');
     assert.strictEqual(await isRunComplete(spec), false, 'running is not complete');
-    await updateRun(runId, (r) => { r.perModel[0]!.status = 'claimed'; });
-    assert.strictEqual(await isRunComplete(spec), false, 'claimed is not complete');
+    await updateRun(runId, (r) => { r.perModel[0]!.status = 'running'; });
+    assert.strictEqual(await isRunComplete(spec), false, 'non-terminal status is not complete');
   });
 
   it('isRunComplete is true when every model reached a terminal status', async () => {
@@ -331,7 +331,7 @@ describe('finalize merge (run-lifecycle single core)', () => {
     await registerRun(spec, 'cli');
     await updateRun(runId, (r) => {
       r.perModel.find((m) => m.model === 'alpha')!.status = 'completed';
-      r.perModel.find((m) => m.model === 'beta')!.status = 'failed';
+      r.perModel.find((m) => m.model === 'beta')!.status = 'errored';
     });
     assert.strictEqual(await isRunComplete(spec), true);
   });
@@ -346,8 +346,8 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const spec = buildSpec(runId, root, [alpha]);
     await registerRun(spec, 'cli');
     assert.strictEqual(await isRunCompleteByRunId(runId), false, 'running is not complete');
-    await updateRun(runId, (r) => { r.perModel[0]!.status = 'claimed'; });
-    assert.strictEqual(await isRunCompleteByRunId(runId), false, 'claimed is not complete');
+    await updateRun(runId, (r) => { r.perModel[0]!.status = 'running'; });
+    assert.strictEqual(await isRunCompleteByRunId(runId), false, 'non-terminal status is not complete');
   });
 
   it('isRunCompleteByRunId is false when any model has an unknown status', async () => {
@@ -367,7 +367,7 @@ describe('finalize merge (run-lifecycle single core)', () => {
     await registerRun(spec, 'cli');
     await updateRun(runId, (r) => {
       r.perModel.find((m) => m.model === 'alpha')!.status = 'completed';
-      r.perModel.find((m) => m.model === 'beta')!.status = 'failed';
+      r.perModel.find((m) => m.model === 'beta')!.status = 'errored';
     });
     assert.strictEqual(await isRunCompleteByRunId(runId), true);
   });

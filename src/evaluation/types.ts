@@ -39,7 +39,8 @@ export type RegressionConfig = z.output<typeof RegressionConfigSchema>;
 export interface JudgeScore {
   category: string;
   score: number;
-  maxScore: number;
+  /** Optional — scoring falls back to a plain mean when absent. */
+  maxScore?: number;
   reasoning?: string;
 }
 

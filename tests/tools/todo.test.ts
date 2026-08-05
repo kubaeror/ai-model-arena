@@ -9,7 +9,7 @@ import type { ToolExecutionContext } from '../../src/types.js';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-todo-'));
 const sandbox = path.join(tmp, 'sandbox');
 
-const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as ToolExecutionContext['logger'];
+const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => logger } as ToolExecutionContext['logger'];
 
 const ctx: ToolExecutionContext = {
   sandboxDir: sandbox,

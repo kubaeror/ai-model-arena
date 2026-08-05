@@ -8,7 +8,7 @@ import type { ToolExecutionContext } from '../../src/types.js';
 // cover the pure validation surface (validateUrl + isPrivateHost) via the
 // webFetch tool executor, which surfaces validation errors as isError content.
 
-const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as ToolExecutionContext['logger'];
+const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => logger } as ToolExecutionContext['logger'];
 
 function makeCtx(webAccess = true): ToolExecutionContext {
   return {

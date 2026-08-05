@@ -67,7 +67,7 @@ test('decryptWebhookSecret rejects tampered ciphertext (GCM auth tag)', () => {
   const ct = encryptWebhookSecret('my-secret')!;
   // Flip a byte in the ciphertext body to simulate tampering.
   const blob = Buffer.from(ct.slice('v1:'.length), 'base64');
-  blob[blob.length - 1] ^= 0x01; // flip a bit in the auth tag
+  blob[blob.length - 1]! ^= 0x01; // flip a bit in the auth tag
   const tampered = 'v1:' + blob.toString('base64');
   assert.throws(() => decryptWebhookSecret(tampered), /unsupported|auth|decrypt/i);
 });

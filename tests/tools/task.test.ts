@@ -1,9 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { task } from '../../src/tools/task.js';
-import type { ToolExecutionContext, ChatMessage, ModelResponse, TokenUsage, ToolDefinition } from '../../src/types.js';
+import type { ToolExecutionContext, ChatMessage, ModelResponse, ToolDefinition } from '../../src/types.js';
 
-const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as ToolExecutionContext['logger'];
+const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => logger } as ToolExecutionContext['logger'];
 
 function makeCtx(sendMessage?: typeof mockSendMessage): ToolExecutionContext {
   if (!sendMessage) {
@@ -25,13 +25,14 @@ function makeCtx(sendMessage?: typeof mockSendMessage): ToolExecutionContext {
       logger,
       tools: [],
       executors: {},
+      shellTimeoutMs: 30000,
+      maxShellOutputBytes: 524288,
     },
   };
 }
 
 function mockSendMessage(_messages: ChatMessage[], _tools: ToolDefinition[]): Promise<ModelResponse> {
   // Auto-respond with task_complete on the first call
-  let callCount = 0;
   return {
     [Symbol.toPrimitive]() { return 'mock'; },
   } as any;
@@ -139,6 +140,8 @@ describe('task', () => {
         read_file: async () => ({ content: 'hello', isError: false }),
         write_file: async () => ({ content: 'written', isError: false }),
       },
+      shellTimeoutMs: 30000,
+      maxShellOutputBytes: 524288,
     };
     const r = await task({
       description: 'file task',

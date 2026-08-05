@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { webFetch, webSearch } from '../../src/tools/web.js';
 import type { ToolExecutionContext } from '../../src/types.js';
 
-const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as ToolExecutionContext['logger'];
+const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => logger } as ToolExecutionContext['logger'];
 
 function makeCtx(webAccess = true): ToolExecutionContext {
   return {
@@ -64,7 +64,7 @@ describe('webFetch', () => {
       // Temporarily: localhost is blocked by private IP check.
       // We test the stripHtml behavior via a real fetch to a mockable endpoint.
       // For now, test that the HTML stripping works in isolation.
-      const r = await webFetch({ url: `${baseUrl}/test` }, { ...makeCtx(), sandboxDir: '/tmp/arena-web-test' });
+      await webFetch({ url: `${baseUrl}/test` }, { ...makeCtx(), sandboxDir: '/tmp/arena-web-test' });
       // Note: 127.0.0.1 is blocked by private IP check, so we need to use a different approach.
       // This test verifies the gate works — skip the actual fetch for localhost.
     });

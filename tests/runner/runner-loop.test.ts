@@ -6,7 +6,6 @@ import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
 import { fetchSync } from '../../src/catalog/sync.js';
 import { InMemoryQueue } from '../../src/queue/in-memory.js';
-import type { Task } from '../../src/queue/types.js';
 import { startRunner } from '../../src/runner.js';
 import { upsertRun } from '../../src/db/runs.js';
 import { ProviderRegistry } from '../../src/providers/index.js';

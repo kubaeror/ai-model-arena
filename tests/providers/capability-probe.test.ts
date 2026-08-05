@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { probeProvider } from '../../src/providers/capability-probe.js';
 import type { ProviderDescriptor } from '../../src/providers/types.js';
+import type { FetchInput } from '../helpers/fetch-types.js';
 
 const API_BASE = 'https://provider.example.com';
 
@@ -21,12 +22,12 @@ function mockResponse(status = 200, body: unknown = {}): Response {
   } as unknown as Response;
 }
 
-interface CapturedRequest { url: string; method: string; headers: Record<string, string>; body?: unknown }
+interface CapturedRequest { url: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> }
 
 function mockFetch(handler: (url: string, init?: RequestInit) => Promise<Response>): { restore: () => void; last: () => CapturedRequest } {
   const origFetch = globalThis.fetch;
   let lastRequest: CapturedRequest = { url: '', method: '', headers: {} };
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (input: FetchInput, init?: RequestInit) => {
     const rawHeaders = (init?.headers as Record<string, string> | undefined) ?? {};
     // Real fetch lowercases header names; mirror that so lookups are case-insensitive.
     const headers: Record<string, string> = {};
