@@ -353,6 +353,12 @@ Infra secrets are consumed as `envFrom.secretRef`. Provider keys are mounted as 
 
 See [k8s/README.md](k8s/README.md#secrets-management) for the full sealing workflow and rotation procedures.
 
+## CI/CD
+
+GitHub Actions + Argo CD GitOps: PRs run hardened validation (`pr-checks`: typecheck, lint, tests+coverage, kubeconform, conftest, hadolint, actionlint, compose), main builds multi-arch images with SBOM, Trivy scan, cosign signing and SLSA attestation, and `v*` tags trigger GitHub Releases that bump the prod overlay — Argo CD (`k8s/argocd/ai-arena-app.yaml`, selfHeal, prune:false) syncs production from `main`.
+
+See [docs/CI-CD.md](docs/CI-CD.md) for the pipeline diagram, release runbook, nightly runs, local validation commands, and required repo settings.
+
 ---
 
 ## Observability
