@@ -44,6 +44,54 @@ export const scheduleFailures = new client.Counter({
   registers: [register],
 });
 
+export const dlqDepth = new client.Gauge({
+  name: 'arena_dlq_depth',
+  help: 'Dead-letter queue depth',
+  labelNames: ['provider'],
+  registers: [register],
+});
+
+export const circuitState = new client.Gauge({
+  name: 'arena_circuit_state',
+  help: 'Circuit breaker state (1 = open, 0 = closed)',
+  labelNames: ['provider', 'model'],
+  registers: [register],
+});
+
+export const budgetPercent = new client.Gauge({
+  name: 'arena_budget_percent',
+  help: 'Budget percent used per model',
+  labelNames: ['model'],
+  registers: [register],
+});
+
+export const apiErrors = new client.Counter({
+  name: 'arena_api_errors_total',
+  help: 'Total terminal API request errors per provider',
+  labelNames: ['provider'],
+  registers: [register],
+});
+
+export const tasksClaimed = new client.Counter({
+  name: 'arena_tasks_claimed_total',
+  help: 'Total tasks claimed by runners',
+  registers: [register],
+});
+
+export const tasksFailed = new client.Counter({
+  name: 'arena_tasks_failed_total',
+  help: 'Total tasks that failed terminally',
+  registers: [register],
+});
+
+export const providerLatency = new client.Histogram({
+  name: 'arena_provider_latency_seconds',
+  help: 'Provider request latency in seconds',
+  labelNames: ['provider'],
+  buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60],
+  registers: [register],
+});
+
 export async function metricsHandler(_req: unknown, res: { set: (k: string, v: string) => void; end: (body: string) => void }) {
   res.set('Content-Type', register.contentType);
   res.end(await register.metrics());

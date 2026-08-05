@@ -3,6 +3,7 @@ import path from 'node:path';
 import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { BudgetConfigSchema, type BudgetConfig, type BudgetState, type BudgetCheckResult } from './types.js';
+import { budgetPercent } from '../observability/metrics.js';
 
 let budgetConfig: BudgetConfig | null = null;
 let budgetState: BudgetState | null = null;
@@ -303,7 +304,9 @@ export function checkBudget(modelName: string, rootDir: string, force: boolean =
   const effectiveLimit = limitDaily ?? limitMonthly ?? null;
   const effectiveSpent = limitDaily !== null && limitDaily !== undefined ? spentDaily : spentMonthly;
   const effectivePercent = limitDaily !== null && limitDaily !== undefined ? percentDaily : percentMonthly;
-  
+
+  budgetPercent.set({ model: modelName }, effectivePercent);
+
   if (force) {
     return { allowed: true, spentUsd: effectiveSpent, limitUsd: effectiveLimit, percentUsed: effectivePercent };
   }

@@ -35,12 +35,13 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
   // like clock skew or revoked credentials require a fresh client).
   private static CLIENT_MAX_AGE_MS = 55 * 60 * 1000;
 
-  constructor(_descriptor: ProviderDescriptor, modelId: string, opts: CreateAdapterOpts) {
+  constructor(descriptor: ProviderDescriptor, modelId: string, opts: CreateAdapterOpts) {
     super(opts.logger);
     this.modelId = modelId;
     this.gatewayUrl = opts.baseUrl ?? process.env.AWS_BEDROCK_GATEWAY_URL;
     this.gatewayKey = opts.apiKey ?? process.env.AWS_BEDROCK_GATEWAY_KEY;
     this.useGateway = !!this.gatewayUrl;
+    this.providerLabel = descriptor.id;
 
     // Resolve region: env var > AWS_REGION > AWS_DEFAULT_REGION
     // No hardcoded fallback — require explicit configuration

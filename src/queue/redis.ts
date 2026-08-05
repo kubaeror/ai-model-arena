@@ -4,7 +4,7 @@ import type { Task, TaskQueue } from './types.js';
 import type { RedisQueueConfig } from './redis-config.js';
 import { parseTask, safeParseTask } from './task-schema.js';
 import { streamKey, dlqStreamKey } from './router.js';
-import { queueDepth } from '../observability/metrics.js';
+import { queueDepth, dlqDepth } from '../observability/metrics.js';
 
 /**
  * Shared ioredis clients keyed by URL. The dashboard creates one queue
@@ -52,6 +52,15 @@ export class RedisStreamQueue implements TaskQueue {
     const stream = streamKey(this.config.streamPrefix, provider);
     try {
       queueDepth.set({ provider }, await this.redis.xlen(stream));
+    } catch { /* best-effort — never fail queue ops */ }
+  }
+
+  private async setDlqDepthGauge(): Promise<void> {
+    const provider = this.config.providerFilter;
+    if (!provider) return;
+    const dlq = dlqStreamKey(this.config.streamPrefix, provider);
+    try {
+      dlqDepth.set({ provider }, await this.redis.xlen(dlq));
     } catch { /* best-effort — never fail queue ops */ }
   }
 
@@ -116,6 +125,7 @@ export class RedisStreamQueue implements TaskQueue {
             const dlq = dlqStreamKey(this.config.streamPrefix, provider);
             await this.redis.xadd(dlq, '*', 'task', taskData.task ?? '', 'reason', 'XAUTOCLAIM: invalid task payload');
             await this.redis.xdel(stream, id);
+            void this.setDlqDepthGauge();
             continue;
           }
 
@@ -127,6 +137,7 @@ export class RedisStreamQueue implements TaskQueue {
             ];
             await this.redis.xadd(dlq, '*', ...dlqFields);
             await this.redis.xdel(stream, id);
+            void this.setDlqDepthGauge();
           } else {
             task.attempts = (task.attempts ?? 0) + 1;
             const newFields: (string | number)[] = ['task', JSON.stringify(task)];
@@ -309,6 +320,7 @@ export class RedisStreamQueue implements TaskQueue {
         await this.redis.xadd(dlq, '*', ...dlqFields);
         await this.redis.xack(stream, group, taskId);
         await this.redis.xdel(stream, taskId);
+        void this.setDlqDepthGauge();
       } else {
         const newFields: (string | number)[] = ['task', JSON.stringify(task)];
         if (task._traceparent) { newFields.push('traceparent'); newFields.push(task._traceparent); }
@@ -317,6 +329,7 @@ export class RedisStreamQueue implements TaskQueue {
         await this.redis.xdel(stream, taskId);
       }
     }
+    void this.setDlqDepthGauge();
     void this.setQueueDepthGauge();
   }
 
@@ -405,6 +418,7 @@ export class RedisStreamQueue implements TaskQueue {
 
     // Delete the matched DLQ entry (by its stream entry id)
     await this.redis.xdel(dlqStream, targetId);
+    void this.setDlqDepthGauge();
     void this.setQueueDepthGauge();
     return true;
   }

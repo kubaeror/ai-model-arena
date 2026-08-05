@@ -26,7 +26,7 @@ import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js
 import { resolveFallback, resolveMaxFallbackHops, type FallbackConfig } from './providers/fallback.js';
 import { loadBudgetConfig, checkBudget, computeCost } from './cost-tracking/index.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled, dispatchBudgetExceeded } from './orchestrator/run-lifecycle.js';
-import { activeTasks, taskCounter, taskDuration, startMetricsServer } from './observability/metrics.js';
+import { activeTasks, taskCounter, taskDuration, tasksClaimed, tasksFailed, startMetricsServer } from './observability/metrics.js';
 import type { ToolExecutionContext, TokenUsage, ChatMessage } from './types.js';
 import type { StoredMessage } from './session/store.js';
 import { closeDb } from './db/index.js';
@@ -233,6 +233,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       runningTask = task;
       taskStartedAt = new Date();
       activeTasks.inc();
+      tasksClaimed.inc();
 
       // Check per-run cancellation before starting execution
       const runId = task.config.modelRunId as string ?? task.sessionId;
@@ -350,6 +351,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
         taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
         taskCounted = true;
+        tasksFailed.inc();
         await queue.ack(task!._redisId ?? task!.taskId);
         continue;
       }
@@ -617,6 +619,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
           if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
         }
+        tasksFailed.inc();
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {

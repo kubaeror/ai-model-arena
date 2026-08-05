@@ -22,6 +22,7 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
+    this.providerLabel = descriptor.id;
   }
 
   supportsReasoning(): boolean { return true; }

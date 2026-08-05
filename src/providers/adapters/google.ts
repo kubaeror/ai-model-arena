@@ -21,6 +21,7 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
+    this.providerLabel = descriptor.id;
     // Fail fast on unconfigured placeholder URLs (e.g. google-vertex's
     // https://{location}-aiplatform.googleapis.com) instead of POSTing to a
     // literal '{location}' hostname and failing with a confusing DNS error.

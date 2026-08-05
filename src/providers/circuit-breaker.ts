@@ -1,3 +1,5 @@
+import { circuitState } from '../observability/metrics.js';
+
 export class CircuitOpenError extends Error {
   constructor(provider: string, model: string) {
     super(`Circuit open for ${provider}/${model}`);
@@ -20,10 +22,20 @@ export class CircuitBreaker {
   private openedAt = 0;
   private readonly threshold: number;
   private readonly resetMs: number;
+  private providerLabel?: string;
+  private modelLabel?: string;
 
   constructor(config: CircuitBreakerConfig = {}) {
     this.threshold = config.failureThreshold ?? 5;
     this.resetMs = config.resetTimeoutMs ?? 30000;
+  }
+
+  private syncMetric(): void {
+    if (!this.providerLabel) return; // anonymous breakers (direct `new`) emit nothing
+    circuitState.set(
+      { provider: this.providerLabel, model: this.modelLabel ?? '' },
+      this.state === 'open' || this.state === 'halfOpen' ? 1 : 0,
+    );
   }
 
   async exec<T>(fn: () => Promise<T>): Promise<T> {
@@ -31,7 +43,7 @@ export class CircuitBreaker {
       if (Date.now() - this.openedAt >= this.resetMs) {
         this.state = 'halfOpen';
       } else {
-        throw new CircuitOpenError('', '');
+        throw new CircuitOpenError(this.providerLabel ?? '', this.modelLabel ?? '');
       }
     }
 
@@ -40,6 +52,7 @@ export class CircuitBreaker {
       if (this.state === 'halfOpen') {
         this.state = 'closed';
         this.failures = 0;
+        this.syncMetric();
       } else {
         this.failures = 0;
       }
@@ -50,16 +63,19 @@ export class CircuitBreaker {
       if (this.failures >= this.threshold) {
         this.state = 'open';
         this.openedAt = Date.now();
+        this.syncMetric();
       }
       throw err;
     }
   }
 
-  static for(provider: string, model: string): CircuitBreaker {
+  static for(provider: string, model: string, config: CircuitBreakerConfig = {}): CircuitBreaker {
     const key = `${provider}:${model}`;
     let cb = breakers.get(key);
     if (!cb) {
-      cb = new CircuitBreaker();
+      cb = new CircuitBreaker(config);
+      cb.providerLabel = provider;
+      cb.modelLabel = model;
       breakers.set(key, cb);
     }
     return cb;

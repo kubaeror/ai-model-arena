@@ -1,5 +1,5 @@
 import type { Task, TaskQueue } from './types.js';
-import { queueDepth } from '../observability/metrics.js';
+import { queueDepth, dlqDepth } from '../observability/metrics.js';
 
 interface Waiter {
   resolve: (t: Task | null) => void;
@@ -31,6 +31,10 @@ export class InMemoryQueue implements TaskQueue {
 
   private syncQueueDepth(): void {
     queueDepth.set({ provider: 'in-memory' }, this.pending.length);
+  }
+
+  private syncDlqDepth(): void {
+    dlqDepth.set({ provider: 'in-memory' }, this.dead.length);
   }
 
   async enqueue(task: Task): Promise<void> {
@@ -80,6 +84,7 @@ export class InMemoryQueue implements TaskQueue {
       if (t.attempts >= 5) {
         this.dead.push(t);
         this.syncQueueDepth();
+        this.syncDlqDepth();
         return;
       }
       this.pending.unshift(t);
@@ -112,6 +117,7 @@ export class InMemoryQueue implements TaskQueue {
     t.attempts = 0;
     this.pending.unshift(t);
     this.syncQueueDepth();
+    this.syncDlqDepth();
     this._notifyNext();
     return true;
   }

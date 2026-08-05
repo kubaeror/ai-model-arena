@@ -28,6 +28,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
+    this.providerLabel = descriptor.id;
     // Fail fast on unconfigured placeholder URLs (e.g. azure-openai's
     // https://{resource}.openai.azure.com/openai/v1) instead of POSTing to a
     // literal '{resource}' hostname and failing with a confusing DNS error.

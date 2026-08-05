@@ -1,4 +1,5 @@
 import type { ChatMessage, ToolDefinition, ModelResponse, Logger } from '../../types.js';
+import { apiErrors, providerLatency } from '../../observability/metrics.js';
 
 export interface SendOpts {
   reasoning?: { type: 'effort' | 'toggle' | 'budget_tokens'; value?: string | number };
@@ -24,6 +25,7 @@ const RETRYABLE_MESSAGES = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAI
 export abstract class BaseAdapter {
   protected logger?: Logger;
   protected timeoutMs = 60_000;
+  protected providerLabel = 'unknown';
   constructor(logger?: Logger) { this.logger = logger; }
 
   /**
@@ -53,12 +55,15 @@ export abstract class BaseAdapter {
    * Measure the wall-clock latency of a single (non-streaming) model request
    * and attach it to the result as `durationMs`. Non-streaming APIs only
    * deliver the first byte together with the full response, so the request
-   * duration ≈ time-to-first-token (TTFT).
+   * duration ≈ time-to-first-token (TTFT). Also feeds the provider latency
+   * histogram so send latency is observable per provider.
    */
   protected async timed<T>(fn: () => Promise<T>): Promise<T & { durationMs: number }> {
     const start = performance.now();
     const result = await fn();
-    return { ...result, durationMs: Math.round(performance.now() - start) };
+    const durationMs = Math.round(performance.now() - start);
+    providerLatency.observe({ provider: this.providerLabel }, durationMs / 1000);
+    return { ...result, durationMs };
   }
 
   protected async withRetry<T>(
@@ -72,7 +77,10 @@ export abstract class BaseAdapter {
         return await fn();
       } catch (err) {
         lastErr = err;
-        if (!this.isRetryable(err) || attempt === opts.maxRetries) throw err;
+        if (!this.isRetryable(err) || attempt === opts.maxRetries) {
+          apiErrors.inc({ provider: this.providerLabel });
+          throw err;
+        }
         const delay = Math.min(opts.initialDelayMs * Math.pow(2, attempt), opts.maxDelayMs);
         await new Promise(r => setTimeout(r, delay + Math.random() * 250));
         attempt++;
