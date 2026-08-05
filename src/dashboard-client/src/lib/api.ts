@@ -486,6 +486,38 @@ export async function enqueuePrompt(input: {
   return apiFetch('/api/prompts/enqueue', { method: 'POST', body: JSON.stringify(input) });
 }
 
+// ── Output Mappings ─────────────────────────────────────────────────────────
+export interface OutputMappingRow {
+  id: string;
+  scope: string;
+  scope_id: string;
+  parent_folder: string;
+  per_model_pattern: string;
+  created_at: string;
+  updated_at: string;
+}
+export async function listOutputMappings(): Promise<OutputMappingRow[]> {
+  const r = await apiFetch<{ mappings: OutputMappingRow[] }>('/api/output-mappings');
+  return r.mappings;
+}
+export async function createOutputMapping(input: {
+  scope: string; scopeId: string; parentFolder: string; perModelPattern: string;
+}): Promise<{ ok: boolean }> {
+  return apiFetch('/api/output-mappings', { method: 'POST', body: JSON.stringify(input) });
+}
+export async function updateOutputMapping(
+  id: string,
+  input: { scope?: string; scopeId?: string; parentFolder?: string; perModelPattern?: string },
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/output-mappings/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+export async function deleteOutputMapping(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/output-mappings/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 // ── Audit ────────────────────────────────────────────────────────────────────
 export interface AuditEntry {
   id: number;
