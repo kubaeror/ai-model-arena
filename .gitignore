@@ -35,6 +35,9 @@ test-results/
 # PM2 / scratch process artifacts
 *.pid
 
+# CI render scratch (k8s-validate / k8s-policy write .tmp/)
+.tmp/
+
 # CommandCode
 .commandcode/
 

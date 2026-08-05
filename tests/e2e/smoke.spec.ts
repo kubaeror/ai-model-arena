@@ -73,8 +73,7 @@ test('create a scenario via ScenarioForm and see it in the list', async ({ page 
   await fillField(page, 'Task (initial user prompt)', 'Implement a fibonacci function in src/index.js so the tests pass.');
 
   await page.getByRole('button', { name: 'Create scenario' }).click();
+  createdScenario = name;
   await expect(page.getByRole('heading', { name: 'Scenarios' })).toBeVisible();
   await expect(page.getByText(name, { exact: true })).toBeVisible();
-
-  createdScenario = name;
 });

@@ -12,8 +12,8 @@ pull request ──▶ pr-checks ───────────────�
    (branch)      typecheck · lint · audit · test-backend (coverage)    │
                  test-frontend · k8s-validate (kubeconform)            │
                  k8s-policy (conftest/OPA) · compose-validate          │
-                 dockerfile-lint (hadolint) · workflow-lint (actionlint)│
-                 CodeQL (PR + main + weekly)                           │
+                 shellcheck · yaml-markdown-lint · dockerfile-lint     │
+                 workflow-lint (actionlint) · CodeQL (PR + main + weekly)│
                                                                        ▼
 main ──▶ build-deploy ────────────────────────────────────────────┐  must pass
    (push)  typecheck · lint · test:coverage                        │
@@ -48,10 +48,11 @@ git push origin v1.2.3
 
 What happens next:
 
-1. `release.yaml` triggers on `push` of tags matching `v*` (concurrency group
-   `release-<tag>`, no cancellation). It runs typecheck, lint, and
-   `test:coverage`, then builds and pushes the multi-arch image as
-   `ghcr.io/<owner>/ai-model-arena:v1.2.3` and `:latest`.
+1. `release.yaml` triggers on `push` of tags matching `v*` (a single shared
+   concurrency group `release-main` serializes promotions across tags). It
+   runs typecheck, lint, and `test:coverage`, then builds and pushes the
+   multi-arch image as `ghcr.io/<owner>/ai-model-arena-runner:v1.2.3` and
+   `:latest`.
 2. A CycloneDX SBOM is generated (`anchore/sbom-action`) and uploaded as a
    workflow artifact; Trivy gates on HIGH/CRITICAL findings (`exit-code: 1`,
    `ignore-unfixed: true`).
@@ -78,7 +79,7 @@ gh release view v1.2.3
 # Image + signature/attestation in the registry
 cosign verify --certificate-identity-regexp 'https://github.com/.*/.github/workflows/release.yaml' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ghcr.io/<owner>/ai-model-arena:v1.2.3
+  ghcr.io/<owner>/ai-model-arena-runner:v1.2.3
 
 # Prod overlay now points at the release commit
 kubectl kustomize k8s/overlays/prod | grep newTag   # or read k8s/overlays/prod/kustomization.yaml
@@ -117,8 +118,10 @@ credentials — deployment is purely GitOps.
 Two jobs:
 
 1. **full-e2e** — the full suite: `npm run typecheck`, `npm run lint`,
-   `npm run test:coverage`, the Postgres migration parity gate (`npm run
-   test:db-pg` against a `postgres:16.8-alpine` container), client
+   the backend suite double-run (`npm run test:coverage` + the full
+   `npm test`, added in `ci: double-run backend suite nightly` so a flake in
+   one run doesn't silently pass), the Postgres migration parity gate
+   (`npm run test:db-pg` against a `postgres:16.8-alpine` container), client
    typecheck + tests, `npm run build`, stub agent-loop smoke
    (`scripts/smoke-stub.mjs`), trace smoke (`scripts/trace-smoke-test.mjs`),
    `docker build`, and a docker-compose smoke against `/health`.
@@ -131,8 +134,9 @@ Two jobs:
    scaledobject presence. On failure it exports kind logs as a 7-day
    artifact.
 
-Note: nightly has no flake-retry / double-run step — a flaky job fails the
-nightly run (last commit `ci: nightly kind cluster e2e`).
+Note: nightly has no flake-retry step — the backend double-run above is the
+only redundancy; a flaky `cluster-e2e` still fails the nightly run (last
+commit `ci: nightly kind cluster e2e`).
 
 ## Local validation commands
 
@@ -172,8 +176,24 @@ docker run --rm -v "$PWD:/repo" -w /repo hadolint/hadolint:latest hadolint Docke
 docker compose config -q
 ```
 
-`shellcheck`, `yamllint`, and `markdownlint` are **not** configured in this
-repo (no config files, no CI jobs), so no commands for them are provided here.
+`shellcheck`, `yamllint`, and `markdownlint` run in pr-checks (the
+`shellcheck` and `yaml-markdown-lint` jobs; `.yamllint.yml` and
+`.markdownlint.json` pin their configs). Local equivalents of those jobs:
+
+```bash
+# Shellcheck (scripts only, like the CI job)
+docker run --rm -v "$PWD:/repo" -w /repo koalaman/shellcheck:stable \
+  -x scripts/backup/*.sh scripts/k8s/*.sh scripts/restore/*.sh
+
+# Yamllint (k8s/configs/workflows, picks up .yamllint.yml)
+docker run --rm -v "$PWD:/repo" -w /repo cytopia/yamllint:latest -f parsable \
+  k8s configs .github/workflows .github/dependabot.yml docker-compose.yml
+
+# Markdownlint (project docs only, .markdownlint.json config)
+docker run --rm -v "$PWD:/repo" -w /repo davidanson/markdownlint-cli2:latest \
+  --config .markdownlint.json \
+  README.md AGENTS.md docs k8s/README.md src/dashboard-client/DESIGN.md
+```
 
 ## Required repository settings
 
