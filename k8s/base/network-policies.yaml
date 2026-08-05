@@ -85,6 +85,49 @@ spec:
         - port: 443
         - port: 80
 ---
+# Allow prometheus (observability ns) to scrape runner metrics on port 4001
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-runner-metrics
+  namespace: ai-arena
+spec:
+  podSelector:
+    matchLabels:
+      app: runner
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: observability
+      ports:
+        - port: 4001
+---
+# Allow runner -> otel-collector (OTLP HTTP: traces/metrics/logs)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-to-otel
+  namespace: ai-arena
+spec:
+  podSelector:
+    matchLabels:
+      app: runner
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: observability
+          podSelector:
+            matchLabels:
+              app: otel-collector
+      ports:
+        - port: 4318
+---
 # Allow scheduler -> postgres + redis
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -73,6 +73,11 @@ spec:
                 secretKeyRef:
                   name: dashboard-auth
                   key: jwt-secret
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-auth
+                  key: metrics-token
             - name: WEBHOOK_SECRET_KEY
               valueFrom:
                 secretKeyRef:

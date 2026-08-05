@@ -41,6 +41,9 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
+            - name: metrics-token
+              mountPath: /etc/prometheus-token
+              readOnly: true
             - name: data
               mountPath: /prometheus
             - name: tmp
@@ -73,6 +76,9 @@ spec:
             claimName: prometheus-data
         - name: tmp
           emptyDir: {}
+        - name: metrics-token
+          secret:
+            secretName: metrics-token
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -92,6 +98,9 @@ data:
           - targets: ['dashboard.ai-arena:4000']
         metrics_path: /metrics
         scrape_interval: 15s
+        authorization:
+          type: Bearer
+          credentials_file: /etc/prometheus-token/token
       - job_name: arena-runner
         kubernetes_sd_configs:
           - role: pod

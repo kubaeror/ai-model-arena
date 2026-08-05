@@ -37,6 +37,11 @@ k8s/
 kubectl -n ai-arena create secret generic dashboard-auth \
   --from-literal=password=change-me \
   --from-literal=jwt-secret=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+# METRICS_TOKEN must match observability/metrics-token for Prometheus scraping:
+kubectl -n ai-arena create secret generic dashboard-auth --dry-run=client \
+  --from-literal=metrics-token=$(openssl rand -hex 32) -o yaml | kubectl apply -f - \
+  && kubectl -n observability create secret generic metrics-token \
+  --from-literal=token=$(kubectl -n ai-arena get secret dashboard-auth -o jsonpath='{.data.metrics-token}' | base64 -d) --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n ai-arena create secret generic provider-keys \
   --from-literal=OPENAI_API_KEY=...
 kubectl -n ai-arena create secret generic webhook-secret \
