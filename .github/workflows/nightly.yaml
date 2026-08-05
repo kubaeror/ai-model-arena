@@ -53,3 +53,84 @@ jobs:
           done
           curl -sf http://localhost:4000/health
           docker compose down
+
+  # Boot a real kind cluster, deploy the e2e overlay, and smoke the running
+  # stack. Requires KEDA installed first: k8s/base/keda-scaledobject.yaml uses
+  # CR instances (keda.sh/v1alpha1) whose CRDs ship with the helm chart, so
+  # `kubectl apply -k` would reject the ScaledObject without it.
+  cluster-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+      - name: Build runner image
+        run: docker buildx build --platform linux/amd64 --load -t ghcr.io/kubaeror/ai-model-arena-runner:latest .
+      - name: Create kind cluster
+        uses: container-tools/kind-action@0ad70e2299366b0e1552c7240f4e4567148f723e # v2.0.4
+        with:
+          version: v0.23.0
+          node_image: kindest/node:v1.30.0
+          kubectl_version: v1.30.0
+          registry: false
+      - name: Load runner image into kind
+        run: kind load docker-image ghcr.io/kubaeror/ai-model-arena-runner:latest
+      - name: Install KEDA
+        run: |
+          helm repo add kedacore https://kedacore.github.io/charts
+          helm upgrade --install keda kedacore/keda -n keda --create-namespace
+          kubectl -n keda rollout status deploy/keda-operator --timeout=180s
+          kubectl -n keda rollout status deploy/keda-operator-metrics-apiserver --timeout=180s
+          kubectl -n keda rollout status deploy/keda-admission-webhooks --timeout=180s
+          kubectl get crd scaledobjects.keda.sh
+      - name: Deploy e2e overlay
+        run: |
+          # kind >= v0.23 node images ship a default local-path StorageClass,
+          # so the postgres StatefulSet + redis PVCs provision themselves; the
+          # overlay pins the outputs PVC to its own hostPath PV (SC-less).
+          kubectl apply -k k8s/overlays/e2e
+      - name: Wait for rollouts
+        run: |
+          kubectl -n ai-arena rollout status statefulset/postgres --timeout=180s
+          kubectl -n ai-arena rollout status deploy/redis --timeout=180s
+          kubectl -n ai-arena rollout status deploy/runner-openai-compat --timeout=180s
+          kubectl -n ai-arena rollout status deploy/runner-anthropic --timeout=180s
+          kubectl -n ai-arena rollout status deploy/runner-google --timeout=180s
+          kubectl -n ai-arena rollout status deploy/dashboard --timeout=180s
+          kubectl -n ai-arena get cronjob arena-scheduler
+      - name: Smoke test
+        run: |
+          set -e
+          kubectl -n ai-arena port-forward svc/dashboard 4000:4000 >/dev/null 2>&1 &
+          PF_PID=$!
+          trap 'kill $PF_PID 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:4000/health; then break; fi
+            sleep 2
+          done
+          # /health returns 200 only when the dashboard can reach postgres
+          curl -sf http://localhost:4000/health
+          # Runner readiness file (src/runner.ts: READINESS_FILE = /tmp/runner-ready)
+          kubectl -n ai-arena exec deploy/runner-openai-compat -- sh -c 'test -f /tmp/runner-ready && echo RUNNER-READY'
+          # Startup logged, and the runner's XGROUP CREATE (MKSTREAM) proves a
+          # live redis connection (no explicit "connected" log line exists).
+          kubectl -n ai-arena logs deploy/runner-openai-compat --tail=100 | grep -q 'Runner starting'
+          kubectl -n ai-arena exec deploy/redis -- sh -c 'redis-cli XINFO GROUPS arena:tasks:openai-compat' | grep -q arena-runners
+          test -n "$(kubectl -n ai-arena get scaledobject -o name)"
+      - name: Collect cluster logs
+        if: failure()
+        run: |
+          kind export logs /tmp/kind-logs || true
+          kubectl -n ai-arena get events --sort-by=.lastTimestamp | tail -50 || true
+      - name: Upload kind logs
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: kind-cluster-logs
+          path: /tmp/kind-logs
+          retention-days: 7

@@ -120,6 +120,10 @@ patches:
                 containers:
                   - name: scheduler
                     imagePullPolicy: IfNotPresent
+  # Pin outputs to NO storage class: kind >= v0.23 node images ship a default
+  # local-path StorageClass (RWO-only, and its PVs carry no labels), which
+  # would otherwise default this RWX PVC to it and strand it Pending forever —
+  # the selector below can only match the overlay's own hostPath PV.
   - target:
       kind: PersistentVolumeClaim
       name: outputs
@@ -129,6 +133,27 @@ patches:
       metadata:
         name: outputs
       spec:
+        storageClassName: ""
         selector:
           matchLabels:
             storage-tier: outputs
+  # Relocate PGDATA under the mount: the postgres:16 entrypoint chmods the data
+  # dir, and on kind's local-path volume the mount root is root-owned, so a
+  # non-root postgres (uid 999, fsGroup-only group write) cannot chmod it and
+  # initdb dies. A subdir the entrypoint creates itself is owned by uid 999.
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+      spec:
+        template:
+          spec:
+            containers:
+              - name: postgres
+                env:
+                  - name: PGDATA
+                    value: /var/lib/postgresql/data/pgdata
