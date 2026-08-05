@@ -13,7 +13,7 @@ import { ProviderRegistry } from '../../src/providers/index.js';
 import type { CreateAdapterOpts } from '../../src/providers/registry.js';
 import type { ModelAdapter } from '../../src/providers/adapters/base.js';
 import { CircuitBreaker } from '../../src/providers/circuit-breaker.js';
-import { tasksFailed } from '../../src/observability/metrics.js';
+import { tasksFailed, taskCounter } from '../../src/observability/metrics.js';
 import type { Task, TaskQueue } from '../../src/queue/types.js';
 
 const MODELS_DEV = {
@@ -355,6 +355,7 @@ test('runner does not count a requeued model-not-found nack as tasksFailed', asy
   process.env.QUEUE_DRIVER = 'memory';
   initDb(dbFile);
   tasksFailed.reset();
+  taskCounter.reset();
 
   const queue = new NoRetryQueue();
   const ac = new AbortController();
@@ -372,6 +373,10 @@ test('runner does not count a requeued model-not-found nack as tasksFailed', asy
   try {
     await waitFor(() => queue.nacked.length === 1, 8000, 'task nacked');
     assert.equal(await tasksFailedValue(), 0, 'sub-threshold model-not-found nack must not count as terminal');
+    const failed = (await taskCounter.get()).values.filter(
+      (m) => m.labels.model === 'nope/nope' && m.labels.status === 'failed',
+    );
+    assert.equal(failed.length, 0, 'sub-threshold model-not-found must not count taskCounter{status:failed}');
   } finally {
     ac.abort();
     await runnerDone;

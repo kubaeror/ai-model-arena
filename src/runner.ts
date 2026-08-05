@@ -248,7 +248,6 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       runningTask = task;
       taskStartedAt = new Date();
       activeTasks.inc();
-      tasksClaimed.inc();
 
       // Check per-run cancellation before starting execution
       const runId = task.config.modelRunId as string ?? task.sessionId;
@@ -258,6 +257,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         await queue.ack(task._redisId ?? task.taskId);
         continue;
       }
+      // Only count claimed once the task is actually executed — a cancelled
+      // task acked without running would skew claimed/failed ratios.
+      tasksClaimed.inc();
 
       logger.info('Task dequeued', { taskId: task.taskId, model: task.model, scenario: task.scenario });
 
@@ -342,11 +344,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const resolved = await resolveModelForRun(modelName);
       if (!resolved) {
         logger.error('Model not found', { model: modelName });
-        taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-        taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
-        taskCounted = true;
-        // nack requeues below the DLQ threshold — count only when it dead-letters.
-        if (isTerminalFailure(task!.attempts)) tasksFailed.inc();
+        // nack requeues below the DLQ threshold — count failed + duration
+        // only when the nack dead-letters (terminal).
+        if (isTerminalFailure(task!.attempts)) {
+          taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
+          taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
+          taskCounted = true;
+          tasksFailed.inc();
+        }
         await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
         continue;
       }
@@ -632,9 +637,12 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
           logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: failedTask.taskId, modelRunId: failedTask.config.modelRunId ?? failedTask.sessionId, ...detail });
         });
-        if (!taskCounted) {
+        // nack requeues below the DLQ threshold — count failed + duration
+        // only when the nack dead-letters (terminal).
+        if (!taskCounted && isTerminalFailure(failedTask.attempts)) {
           taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
           if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
+          taskCounted = true;
         }
         // nack requeues below the DLQ threshold — count only when it dead-letters.
         if (isTerminalFailure(failedTask.attempts)) tasksFailed.inc();
