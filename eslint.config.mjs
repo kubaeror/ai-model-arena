@@ -28,6 +28,18 @@ export default [
     },
   },
   {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      parserOptions: {
+        ecmaVersion: 2022,
+        sourceType: 'module',
+      },
+    },
+    rules: {
+      'no-console': 'off',
+    },
+  },
+  {
     files: ['src/orchestrator/pm2-helpers.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

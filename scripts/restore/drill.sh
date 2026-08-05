@@ -10,8 +10,14 @@ fi
 NS="${NS:-ai-arena}"
 BACKUP_DIR="${BACKUP_DIR:-backups}"
 
+# SC2012: backup filenames are machine-generated (postgres-<TS>.sql etc. from
+# backup-*.sh) with a strict alphanumeric pattern, so ls -t is safe and the
+# find -printf alternative is not portable (BSD find).
+# shellcheck disable=SC2012
 PG_DUMP="$(ls -t "$BACKUP_DIR"/postgres-*.sql 2>/dev/null | head -1 || true)"
+# shellcheck disable=SC2012
 REDIS_RDB="$(ls -t "$BACKUP_DIR"/redis-*.rdb 2>/dev/null | head -1 || true)"
+# shellcheck disable=SC2012
 OUTPUTS_TAR="$(ls -t "$BACKUP_DIR"/outputs-*.tar.gz 2>/dev/null | head -1 || true)"
 
 echo "=== Restore drill (namespace $NS, from $BACKUP_DIR) ==="
