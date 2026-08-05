@@ -243,10 +243,6 @@ export async function deleteOutputMapping(id: string): Promise<void> {
   await db.delete(output_mappings).where(eq(output_mappings.id, id));
 }
 
-// ── Anomalies ─────────────────────────────────────────────────────────────
-
-// ── Pricing ───────────────────────────────────────────────────────────────
-
 // ── Schedules ─────────────────────────────────────────────────────────────
 
 export async function listDueSchedules(now: string): Promise<DbSchedule[]> {
@@ -289,8 +285,6 @@ export async function listSchedules(): Promise<DbSchedule[]> {
   const db = getDrizzleDb();
   return db.select().from(schedules) as any;
 }
-
-// ── Providers (custom) ────────────────────────────────────────────────────
 
 // ── Models (for model-resolver) ───────────────────────────────────────────
 
@@ -655,7 +649,7 @@ export async function getModelDetail(modelId: string): Promise<any[]> {
     tier_size: pricing.tier_size,
   })
     .from(models)
-    .leftJoin(pricing, eq(pricing.model_id, models.id))
+    .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
     .where(eq(models.id, modelId)) as any;
 }
 
