@@ -7,7 +7,7 @@ import { findProjectRoot, dbPath } from '../../paths.js';
 import { createLogger } from '../../logger/pino-logger.js';
 import { listRuns } from '../../orchestrator/orchestrator.js';
 import { RegressionSuiteConfigSchema, type RegressionSuiteConfig } from '../../evaluation/regression-config.js';
-import { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath } from '../../evaluation/regression.js';
+import { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath, saveSuiteResult, listSavedSuiteResults } from '../../evaluation/regression.js';
 import { initDb } from '../../db/index.js';
 import { isWithin } from '../../sandbox/sandbox.js';
 
@@ -75,6 +75,13 @@ export function createRegressionRouter(): Router {
     res.json(cfg);
   });
 
+  router.get('/results', (req, res) => {
+    const raw = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+    const n = raw === undefined ? NaN : Number(raw);
+    const limit = Number.isFinite(n) && n > 0 ? n : 10;
+    res.json({ results: listSavedSuiteResults(limit) });
+  });
+
   router.post('/', requireRole('admin'), async (req, res) => {
     const { suite: suiteName, model: filterModel, updateBaseline } = req.body ?? {};
     if (!suiteName) {
@@ -123,11 +130,15 @@ export function createRegressionRouter(): Router {
       for (const sr of result.scenarioResults) {
         if (sr.success && sr.current) {
           const snap = createBaselineSnapshot(sr.current, sr.judge ?? null);
-          const bPath = getBaselinePath(baselineDir, sr.current.model, sr.scenario);
-          saveBaselineSnapshot(bPath, snap, logger);
+          if (snap) {
+            const bPath = getBaselinePath(baselineDir, sr.current.model, sr.scenario);
+            saveBaselineSnapshot(bPath, snap, logger);
+          }
         }
       }
     }
+
+    saveSuiteResult(result, logger);
 
     res.json(result);
   });

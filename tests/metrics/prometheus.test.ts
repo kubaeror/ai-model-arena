@@ -7,10 +7,23 @@ import {
   activeTasks,
   queueDepth,
   scheduleFailures,
+  dlqDepth,
+  circuitState,
+  budgetPercent,
+  apiErrors,
+  tasksClaimed,
+  tasksFailed,
+  providerLatency,
   metricsHandler,
 } from '../../src/observability/metrics.js';
 import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import type { Task } from '../../src/queue/types.js';
+import { CircuitBreaker } from '../../src/providers/circuit-breaker.js';
+import { BaseAdapter, HttpError } from '../../src/providers/adapters/base.js';
+import { loadBudgetConfig, checkBudget, resetBudgetCache } from '../../src/cost-tracking/budget.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 async function scrapeMetrics(): Promise<string> {
   let body = '';
@@ -117,4 +130,126 @@ test('InMemoryQueue wires arena_queue_depth gauge on enqueue/dequeue/ack', async
   assert.ok(t2);
   await q.nack(t2!.taskId, 'retry');
   assert.equal((await scrapeMetrics()).includes('arena_queue_depth{provider="in-memory"} 2'), true);
+});
+
+test('metricsHandler: arena_dlq_depth reflects DLQ pushes in InMemoryQueue', async () => {
+  dlqDepth.reset();
+  const q = new InMemoryQueue();
+  // attempts 4 → nack bumps to 5 → dead-lettered
+  await q.enqueue(makeTask('dlq1', 4));
+  const claimed = await q.dequeue(0);
+  assert.ok(claimed);
+  await q.nack(claimed.taskId, 'boom');
+  assert.equal((await q.deadLetterSize()), 1);
+
+  const body = await scrapeMetrics();
+  assert.match(body, /^arena_dlq_depth\{provider="in-memory"\} 1$/m);
+});
+
+test('metricsHandler: arena_circuit_state reflects open/close via CircuitBreaker.for', async () => {
+  circuitState.reset();
+  const cb = CircuitBreaker.for('openai', 'gpt-4o', { failureThreshold: 1, resetTimeoutMs: 50 });
+  try {
+    await assert.rejects(() => cb.exec(async () => { throw new Error('boom'); }));
+    assert.match(await scrapeMetrics(), /^arena_circuit_state\{provider="openai",model="gpt-4o"\} 1$/m);
+
+    await new Promise((r) => setTimeout(r, 70));
+    const res = await cb.exec(async () => 'ok');
+    assert.equal(res, 'ok');
+    assert.equal(cb.state, 'closed');
+    assert.match(await scrapeMetrics(), /^arena_circuit_state\{provider="openai",model="gpt-4o"\} 0$/m);
+  } finally {
+    CircuitBreaker.cleanup();
+  }
+});
+
+test('metricsHandler: CircuitBreaker.cleanup removes the gauge series for dropped breakers', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  try {
+    circuitState.reset();
+    const cb = CircuitBreaker.for('openai', 'gpt-4o', { failureThreshold: 1, resetTimeoutMs: 50 });
+    await assert.rejects(() => cb.exec(async () => { throw new Error('boom'); }));
+    assert.match(await scrapeMetrics(), /^arena_circuit_state\{provider="openai",model="gpt-4o"\} 1$/m);
+
+    // Age the open breaker past the 1h retention so cleanup drops it, then
+    // verify the prom-client series goes with it (no stale 1=open forever).
+    t.mock.timers.tick(3_700_000);
+    CircuitBreaker.cleanup();
+    assert.doesNotMatch(await scrapeMetrics(), /arena_circuit_state\{provider="openai",model="gpt-4o"\}/, 'series removed on cleanup');
+  } finally {
+    t.mock.timers.reset();
+    CircuitBreaker.cleanup();
+  }
+});
+
+test('metricsHandler: arena_budget_percent reflects percentUsed from checkBudget', async () => {
+  budgetPercent.reset();
+  resetBudgetCache();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-metrics-budget-'));
+  try {
+    const rootDir = path.join(tmp, 'run');
+    fs.mkdirSync(path.join(rootDir, 'outputs'), { recursive: true });
+    const configPath = path.join(tmp, 'config.yaml');
+    fs.writeFileSync(configPath, 'global:\n  daily: 10\nstateFile: outputs/.budget-state.json\n');
+    const dayKey = new Date().toISOString().slice(0, 10);
+    fs.writeFileSync(path.join(rootDir, 'outputs', '.budget-state.json'), JSON.stringify({
+      global: { daily: {}, monthly: {} },
+      models: { 'gpt-4o': { daily: { [dayKey]: 15 }, monthly: {} } },
+      lastReset: new Date().toISOString(),
+    }));
+    loadBudgetConfig(configPath);
+    const result = checkBudget('gpt-4o', rootDir);
+    assert.equal(result.percentUsed, 150);
+
+    const body = await scrapeMetrics();
+    assert.match(body, /^arena_budget_percent\{model="gpt-4o"\} 150$/m);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+class TestAdapter extends BaseAdapter {
+  constructor(provider: string) {
+    super();
+    this.providerLabel = provider;
+  }
+  async runWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+    return this.withRetry(fn, { maxRetries: 0, initialDelayMs: 1, maxDelayMs: 1 });
+  }
+  async measure<T>(fn: () => Promise<T>): Promise<T & { durationMs: number }> {
+    return this.timed(fn);
+  }
+}
+
+test('metricsHandler: arena_api_errors_total increments on terminal HTTP error in BaseAdapter', async () => {
+  apiErrors.reset();
+  const adapter = new TestAdapter('openai');
+  await assert.rejects(
+    () => adapter.runWithRetry(async () => { throw new HttpError(429, 'rate limited', 'rate limited'); }),
+    HttpError,
+  );
+  assert.match(await scrapeMetrics(), /^arena_api_errors_total\{provider="openai"\} 1$/m);
+});
+
+test('metricsHandler: arena_provider_latency_seconds observes send latency in BaseAdapter', async () => {
+  providerLatency.reset();
+  const adapter = new TestAdapter('anthropic');
+  await adapter.measure(async () => { await new Promise((r) => setTimeout(r, 20)); return { text: 'ok' }; });
+
+  const body = await scrapeMetrics();
+  assert.match(body, /^arena_provider_latency_seconds_count\{provider="anthropic"\} 1$/m);
+  assert.match(body, /^arena_provider_latency_seconds_sum\{provider="anthropic"\} (0\.0[1-9]|[1-9])/m);
+});
+
+test('metricsHandler: arena_tasks_claimed_total / arena_tasks_failed_total reflect runner counters', async () => {
+  tasksClaimed.reset();
+  tasksFailed.reset();
+  tasksClaimed.inc();
+  tasksClaimed.inc();
+  tasksFailed.inc();
+
+  const body = await scrapeMetrics();
+  assert.match(body, /^arena_tasks_claimed_total 2$/m);
+  assert.match(body, /^arena_tasks_failed_total 1$/m);
 });

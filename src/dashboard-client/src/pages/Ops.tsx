@@ -36,7 +36,7 @@ export function Ops() {
     <div className="flex flex-col gap-4">
 
       <Panel>
-        <PanelHeader title="PM2 Processes" />
+        <PanelHeader title="Run Status" />
         <PanelBody>
           {(processes?.length ?? 0) === 0 ? (
             <EmptyState title="No active workers" />
@@ -44,7 +44,6 @@ export function Ops() {
             <table className="w-full font-mono text-14">
               <thead><tr className="text-fg-1 text-12 uppercase border-b border-border">
                 <th className="px-2 py-2 text-left">Name</th><th className="px-2 py-2 text-left">Status</th>
-                <th className="px-2 py-2 text-right">CPU</th><th className="px-2 py-2 text-right">Mem</th>
                 <th className="px-2 py-2 text-left">Run</th>
               </tr></thead>
               <tbody>
@@ -52,8 +51,6 @@ export function Ops() {
                   <tr key={p.name} className="border-b border-border/50 hover:bg-bg-2">
                     <td className="px-2 py-2">{p.name}</td>
                     <td className="px-2 py-2"><Badge variant="status" value={p.status} /></td>
-                    <td className="px-2 py-2 text-right" data-numeric>{p.cpu?.toFixed(1)}%</td>
-                    <td className="px-2 py-2 text-right" data-numeric>{p.memory?.toFixed(0)}MB</td>
                     <td className="px-2 py-2 text-fg-1">{p.runId ?? '-'}</td>
                   </tr>
                 ))}

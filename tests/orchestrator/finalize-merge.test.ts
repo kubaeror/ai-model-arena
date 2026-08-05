@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { initDb, closeDb, getDrizzleDb } from '../../src/db/index.js';
+import { initDb, closeDb, getDb, getDrizzleDb } from '../../src/db/index.js';
 import { resetBudgetCache, loadBudgetConfig, getBudgetStatus } from '../../src/cost-tracking/budget.js';
 import { cost_ledger } from '../../src/db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -12,10 +12,12 @@ import {
   finalizeRun,
   finalizeRunByRunId,
   registerRun,
+  isRunComplete,
+  isRunCompleteByRunId,
   type RunSpec,
   type PerModelSpec,
 } from '../../src/orchestrator/run-lifecycle.js';
-import { getRunRecord } from '../../src/orchestrator/run-index.js';
+import { getRunRecord, updateRun } from '../../src/orchestrator/run-index.js';
 import { writeJudgeResult } from '../../src/evaluation/judge.js';
 
 function makePerModel(runId: string, model: string, root: string, ts: string): PerModelSpec {
@@ -23,7 +25,6 @@ function makePerModel(runId: string, model: string, root: string, ts: string): P
   return {
     model,
     providerId: 'test',
-    procName: `arena-${model}-${ts}`,
     outputDir,
     sandboxDir: path.join(outputDir, 'files'),
     resultPath: path.join(outputDir, 'result.json'),
@@ -222,6 +223,70 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.strictEqual(fs.existsSync(judgeFile), false, 'judge_score.json not written when judge disabled');
   });
 
+  it('finalizeCore judge step persists a judge_scores row for each judged model (single persistence site)', async () => {
+    const cfgDir = path.join(root, 'configs');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'evaluation.yaml'), [
+      'judge:',
+      '  model: gpt-4o',
+      '  enabled: true',
+      'rubric:',
+      '  correctness:',
+      '    description: "code correctness"',
+      '    maxScore: 10',
+      '',
+    ].join('\n'));
+
+    const now = new Date().toISOString();
+    const dbRaw = getDb();
+    dbRaw.prepare(
+      `INSERT INTO providers (id, name, api_base, auth_scheme, is_builtin, adapter, created_at, updated_at)
+       VALUES ('openai', 'OpenAI', 'https://api.openai.com/v1', 'bearer', 1, 'openai-compat', ?, ?)`,
+    ).run(now, now);
+    dbRaw.prepare(
+      `INSERT INTO models (id, name, provider_id, status, last_synced_at)
+       VALUES ('gpt-4o', 'GPT-4o', 'openai', 'active', ?)`,
+    ).run(now);
+    dbRaw.prepare(
+      `INSERT INTO model_providers (model_id, provider_id, api_model_id)
+       VALUES ('gpt-4o', 'openai', 'gpt-4o')`,
+    ).run();
+
+    const judgeAdapter = {
+      sendMessage: async () => ({
+        text: JSON.stringify({ scores: [{ category: 'correctness', score: 8, maxScore: 10 }], summary: 'ok' }),
+        usage: {},
+        toolCalls: [],
+      }),
+      supportsReasoning: () => false,
+      supportsPromptCaching: () => false,
+    };
+
+    const runId = 'run_judge_enabled';
+    const alpha = makePerModel(runId, 'alpha', root, 't-judge-on');
+    writeResult(alpha, { costUsd: 0.01 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+
+    await finalizeRun(spec, logger, judgeAdapter);
+
+    const deadline = Date.now() + 2000;
+    let row: any = null;
+    while (Date.now() < deadline) {
+      row = dbRaw.prepare('SELECT * FROM judge_scores WHERE run_id = ? AND model = ?').get(runId, 'alpha');
+      if (row) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    assert.ok(row, 'judge step persists a judge_scores row for the model');
+    assert.equal(row.judge_model, 'gpt-4o');
+    assert.equal(row.average_score, 8);
+    assert.equal(row.summary, 'ok');
+    assert.ok(row.scores_json.includes('correctness'));
+    const count = (dbRaw.prepare('SELECT COUNT(*) AS c FROM judge_scores WHERE run_id = ? AND model = ?').get(runId, 'alpha') as any).c;
+    assert.equal(count, 1, 'exactly one judge_scores row per run+model');
+  });
+
   it('writeJudgeResult persists judge_score.json (the finalizeCore persist step)', () => {
     const outputDir = path.join(tmp, 'judge-out');
     const verdict = {
@@ -239,5 +304,71 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.strictEqual(parsed.model, 'alpha');
     assert.strictEqual(parsed.averageScore, 90);
+  });
+
+  it('isRunComplete is false when the run record is absent (registration failure)', async () => {
+    const runId = 'run_absent';
+    const alpha = makePerModel(runId, 'alpha', root, 't-absent');
+    const spec = buildSpec(runId, root, [alpha]);
+    assert.strictEqual(await isRunComplete(spec), false);
+  });
+
+  it('isRunComplete is false while a model is running or claimed', async () => {
+    const runId = 'run_inflight';
+    const alpha = makePerModel(runId, 'alpha', root, 't-inflight');
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+    assert.strictEqual(await isRunComplete(spec), false, 'running is not complete');
+    await updateRun(runId, (r) => { r.perModel[0]!.status = 'claimed'; });
+    assert.strictEqual(await isRunComplete(spec), false, 'claimed is not complete');
+  });
+
+  it('isRunComplete is true when every model reached a terminal status', async () => {
+    const runId = 'run_terminal';
+    const alpha = makePerModel(runId, 'alpha', root, 't-terminal');
+    const beta = makePerModel(runId, 'beta', root, 't-terminal');
+    const spec = buildSpec(runId, root, [alpha, beta]);
+    await registerRun(spec, 'cli');
+    await updateRun(runId, (r) => {
+      r.perModel.find((m) => m.model === 'alpha')!.status = 'completed';
+      r.perModel.find((m) => m.model === 'beta')!.status = 'failed';
+    });
+    assert.strictEqual(await isRunComplete(spec), true);
+  });
+
+  it('isRunCompleteByRunId is false when the run record is absent', async () => {
+    assert.strictEqual(await isRunCompleteByRunId('run_absent_by_id'), false);
+  });
+
+  it('isRunCompleteByRunId is false while a model is running or claimed', async () => {
+    const runId = 'run_inflight_by_id';
+    const alpha = makePerModel(runId, 'alpha', root, 't-byid');
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+    assert.strictEqual(await isRunCompleteByRunId(runId), false, 'running is not complete');
+    await updateRun(runId, (r) => { r.perModel[0]!.status = 'claimed'; });
+    assert.strictEqual(await isRunCompleteByRunId(runId), false, 'claimed is not complete');
+  });
+
+  it('isRunCompleteByRunId is false when any model has an unknown status', async () => {
+    const runId = 'run_unknown_by_id';
+    const alpha = makePerModel(runId, 'alpha', root, 't-byid');
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+    await updateRun(runId, (r) => { r.perModel[0]!.status = 'unknown'; });
+    assert.strictEqual(await isRunCompleteByRunId(runId), false, 'unknown is not complete');
+  });
+
+  it('isRunCompleteByRunId is true when every model reached a terminal status', async () => {
+    const runId = 'run_terminal_by_id';
+    const alpha = makePerModel(runId, 'alpha', root, 't-byid');
+    const beta = makePerModel(runId, 'beta', root, 't-byid');
+    const spec = buildSpec(runId, root, [alpha, beta]);
+    await registerRun(spec, 'cli');
+    await updateRun(runId, (r) => {
+      r.perModel.find((m) => m.model === 'alpha')!.status = 'completed';
+      r.perModel.find((m) => m.model === 'beta')!.status = 'failed';
+    });
+    assert.strictEqual(await isRunCompleteByRunId(runId), true);
   });
 });

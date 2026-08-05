@@ -26,12 +26,14 @@ import {
   users, roles, user_roles,
   providers, models, model_providers, pricing, model_runtime_stats,
   schedules,
+  judge_scores,
 } from './schema.js';
 import type {
   DbSession, DbMessage, DbModelCall,
   DbPrompt, DbPromptVersion,
   DbUser, DbRole,
   DbOutputMapping, DbSchedule, DbModel,
+  DbJudgeScore,
 } from './schema.js';
 
 // ── Sessions ──────────────────────────────────────────────────────────────
@@ -91,17 +93,25 @@ export async function listMessagesBySession(sessionId: string): Promise<DbMessag
 export async function upsertModelCall(data: {
   id: string; sessionId: string; turn: number; provider: string; model: string;
   requestHash: string; responseText: string | null; usage: string | null;
-  latencyMs: number | null; createdAt: string;
+  latencyMs: number | null; ttftMs?: number | null; createdAt: string;
 }): Promise<void> {
   const db = getDrizzleDb();
   await db.insert(model_calls).values({
     id: data.id, session_id: data.sessionId, turn: data.turn,
     provider: data.provider, model: data.model,
     request_hash: data.requestHash, response_text: data.responseText,
-    usage: data.usage, latency_ms: data.latencyMs, created_at: data.createdAt,
+    usage: data.usage, latency_ms: data.latencyMs, ttft_ms: data.ttftMs ?? null, created_at: data.createdAt,
   }).onConflictDoUpdate({
     target: [model_calls.session_id, model_calls.turn],
-    set: { response_text: data.responseText, usage: data.usage, latency_ms: data.latencyMs, created_at: data.createdAt },
+    set: {
+      response_text: data.responseText,
+      usage: data.usage,
+      latency_ms: data.latencyMs,
+      // Skip ttft_ms when absent so a re-record without it doesn't clobber
+      // the original first-token latency.
+      ...(data.ttftMs !== undefined ? { ttft_ms: data.ttftMs } : {}),
+      created_at: data.createdAt,
+    },
   });
 }
 
@@ -111,6 +121,18 @@ export async function getModelCallBySessionAndTurn(sessionId: string, turn: numb
     .where(and(eq(model_calls.session_id, sessionId), eq(model_calls.turn, turn)))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * All model_calls belonging to a run. Sessions are keyed `${runId}-${model}`
+ * (task.sessionId), so calls are found by matching the session_id prefix.
+ */
+export async function listModelCalls(runId: string): Promise<DbModelCall[]> {
+  const db = getDrizzleDb();
+  const prefix = `${runId}-`;
+  return db.select().from(model_calls)
+    .where(sql`substr(${model_calls.session_id}, 1, ${prefix.length}) = ${prefix}`)
+    .orderBy(model_calls.created_at, model_calls.turn) as any;
 }
 
 // ── Runs ──────────────────────────────────────────────────────────────────
@@ -243,10 +265,6 @@ export async function deleteOutputMapping(id: string): Promise<void> {
   await db.delete(output_mappings).where(eq(output_mappings.id, id));
 }
 
-// ── Anomalies ─────────────────────────────────────────────────────────────
-
-// ── Pricing ───────────────────────────────────────────────────────────────
-
 // ── Schedules ─────────────────────────────────────────────────────────────
 
 export async function listDueSchedules(now: string): Promise<DbSchedule[]> {
@@ -261,6 +279,11 @@ export async function updateScheduleRun(id: string, lastRun: string, nextRun: st
   await db.update(schedules).set({ last_run: lastRun, next_run: nextRun }).where(eq(schedules.id, id));
 }
 
+export async function updateScheduleEnabled(id: string, enabled: boolean): Promise<void> {
+  const db = getDrizzleDb();
+  await db.update(schedules).set({ enabled: enabled ? 1 : 0 }).where(eq(schedules.id, id));
+}
+
 export interface ScheduleInput {
   id: string;
   scenario: string;
@@ -272,11 +295,17 @@ export interface ScheduleInput {
 
 export async function insertSchedule(s: ScheduleInput): Promise<void> {
   const db = getDrizzleDb();
-  const existing = await db.select({ id: schedules.id }).from(schedules).where(eq(schedules.id, s.id)).limit(1);
-  if (existing.length > 0) return;
   await db.insert(schedules).values({
     id: s.id, scenario: s.scenario, models: JSON.stringify(s.models),
     cron: s.cron, enabled: s.enabled ? 1 : 0, created_at: s.createdAt ?? new Date().toISOString(),
+  }).onConflictDoUpdate({
+    target: schedules.id,
+    set: {
+      scenario: s.scenario,
+      models: JSON.stringify(s.models),
+      cron: s.cron,
+      enabled: s.enabled ? 1 : 0,
+    },
   });
 }
 
@@ -285,12 +314,41 @@ export async function deleteSchedule(id: string): Promise<void> {
   await db.delete(schedules).where(eq(schedules.id, id));
 }
 
+// ── Judge Scores ───────────────────────────────────────────────────────────
+
+export async function insertJudgeScore(data: {
+  runId: string; model: string; judgeModel: string;
+  averageScore: number; summary: string; scoresJson: string; judgedAt: string;
+}): Promise<void> {
+  const db = getDrizzleDb();
+  await db.insert(judge_scores).values({
+    run_id: data.runId, model: data.model, judge_model: data.judgeModel,
+    average_score: data.averageScore, summary: data.summary,
+    scores_json: data.scoresJson, judged_at: data.judgedAt,
+  }).onConflictDoUpdate({
+    target: [judge_scores.run_id, judge_scores.model],
+    set: {
+      judge_model: data.judgeModel,
+      average_score: data.averageScore,
+      summary: data.summary,
+      scores_json: data.scoresJson,
+      judged_at: data.judgedAt,
+    },
+  });
+}
+
+export async function listJudgeScores(runId?: string): Promise<DbJudgeScore[]> {
+  const db = getDrizzleDb();
+  const rows = runId
+    ? await db.select().from(judge_scores).where(eq(judge_scores.run_id, runId))
+    : await db.select().from(judge_scores);
+  return rows as DbJudgeScore[];
+}
+
 export async function listSchedules(): Promise<DbSchedule[]> {
   const db = getDrizzleDb();
   return db.select().from(schedules) as any;
 }
-
-// ── Providers (custom) ────────────────────────────────────────────────────
 
 // ── Models (for model-resolver) ───────────────────────────────────────────
 
@@ -655,7 +713,7 @@ export async function getModelDetail(modelId: string): Promise<any[]> {
     tier_size: pricing.tier_size,
   })
     .from(models)
-    .leftJoin(pricing, eq(pricing.model_id, models.id))
+    .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
     .where(eq(models.id, modelId)) as any;
 }
 

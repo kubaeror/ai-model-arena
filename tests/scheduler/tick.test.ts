@@ -6,25 +6,16 @@ import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
 import { insertSchedule, listSchedules } from '../../src/db/query.js';
 import { tickScheduler } from '../../src/scheduler/tick.js';
-import { getScheduleState } from '../../src/scheduler/manager.js';
-import { fetchSync } from '../../src/catalog/sync.js';
-
-const MODELS_DEV = {
-  openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
-    'gpt-4o': {
-      id: 'gpt-4o', name: 'GPT-4o',
-      attachment: true, reasoning: false, temperature: true, tool_call: true,
-      cost: { input: 2.5, output: 10 },
-      limit: { context: 128000, output: 16384 },
-    },
-  } },
-};
+import { getScheduleState, loadSchedulesConfig, syncSchedulesToDb, resetSchedulesCache } from '../../src/scheduler/manager.js';
+import type { RunStartOptions } from '../../src/orchestrator/run-lifecycle.js';
+import { dump } from 'js-yaml';
 
 function freshDb(): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-sched-'));
   // startRun resolves the DB via dbPath() — point it at the temp DB.
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
   process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.AI_ARENA_ROOT = tmp;
   initDb(process.env.ARENA_DB_PATH);
   return tmp;
 }
@@ -45,7 +36,8 @@ test('tickScheduler marks a failed startRun as failure and backs off 1h', async 
     // Force due: next_run in the past.
     getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-bad');
 
-    const result = await tickScheduler();
+    const startRunFn = async () => { throw new Error('boom'); };
+    const result = await tickScheduler({ startRunFn });
     assert.deepEqual(result.ticked, []);
     assert.deepEqual(result.failures, ['s-bad']);
 
@@ -60,6 +52,7 @@ test('tickScheduler marks a failed startRun as failure and backs off 1h', async 
     assert.equal(state?.totalFailures, 1);
     assert.equal(state?.consecutiveFailures, 1);
   } finally {
+    delete process.env.AI_ARENA_ROOT;
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -73,21 +66,10 @@ test('tickScheduler ticks a due schedule and advances next_run', async () => {
       models: ['GPT-4o'], cron: '* * * * *', enabled: true,
       createdAt: new Date().toISOString(),
     });
-    // Seed the catalog so startRun resolves the model.
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = (async () => ({
-      status: 200, ok: true,
-      json: async () => MODELS_DEV,
-      text: async () => JSON.stringify(MODELS_DEV),
-    } as unknown as Response)) as typeof fetch;
-    try {
-      await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
-    } finally {
-      globalThis.fetch = origFetch;
-    }
     getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-ok');
 
-    const result = await tickScheduler();
+    const startRunFn = async () => ({ runId: 'x', scenario: 'express-rest', ts: 't', startedAt: 'now', models: [] });
+    const result = await tickScheduler({ startRunFn });
     assert.deepEqual(result.ticked, ['s-ok']);
     assert.deepEqual(result.failures, []);
 
@@ -99,6 +81,170 @@ test('tickScheduler ticks a due schedule and advances next_run', async () => {
     assert.equal(state?.consecutiveFailures, 0);
     assert.equal(state?.totalRuns, 1);
   } finally {
+    delete process.env.AI_ARENA_ROOT;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('tickScheduler passes schedule options (timeoutMs, forceBudget) into startRun', async () => {
+  const tmp = freshDb();
+  const configPath = path.join(tmp, 'schedules.yaml');
+  try {
+    fs.writeFileSync(configPath, dump({
+      schedules: [
+        {
+          id: 's-opt', scenario: 'express-rest', models: ['gpt-4o'],
+          cron: '* * * * *', enabled: true,
+          options: { forceBudget: true, timeoutMs: 12345 },
+        },
+        {
+          id: 's-false', scenario: 'express-rest', models: ['gpt-4o'],
+          cron: '* * * * *', enabled: true,
+          options: { forceBudget: false, timeoutMs: 54321 },
+        },
+        {
+          id: 's-plain', scenario: 'express-rest', models: ['gpt-4o'],
+          cron: '* * * * *', enabled: true,
+        },
+      ],
+    }));
+    loadSchedulesConfig(configPath);
+    await syncSchedulesToDb(configPath);
+    for (const id of ['s-opt', 's-false', 's-plain']) {
+      getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), id);
+    }
+
+    const calls: Array<Record<string, unknown>> = [];
+    const startRunFn = async (o: RunStartOptions) => { calls.push({ ...o }); return { runId: 'x', scenario: o.scenario, ts: 't', startedAt: 'now', models: [] }; };
+
+    const result = await tickScheduler({ startRunFn });
+    assert.deepEqual(result.ticked.sort(), ['s-false', 's-opt', 's-plain']);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls.find((c) => c.timeoutMs === 12345), {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+      forceBudget: true, timeoutMs: 12345,
+    });
+    assert.deepEqual(calls.find((c) => c.timeoutMs === 54321), {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+      forceBudget: false, timeoutMs: 54321,
+    });
+    assert.deepEqual(calls.find((c) => c.timeoutMs === undefined), {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+    });
+  } finally {
+    resetSchedulesCache();
+    delete process.env.AI_ARENA_ROOT;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('tickScheduler backs off failures by SCHEDULER_FAILURE_BACKOFF_MS', async () => {
+  const tmp = freshDb();
+  process.env.SCHEDULER_FAILURE_BACKOFF_MS = '5000';
+  try {
+    await insertSchedule({
+      id: 's-bad2', scenario: 'express-rest', models: ['gpt-4o'],
+      cron: '* * * * *', enabled: true, createdAt: new Date().toISOString(),
+    });
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-bad2');
+
+    const startRunFn = async () => { throw new Error('boom'); };
+
+    const result = await tickScheduler({ startRunFn });
+    assert.deepEqual(result.ticked, []);
+    assert.deepEqual(result.failures, ['s-bad2']);
+
+    const after = (await listSchedules()).find((s) => s.id === 's-bad2')!;
+    const nextMs = new Date(after.next_run!).getTime();
+    assert.ok(nextMs > Date.now() + 2000, `expected env-derived backoff, got ${after.next_run}`);
+    assert.ok(nextMs < Date.now() + 60000, `expected env-derived backoff, got ${after.next_run}`);
+  } finally {
+    delete process.env.SCHEDULER_FAILURE_BACKOFF_MS;
+    delete process.env.AI_ARENA_ROOT;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('empty SCHEDULER_FAILURE_BACKOFF_MS falls back to the 1h default', async () => {
+  const tmp = freshDb();
+  process.env.SCHEDULER_FAILURE_BACKOFF_MS = '';
+  try {
+    await insertSchedule({
+      id: 's-empty', scenario: 'express-rest', models: ['gpt-4o'],
+      cron: '* * * * *', enabled: true, createdAt: new Date().toISOString(),
+    });
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-empty');
+
+    const startRunFn = async () => { throw new Error('boom'); };
+
+    const result = await tickScheduler({ startRunFn });
+    assert.deepEqual(result.ticked, []);
+    assert.deepEqual(result.failures, ['s-empty']);
+
+    const after = (await listSchedules()).find((s) => s.id === 's-empty')!;
+    const nextMs = new Date(after.next_run!).getTime();
+    assert.ok(nextMs > Date.now() + 30 * 60 * 1000, `expected ~1h default backoff for empty env, got ${after.next_run}`);
+  } finally {
+    delete process.env.SCHEDULER_FAILURE_BACKOFF_MS;
+    delete process.env.AI_ARENA_ROOT;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('scheduler-tick entrypoint loads schedules config before ticking (production path)', async () => {
+  const tmp = freshDb();
+  const configPath = path.join(tmp, 'schedules.yaml');
+  try {
+    fs.writeFileSync(configPath, dump({
+      schedules: [
+        {
+          id: 's-entry', scenario: 'express-rest', models: ['gpt-4o'],
+          cron: '* * * * *', enabled: true,
+          options: { forceBudget: false, timeoutMs: 9876 },
+        },
+        {
+          id: 's-opt', scenario: 'express-rest', models: ['gpt-4o'],
+          cron: '* * * * *', enabled: true,
+          options: { forceBudget: true, timeoutMs: 12345 },
+        },
+      ],
+    }));
+    loadSchedulesConfig(configPath);
+    await syncSchedulesToDb(configPath);
+    for (const id of ['s-entry', 's-opt']) {
+      getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), id);
+    }
+    // Drop the warm cache: the entrypoint must (re)load the config itself,
+    // exactly as the k8s CronJob process does on every tick.
+    resetSchedulesCache();
+
+    const calls: Array<Record<string, unknown>> = [];
+    const startRunFn = async (o: RunStartOptions) => { calls.push({ ...o }); return { runId: 'x', scenario: o.scenario, ts: 't', startedAt: 'now', models: [] }; };
+
+    process.env.SCHEDULES_PATH = configPath;
+    try {
+      const { runSchedulerTick } = await import('../../src/scripts/scheduler-tick.js');
+      await runSchedulerTick({ startRunFn });
+    } finally {
+      delete process.env.SCHEDULES_PATH;
+    }
+
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls.find((c) => c.timeoutMs === 9876), {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+      forceBudget: false, timeoutMs: 9876,
+    });
+    assert.deepEqual(calls.find((c) => c.timeoutMs === 12345), {
+      scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
+      forceBudget: true, timeoutMs: 12345,
+    });
+  } finally {
+    resetSchedulesCache();
+    delete process.env.AI_ARENA_ROOT;
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
   }

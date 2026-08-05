@@ -69,6 +69,33 @@ test('recordModelCall → getModelCall round-trips', async () => {
   closeDb();
 });
 
+test('recordModelCall persists ttftMs when provided', async () => {
+  initDb(':memory:');
+  const store = createSessionStore();
+  const s = await store.createSession({ model: 'gpt-4o' });
+  await store.recordModelCall({
+    sessionId: s.id, turn: 1, provider: 'openai', model: 'gpt-4o',
+    requestHash: 'abc123', responseText: 'response', usage: null,
+    latencyMs: 250, ttftMs: 200,
+  });
+
+  const mc = await store.getModelCall(s.id, 1);
+  assert.ok(mc);
+  assert.equal(mc!.ttftMs, 200);
+  closeDb();
+});
+
+test('createSession honors an explicit id (run-index session key)', async () => {
+  initDb(':memory:');
+  const store = createSessionStore();
+  const s = await store.createSession({ id: 'run1-gpt-4o', model: 'gpt-4o' });
+  assert.equal(s.id, 'run1-gpt-4o');
+  const loaded = await store.loadSession('run1-gpt-4o');
+  assert.ok(loaded);
+  assert.equal(loaded!.model, 'gpt-4o');
+  closeDb();
+});
+
 test('getModelCall returns null for unknown turn', async () => {
   initDb(':memory:');
   const store = createSessionStore();

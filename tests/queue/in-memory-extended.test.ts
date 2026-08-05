@@ -69,3 +69,28 @@ test('InMemoryQueue: dequeue returns null on timeout', async () => {
   assert.equal(result, null);
   await q.close?.();
 });
+
+test('deadLetterRetry re-enqueues a dead-lettered task with reset attempts', async () => {
+  const q = new InMemoryQueue();
+  const t = mkTask('dlq-retry-1');
+  await q.enqueue(t);
+  const got = await q.dequeue(1);
+  assert.equal(got?.taskId, t.taskId);
+  for (let i = 0; i < 5; i++) {
+    await q.dequeue(1); // nack only acts on in-flight tasks, so re-dequeue between nacks
+    await q.nack(t.taskId, 'boom'); // exhausts attempts → DLQ
+  }
+  assert.equal(await q.deadLetterSize(), 1);
+  const ok = await q.deadLetterRetry(t.taskId);
+  assert.equal(ok, true);
+  assert.equal(await q.deadLetterSize(), 0);
+  const again = await q.dequeue(1);
+  assert.equal(again?.taskId, t.taskId);
+  await q.nack(t.taskId, 'once-more'); // attempts were reset: still under 5
+  assert.equal(await q.size(), 1);
+});
+
+test('deadLetterRetry returns false for unknown task', async () => {
+  const q = new InMemoryQueue();
+  assert.equal(await q.deadLetterRetry('nope'), false);
+});

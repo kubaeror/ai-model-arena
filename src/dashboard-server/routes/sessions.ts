@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import {
   listSessionsWithCounts, getSessionWithCounts, listMessagesBySession,
-  listModelCallsForSession, deleteSessionCascade,
+  listModelCallsForSession,
 } from '../../db/query.js';
+import { createSessionStore } from '../../session/store.js';
 import { requireRole, auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 
@@ -62,7 +63,7 @@ export function createSessionsRouter(): Router {
     }
 
     const sessionId = String(req.params.id);
-    await deleteSessionCascade(sessionId);
+    await createSessionStore().deleteSession(sessionId);
 
     auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'session.delete', { type: 'session', id: sessionId });
     res.json({ ok: true });

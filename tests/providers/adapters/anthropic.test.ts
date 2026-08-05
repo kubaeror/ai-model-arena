@@ -87,3 +87,76 @@ test('AnthropicAdapter.supportsReasoning returns true', () => {
   assert.equal(adapter.supportsReasoning(), true);
   assert.equal(adapter.supportsPromptCaching(), true);
 });
+
+test('AnthropicAdapter.sendMessage maps system/assistant-tool/tool messages and options into the request body', async () => {
+  const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-5-sonnet-20241022', { apiKey: 'sk-ant' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([
+      { role: 'system', content: 'You are a test agent.' },
+      { role: 'user', content: 'read a.ts' },
+      { role: 'assistant', content: 'Reading...', toolCalls: [{ id: 'tc1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+      { role: 'tool', toolCallId: 'tc1', content: 'contents of a.ts' },
+    ], [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object' } }], {
+      temperature: 0.3, maxTokens: 500, reasoning: { type: 'budget_tokens', value: 2048 },
+    });
+
+    assert.equal(capturedBody.model, 'claude-3-5-sonnet-20241022');
+    assert.equal(capturedBody.max_tokens, 500);
+    assert.equal(capturedBody.temperature, 0.3);
+    assert.equal(capturedBody.system, 'You are a test agent.', 'system hoisted out of messages');
+    assert.deepEqual(capturedBody.thinking, { type: 'enabled', budget_tokens: 2048 });
+    const messages = capturedBody.messages as Array<Record<string, unknown>>;
+    assert.equal(messages.length, 3, 'system excluded, tool role becomes user');
+    const parts0 = messages[0]!.content as Array<Record<string, unknown>>;
+    assert.deepEqual(parts0[0], { type: 'text', text: 'read a.ts', cache_control: { type: 'ephemeral' } }, 'cache breakpoint on stable prefix');
+    const parts1 = messages[1]!.content as Array<Record<string, unknown>>;
+    assert.deepEqual(parts1[0], { type: 'text', text: 'Reading...' });
+    assert.deepEqual(parts1[1], { type: 'tool_use', id: 'tc1', name: 'read_file', input: { path: 'a.ts' } });
+    assert.equal(messages[2]!.role, 'user');
+    assert.deepEqual(messages[2]!.content, [{ type: 'tool_result', tool_use_id: 'tc1', content: 'contents of a.ts' }]);
+    assert.deepEqual(capturedBody.tools, [{ name: 'read_file', description: 'Read a file', input_schema: { type: 'object' } }]);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('AnthropicAdapter defaults thinking budget when reasoning value is not a number', async () => {
+  const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-7-sonnet-20250219', { apiKey: 'sk-ant' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], { reasoning: { type: 'budget_tokens' } });
+    assert.deepEqual(capturedBody.thinking, { type: 'enabled', budget_tokens: 4096 });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('AnthropicAdapter surfaces HttpError on non-OK responses', async () => {
+  const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-5-sonnet-20241022', { apiKey: 'sk-ant' });
+  let calls = 0;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    calls++;
+    return mockResponse({ error: 'overloaded' }, 500);
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      () => adapter.sendMessage([{ role: 'user', content: 'hi' }], []),
+      (err: Error) => err.name === 'HttpError' && err.message.includes('500'),
+    );
+    assert.ok(calls >= 3, `expected retries, got ${calls} calls`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

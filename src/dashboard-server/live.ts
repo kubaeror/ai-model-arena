@@ -246,8 +246,6 @@ export class LiveHub {
           model: m.model,
           scenario: r.scenario,
           status: m.status,
-          pid: null,
-          exitCode: null,
           online: m.status === 'running',
         }))),
       });

@@ -4,25 +4,46 @@ import type { Task, TaskQueue } from './types.js';
 import type { RedisQueueConfig } from './redis-config.js';
 import { parseTask, safeParseTask } from './task-schema.js';
 import { streamKey, dlqStreamKey } from './router.js';
-import { queueDepth } from '../observability/metrics.js';
+import { queueDepth, dlqDepth } from '../observability/metrics.js';
+
+/**
+ * Shared ioredis clients keyed by URL. The dashboard creates one queue
+ * instance per provider on every request; without sharing, each would open
+ * its own connection to the same Redis.
+ */
+const sharedClients = new Map<string, Redis>();
 
 export class RedisStreamQueue implements TaskQueue {
   private redis: Redis;
   private config: RedisQueueConfig;
+  private ownsClient: boolean;
   private reclaimTimer: ReturnType<typeof setInterval> | null = null;
+  private reclaimStarted = false;
 
-  constructor(config: RedisQueueConfig) {
+  constructor(config: RedisQueueConfig, client?: Redis) {
     this.config = config;
-    this.redis = new Redis(config.url, {
-      maxRetriesPerRequest: 3,
-      retryStrategy(times: number) {
-        return Math.min(times * 200, 3_000);
-      },
-      connectTimeout: 10_000,
-      lazyConnect: false,
-      protocol: 2,
-    });
-    this.startReclaimLoop();
+    if (client) {
+      this.redis = client;
+      this.ownsClient = false;
+    } else {
+      const existing = sharedClients.get(config.url);
+      if (existing) {
+        this.redis = existing;
+        this.ownsClient = false;
+      } else {
+        this.redis = new Redis(config.url, {
+          maxRetriesPerRequest: 3,
+          retryStrategy(times: number) {
+            return Math.min(times * 200, 3_000);
+          },
+          connectTimeout: 10_000,
+          lazyConnect: false,
+          protocol: 2,
+        });
+        sharedClients.set(config.url, this.redis);
+        this.ownsClient = true;
+      }
+    }
   }
 
   private async setQueueDepthGauge(): Promise<void> {
@@ -34,7 +55,22 @@ export class RedisStreamQueue implements TaskQueue {
     } catch { /* best-effort — never fail queue ops */ }
   }
 
+  private async setDlqDepthGauge(): Promise<void> {
+    const provider = this.config.providerFilter;
+    if (!provider) return;
+    const dlq = dlqStreamKey(this.config.streamPrefix, provider);
+    try {
+      dlqDepth.set({ provider }, await this.redis.xlen(dlq));
+    } catch { /* best-effort — never fail queue ops */ }
+  }
+
+  get maxAttempts(): number {
+    return this.config.maxAttempts;
+  }
+
   private startReclaimLoop(): void {
+    if (this.reclaimStarted) return;
+    this.reclaimStarted = true;
     this.reclaimTimer = setInterval(() => {
       void this.reclaimOrphaned().catch(() => { /* silent */ });
     }, this.config.reclaimIntervalMs);
@@ -93,6 +129,7 @@ export class RedisStreamQueue implements TaskQueue {
             const dlq = dlqStreamKey(this.config.streamPrefix, provider);
             await this.redis.xadd(dlq, '*', 'task', taskData.task ?? '', 'reason', 'XAUTOCLAIM: invalid task payload');
             await this.redis.xdel(stream, id);
+            void this.setDlqDepthGauge();
             continue;
           }
 
@@ -104,6 +141,7 @@ export class RedisStreamQueue implements TaskQueue {
             ];
             await this.redis.xadd(dlq, '*', ...dlqFields);
             await this.redis.xdel(stream, id);
+            void this.setDlqDepthGauge();
           } else {
             task.attempts = (task.attempts ?? 0) + 1;
             const newFields: (string | number)[] = ['task', JSON.stringify(task)];
@@ -158,6 +196,10 @@ export class RedisStreamQueue implements TaskQueue {
   }
 
   async dequeue(timeoutMs = 30000): Promise<Task | null> {
+    // Reclaim exists to recover tasks from crashed consumers — only a real
+    // consumer that dequeues should run it. Admin-op instances (dashboard
+    // queue reads) must never claim/requeue runner tasks.
+    this.startReclaimLoop();
     const provider = this.config.providerFilter;
     if (!provider) throw new Error('Redis dequeue requires providerFilter (per-provider runner)');
 
@@ -282,6 +324,7 @@ export class RedisStreamQueue implements TaskQueue {
         await this.redis.xadd(dlq, '*', ...dlqFields);
         await this.redis.xack(stream, group, taskId);
         await this.redis.xdel(stream, taskId);
+        void this.setDlqDepthGauge();
       } else {
         const newFields: (string | number)[] = ['task', JSON.stringify(task)];
         if (task._traceparent) { newFields.push('traceparent'); newFields.push(task._traceparent); }
@@ -290,6 +333,7 @@ export class RedisStreamQueue implements TaskQueue {
         await this.redis.xdel(stream, taskId);
       }
     }
+    void this.setDlqDepthGauge();
     void this.setQueueDepthGauge();
   }
 
@@ -298,6 +342,18 @@ export class RedisStreamQueue implements TaskQueue {
     if (!provider) return 0;
     const stream = streamKey(this.config.streamPrefix, provider);
     try { return await this.redis.xlen(stream); } catch { return 0; }
+  }
+
+  async pendingCount(): Promise<number> {
+    const provider = this.config.providerFilter;
+    if (!provider) return 0;
+    const stream = streamKey(this.config.streamPrefix, provider);
+    const len = await this.redis.xlen(stream).catch(() => 0);
+    const xpending = (await this.redis.xpending(stream, this.config.consumerGroup).catch(() => null)) as
+      | [number, string | null, string | null, Array<[string, number]>]
+      | null;
+    if (xpending === null) return len; // no consumer group yet — nothing delivered
+    return Math.max(0, len - (xpending[0] ?? 0));
   }
 
   async deadLetterSize(): Promise<number> {
@@ -327,17 +383,34 @@ export class RedisStreamQueue implements TaskQueue {
     }
   }
 
-  async deadLetterRetry(taskId: string): Promise<void> {
+  async deadLetterRetry(taskId: string): Promise<boolean> {
     const provider = this.config.providerFilter;
-    if (!provider) return;
+    if (!provider) return false;
     const dlqStream = dlqStreamKey(this.config.streamPrefix, provider);
     const mainStream = streamKey(this.config.streamPrefix, provider);
 
-    // Get the task from the DLQ
-    const msgs = await this.redis.xrange(dlqStream, taskId, taskId);
-    if (msgs.length === 0) return;
+    // DLQ entries get opaque auto-ids from XADD '*', so match the embedded
+    // taskId field instead of treating the task id as a stream entry id.
+    // Cap the scan so a huge DLQ can't balloon memory in one retry call.
+    const msgs = await this.redis.xrange(dlqStream, '-', '+', 'COUNT', 1000);
+    let targetId: string | null = null;
+    let fields: string[] = [];
+    for (const [id, f] of msgs) {
+      try {
+        const data: Record<string, string> = {};
+        for (let i = 0; i < f.length; i += 2) data[f[i]!] = f[i + 1]!;
+        const task = safeParseTask(JSON.parse(data.task ?? '{}'));
+        if (task && task.taskId === taskId) {
+          targetId = id;
+          fields = f;
+          break;
+        }
+      } catch {
+        // malformed entry — skip and keep scanning
+      }
+    }
+    if (targetId === null) return false;
 
-    const [, fields] = msgs[0]!;
     const data: Record<string, string> = {};
     for (let i = 0; i < fields.length; i += 2) data[fields[i]!] = fields[i + 1]!;
     const task = parseTask(JSON.parse(data.task ?? '{}'));
@@ -348,9 +421,11 @@ export class RedisStreamQueue implements TaskQueue {
     if (task._traceparent) newFields.push('traceparent', task._traceparent);
     await this.redis.xadd(mainStream, '*', ...newFields);
 
-    // Delete from DLQ
-    await this.redis.xdel(dlqStream, taskId);
+    // Delete the matched DLQ entry (by its stream entry id)
+    await this.redis.xdel(dlqStream, targetId);
+    void this.setDlqDepthGauge();
     void this.setQueueDepthGauge();
+    return true;
   }
 
   async close(): Promise<void> {
@@ -358,6 +433,8 @@ export class RedisStreamQueue implements TaskQueue {
       clearInterval(this.reclaimTimer);
       this.reclaimTimer = null;
     }
+    if (!this.ownsClient) return; // shared client lives on for other instances
+    sharedClients.delete(this.config.url);
     try {
       await Promise.race([
         this.redis.quit(),

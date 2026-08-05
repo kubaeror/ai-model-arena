@@ -74,9 +74,11 @@ export async function buildRunHistory(
   excludeRunId?: string,
 ): Promise<RunHistory> {
   const idx = await loadRunIndex();
-  // Newest first, then take the window.
+  // Newest first, then take the window. Baselines are scoped to the given
+  // scenario so runs from other scenarios can't consume the window.
   const runs = idx.runs
     .filter((r) => r.runId !== excludeRunId)
+    .filter((r) => r.scenario === scenario)
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
 
   const toolLatency = new Map<string, number[]>();
@@ -114,7 +116,6 @@ export async function buildRunHistory(
     const errorCount = meta ? meta.errorCount : (Array.isArray(result.errors) ? (result.errors as unknown[]).length : 0);
     const frac = totalToolCalls > 0 ? errorCount / totalToolCalls : (errorCount > 0 ? 1 : 0);
     pushCapped(toolErrorRates, `${model}|${run.scenario}`, frac, slidingWindow);
-    void scenario;
   }
 
   return { toolLatency, tokenTotals, costs, toolErrorRates, durations };

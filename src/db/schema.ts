@@ -161,6 +161,7 @@ export const anomalies = sqliteTable('anomalies', {
   index('idx_anomalies_type').on(table.type),
   index('idx_anomalies_resolved').on(table.resolved),
   index('idx_anomalies_detected').on(table.detected_at),
+  uniqueIndex('uq_anomalies_run_model_type').on(table.run_id, table.model, table.type),
 ]);
 
 export const webhooks = sqliteTable('webhooks', {
@@ -202,7 +203,6 @@ export const cost_ledger = sqliteTable('cost_ledger', {
 export const run_models = sqliteTable('run_models', {
   run_id: text('run_id').notNull().references(() => runs.run_id),
   model: text('model').notNull(),
-  proc_name: text('proc_name'),
   output_dir: text('output_dir'),
   sandbox_dir: text('sandbox_dir'),
   result_path: text('result_path'),
@@ -269,6 +269,7 @@ export const model_calls = sqliteTable('model_calls', {
   response_text: text('response_text'),
   usage: text('usage'),
   latency_ms: integer('latency_ms'),
+  ttft_ms: integer('ttft_ms'),
   created_at: text('created_at').notNull(),
 }, (table) => [
   uniqueIndex('uq_model_calls_session_turn').on(table.session_id, table.turn),
@@ -356,6 +357,19 @@ export const schedules = sqliteTable('schedules', {
   next_run: text('next_run'),
   created_at: text('created_at').notNull(),
 });
+
+export const judge_scores = sqliteTable('judge_scores', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  run_id: text('run_id').notNull(),
+  model: text('model').notNull(),
+  judge_model: text('judge_model').notNull(),
+  average_score: real('average_score').notNull(),
+  summary: text('summary').notNull(),
+  scores_json: text('scores_json').notNull(),
+  judged_at: text('judged_at').notNull(),
+}, (table) => [
+  uniqueIndex('uq_judge_scores_run_model').on(table.run_id, table.model),
+]);
 
 // ── Legacy type exports (kept for existing consumers of these interfaces) ──
 
@@ -483,3 +497,4 @@ export type DbPromptVersion = InferSelectModel<typeof prompt_versions>;
 export type DbOutputMapping = InferSelectModel<typeof output_mappings>;
 export type DbSchedule = InferSelectModel<typeof schedules>;
 export type DbToolCallStat = InferSelectModel<typeof tool_call_stats>;
+export type DbJudgeScore = InferSelectModel<typeof judge_scores>;

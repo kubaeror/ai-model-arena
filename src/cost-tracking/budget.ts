@@ -3,6 +3,7 @@ import path from 'node:path';
 import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { BudgetConfigSchema, type BudgetConfig, type BudgetState, type BudgetCheckResult } from './types.js';
+import { budgetPercent } from '../observability/metrics.js';
 
 let budgetConfig: BudgetConfig | null = null;
 let budgetState: BudgetState | null = null;
@@ -16,6 +17,7 @@ function getEmptyState(): BudgetState {
   return {
     global: { daily: {}, monthly: {} },
     models: {},
+    reservations: {},
     lastReset: new Date().toISOString(),
   };
 }
@@ -54,10 +56,12 @@ function loadBudgetState(config: BudgetConfig, rootDir: string, logger?: Logger)
   try {
     const content = fs.readFileSync(statePath, 'utf8');
     budgetState = JSON.parse(content) as BudgetState;
+    hydrateReservations(budgetState);
     return budgetState;
   } catch (err) {
     logger?.warn(`Failed to parse budget state, resetting`, { path: statePath });
     budgetState = getEmptyState();
+    hydrateReservations(budgetState);
     return budgetState;
   }
 }
@@ -102,6 +106,24 @@ export function addSpend(modelName: string, usd: number, rootDir: string, logger
 }
 
 let pendingReservations = new Map<string, number>();
+
+/**
+ * Rebuild the in-memory reservation map from the persisted state file so a
+ * fresh BudgetManager instance over the same state file still counts
+ * reservations made by a previous instance. Stale reservations (different
+ * day) are dropped.
+ */
+function hydrateReservations(state: BudgetState): void {
+  pendingReservations.clear();
+  const today = DAY_KEY();
+  for (const [modelName, entries] of Object.entries(state.reservations ?? {})) {
+    let total = 0;
+    for (const entry of entries) {
+      if (entry.dailyKey === today) total += entry.amount;
+    }
+    if (total > 0) pendingReservations.set(`res:${modelName}:d`, total);
+  }
+}
 
 /**
  * Reserve an estimated cost before dispatching a job.
@@ -153,6 +175,10 @@ export function reserveBudget(
 
   // Reserve the estimated cost
   pendingReservations.set(reservationKey, totalReserved + estimatedCostUsd);
+  if (!state.reservations) state.reservations = {};
+  if (!state.reservations[modelName]) state.reservations[modelName] = [];
+  state.reservations[modelName].push({ amount: estimatedCostUsd, dailyKey: DAY_KEY() });
+  saveBudgetState(rootDir, logger);
   logger?.debug('Budget reserved', {
     model: modelName,
     estimatedCost: estimatedCostUsd,
@@ -182,6 +208,36 @@ export function releaseReservation(
     pendingReservations.set(reservationKey, released);
   } else {
     pendingReservations.delete(reservationKey);
+  }
+
+  if (budgetConfig) {
+    const state = loadBudgetState(budgetConfig, rootDir, logger);
+    const entries = state.reservations?.[modelName];
+    if (entries && entries.length > 0) {
+      const today = DAY_KEY();
+      // Match the persisted entry by amount so out-of-order releases of
+      // different amounts remove the right entry. Removing the FIRST today
+      // entry would untether the file from the in-memory total when releases
+      // arrive out of order (e.g. reserve 2 then 5, release the 5 first).
+      const idx = entries.findIndex((entry) => entry.dailyKey === today && entry.amount === estimatedCostUsd);
+      if (idx >= 0) {
+        entries.splice(idx, 1);
+        saveBudgetState(rootDir, logger);
+      } else if (entries.some((entry) => entry.dailyKey === today)) {
+        // A today entry exists but none matches the released amount. Safest
+        // option: leave persisted entries untouched — deleting the wrong one
+        // corrupts the persisted total, and reserve/release amounts are
+        // expected to match. The in-memory decrement above still applies.
+        logger?.warn('No persisted reservation entry matches released amount; leaving persisted reservations untouched', {
+          model: modelName,
+          estimatedCost: estimatedCostUsd,
+          today,
+          persistedEntries: entries.length,
+        });
+      }
+      // No today-matching entry at all: the reservation was never persisted
+      // (in-memory only) — nothing to remove, skip persistence entirely.
+    }
   }
 
   if (actualCostUsd > 0) {
@@ -248,7 +304,9 @@ export function checkBudget(modelName: string, rootDir: string, force: boolean =
   const effectiveLimit = limitDaily ?? limitMonthly ?? null;
   const effectiveSpent = limitDaily !== null && limitDaily !== undefined ? spentDaily : spentMonthly;
   const effectivePercent = limitDaily !== null && limitDaily !== undefined ? percentDaily : percentMonthly;
-  
+
+  budgetPercent.set({ model: modelName }, effectivePercent);
+
   if (force) {
     return { allowed: true, spentUsd: effectiveSpent, limitUsd: effectiveLimit, percentUsed: effectivePercent };
   }
@@ -316,4 +374,5 @@ export function resetBudgetCache(): void {
   budgetConfig = null;
   budgetState = null;
   spendQueue = Promise.resolve();
+  pendingReservations.clear();
 }

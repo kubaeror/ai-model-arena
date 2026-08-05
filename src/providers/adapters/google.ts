@@ -21,13 +21,23 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
+    this.providerLabel = descriptor.id;
+    // Fail fast on unconfigured placeholder URLs (e.g. google-vertex's
+    // https://{location}-aiplatform.googleapis.com) instead of POSTing to a
+    // literal '{location}' hostname and failing with a confusing DNS error.
+    if (/\{/.test(this.baseUrl ?? '')) {
+      throw new Error(
+        `Provider "${descriptor.id}" has an unconfigured baseUrl "${this.baseUrl}". ` +
+        `Set a concrete baseUrl in the provider settings (replace {location} placeholders).`,
+      );
+    }
   }
 
   supportsReasoning(): boolean { return true; }
   supportsPromptCaching(): boolean { return true; }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const body = this.buildBody(messages, tools, opts);
       // Key goes in the x-goog-api-key header, not the URL: query-string keys
       // leak into proxy/access logs. Model id is URL-encoded so Vertex-style
@@ -40,7 +50,7 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
       }
       const json = (await res.json()) as GeminiResponse;
       return this.parseResponse(json);
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
@@ -68,6 +78,15 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
     if (opts?.maxTokens !== undefined) {
       const gc = (body.generationConfig ?? {}) as Record<string, unknown>;
       gc.maxOutputTokens = opts.maxTokens;
+      body.generationConfig = gc;
+    }
+    if (opts?.reasoning && (opts.reasoning.type === 'budget_tokens' || opts.reasoning.type === 'toggle')) {
+      const gc = (body.generationConfig ?? {}) as Record<string, unknown>;
+      const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
+      if (opts.reasoning.type === 'budget_tokens') {
+        thinkingConfig.thinkingBudget = typeof opts.reasoning.value === 'number' ? opts.reasoning.value : 4096;
+      }
+      gc.thinkingConfig = thinkingConfig;
       body.generationConfig = gc;
     }
     return body;

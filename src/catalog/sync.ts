@@ -1,6 +1,8 @@
 import { getDrizzleDb } from '../db/index.js';
+import { isStale } from './cache.js';
 import { ModelsDevResponseSchema, type ModelsDevResponse } from './types.js';
 import { normalizeModelId } from './match.js';
+import { resetPricingCache } from '../cost-tracking/pricing.js';
 import {
   providers, models, model_providers, pricing,
   pricing_snapshots, catalog_cache_state,
@@ -10,6 +12,7 @@ export interface SyncResult {
   source: string;
   ok: boolean;
   count: number;
+  skipped?: boolean;
   error?: string;
 }
 
@@ -28,17 +31,26 @@ const PROVIDER_ADAPTER_MAP: Record<string, 'openai-compat' | 'anthropic' | 'goog
 
 const DEFAULT_API_URL = 'https://models.dev/api.json';
 
+const DEFAULT_REFRESH_DAYS = 30;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 function getApiUrl(): string {
   return process.env.MODELS_DEV_API_URL ?? DEFAULT_API_URL;
 }
-function getRefreshIntervalMs(): number {
-  const days = Number(process.env.CATALOG_REFRESH_INTERVAL_DAYS ?? '30');
-  return (Number.isFinite(days) && days > 0 ? days : 30) * 24 * 60 * 60 * 1000;
+export function refreshIntervalDays(): number {
+  const days = Number(process.env.CATALOG_REFRESH_DAYS ?? String(DEFAULT_REFRESH_DAYS));
+  return Number.isFinite(days) && days > 0 ? days : DEFAULT_REFRESH_DAYS;
+}
+export function refreshIntervalMs(): number {
+  return refreshIntervalDays() * MS_PER_DAY;
 }
 
 export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl: getApiUrl() }): Promise<SyncResult> {
   void source;
   const db = getDrizzleDb();
+  if (!opts.force && !(await isStale('models.dev'))) {
+    return { source: 'models.dev', ok: true, count: 0, skipped: true };
+  }
   try {
     const res = await fetch(opts.apiUrl);
     if (!res.ok) {
@@ -49,6 +61,7 @@ export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl:
     const parsed = ModelsDevResponseSchema.parse(raw) as ModelsDevResponse;
     const count = await upsertCatalog(db, parsed);
     await updateCacheState(db, 'models.dev', 'ok', undefined, count);
+    if (count > 0) resetPricingCache();
     return { source: 'models.dev', ok: true, count };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -111,34 +124,53 @@ async function upsertCatalog(db: any, data: ModelsDevResponse): Promise<number> 
       });
 
       const cost = model.cost ?? {};
-      await db.insert(pricing).values({
-        model_id: canonicalId,
+      const contextOver200k = cost.context_over_200k;
+      await upsertPricingRow(db, {
+        model_id: canonicalId, tier_size: 0,
         input: cost.input ?? null, output: cost.output ?? null,
         cache_read: cost.cache_read ?? null, cache_write: cost.cache_write ?? null,
-        tier_size: 0,
-        over_200k_input: cost.context_over_200k?.input ?? null,
-        over_200k_output: cost.context_over_200k?.output ?? null,
-        over_200k_cache_read: cost.context_over_200k?.cache_read ?? null,
-        over_200k_cache_write: cost.context_over_200k?.cache_write ?? null,
+        over_200k_input: contextOver200k?.input ?? null,
+        over_200k_output: contextOver200k?.output ?? null,
+        over_200k_cache_read: contextOver200k?.cache_read ?? null,
+        over_200k_cache_write: contextOver200k?.cache_write ?? null,
         updated_at: now,
-      }).onConflictDoUpdate({
-        target: [pricing.model_id, pricing.tier_size],
-        set: {
-          input: cost.input ?? null, output: cost.output ?? null,
-          cache_read: cost.cache_read ?? null, cache_write: cost.cache_write ?? null,
-          over_200k_input: cost.context_over_200k?.input ?? null,
-          over_200k_output: cost.context_over_200k?.output ?? null,
-          over_200k_cache_read: cost.context_over_200k?.cache_read ?? null,
-          over_200k_cache_write: cost.context_over_200k?.cache_write ?? null,
-          updated_at: now,
-        },
       });
+      for (const tier of cost.tiers ?? []) {
+        await upsertPricingRow(db, {
+          model_id: canonicalId, tier_size: tier.tier.size,
+          input: tier.input, output: tier.output,
+          cache_read: tier.cache_read ?? null, cache_write: tier.cache_write ?? null,
+          over_200k_input: null, over_200k_output: null,
+          over_200k_cache_read: null, over_200k_cache_write: null,
+          updated_at: now,
+        });
+      }
       modelCount++;
     }
   }
 
   await capturePricingSnapshot(db, now);
   return modelCount;
+}
+
+async function upsertPricingRow(db: any, row: {
+  model_id: string; tier_size: number;
+  input: number | null; output: number | null;
+  cache_read: number | null; cache_write: number | null;
+  over_200k_input: number | null; over_200k_output: number | null;
+  over_200k_cache_read: number | null; over_200k_cache_write: number | null;
+  updated_at: string;
+}): Promise<void> {
+  await db.insert(pricing).values(row).onConflictDoUpdate({
+    target: [pricing.model_id, pricing.tier_size],
+    set: {
+      input: row.input, output: row.output,
+      cache_read: row.cache_read, cache_write: row.cache_write,
+      over_200k_input: row.over_200k_input, over_200k_output: row.over_200k_output,
+      over_200k_cache_read: row.over_200k_cache_read, over_200k_cache_write: row.over_200k_cache_write,
+      updated_at: row.updated_at,
+    },
+  });
 }
 
 async function capturePricingSnapshot(db: any, version: string): Promise<void> {
@@ -149,7 +181,7 @@ async function capturePricingSnapshot(db: any, version: string): Promise<void> {
       model_id: r.model_id,
       input: r.input, output: r.output,
       cache_read: r.cache_read, cache_write: r.cache_write,
-      tier_size: 0,
+      tier_size: r.tier_size,
       over_200k_input: r.over_200k_input, over_200k_output: r.over_200k_output,
       over_200k_cache_read: r.over_200k_cache_read, over_200k_cache_write: r.over_200k_cache_write,
       snapshot_at: version,
@@ -159,7 +191,7 @@ async function capturePricingSnapshot(db: any, version: string): Promise<void> {
 
 async function updateCacheState(db: any, source: string, status: string, error: string | undefined, count: number): Promise<void> {
   const now = new Date();
-  const next = new Date(now.getTime() + getRefreshIntervalMs()).toISOString();
+  const next = new Date(now.getTime() + refreshIntervalMs()).toISOString();
   await db.insert(catalog_cache_state).values({
     source, last_fetch: now.toISOString(), last_status: status,
     last_error: error ?? null, count, next_refresh: next,

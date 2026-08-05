@@ -43,6 +43,8 @@ export interface ModelResponse {
   toolCalls: ToolCall[];
   usage: TokenUsage;
   stopReason?: string;
+  /** Wall-clock latency of the request in ms (set by the adapters). */
+  durationMs?: number;
   /** Raw provider payload, kept for debugging/logging. */
   raw?: unknown;
 }

@@ -7,6 +7,9 @@ import { latencyStats, tokenStats, costStats, errorRateStats, readResult } from 
 import type { NewAnomaly, AnomalySeverity } from './db.js';
 import type { ToolCallEntry } from '../logger/conversation-parser.js';
 import { detectLoops } from '../logger/conversation-parser.js';
+import { createLogger } from '../logger/pino-logger.js';
+
+const logger = createLogger('ai-arena:anomaly');
 
 export type ToolCallRow = ToolCallEntry;
 
@@ -31,7 +34,7 @@ export function readJudgeScore(outputDir: string): number | null {
 
 // ── Latency ──────────────────────────────────────────────────────────────────
 
-function latencyDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
+export function latencyDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
   const cfg = config.latency;
   if (!cfg.enabled || !input.trace) return [];
   const out: NewAnomaly[] = [];
@@ -41,7 +44,10 @@ function latencyDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig
     const tool = String(span.attributes['gen_ai.tool.name'] ?? span.name);
     const key = span.type === 'execute_tool' ? tool : `chat:${input.model}`;
     const stats = latencyStats(history, input.model, key);
-    if (stats.count < config.minSampleSize || stats.std === 0) continue;
+    if (stats.count < config.minSampleSize || stats.std === 0) {
+      logger.warn('Latency detection disabled: insufficient baseline', { model: input.model, tool: key, sampleCount: stats.count, std: stats.std });
+      continue;
+    }
     const z = (span.durationMs - stats.mean) / stats.std;
     if (z >= cfg.zScoreThreshold) {
       out.push({
@@ -59,7 +65,7 @@ function latencyDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
 
-function loopDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): NewAnomaly[] {
+export function loopDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): NewAnomaly[] {
   const cfg = config.loop;
   if (!cfg.enabled) return [];
   const found = detectLoops(input.toolCalls, cfg.consecutiveRepeats);
@@ -78,12 +84,15 @@ function loopDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): 
 
 // ── Token spike ───────────────────────────────────────────────────────────────
 
-function tokenSpikeDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
+export function tokenSpikeDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
   const cfg = config.tokenSpike;
   if (!cfg.enabled || !input.result) return [];
   const total = (input.result.tokenUsage.prompt ?? 0) + (input.result.tokenUsage.completion ?? 0);
   const stats = tokenStats(history, input.model, input.scenario);
-  if (stats.count < config.minSampleSize) return [];
+  if (stats.count < config.minSampleSize) {
+    logger.warn('Token-spike detection disabled: insufficient baseline', { model: input.model, scenario: input.scenario, sampleCount: stats.count });
+    return [];
+  }
   const threshold = stats.mean * cfg.multiple;
   if (total > threshold) {
     return [{
@@ -100,12 +109,15 @@ function tokenSpikeDetector(input: RunAnalysisInput, config: AnomalyDetectionCon
 
 // ── Cost spike ────────────────────────────────────────────────────────────────
 
-function costSpikeDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
+export function costSpikeDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
   const cfg = config.costSpike;
   if (!cfg.enabled || !input.result || input.result.costUsd == null) return [];
   const cost = input.result.costUsd;
   const stats = costStats(history, input.model, input.scenario);
-  if (stats.count < config.minSampleSize || stats.mean === 0) return [];
+  if (stats.count < config.minSampleSize || stats.mean === 0) {
+    logger.warn('Cost-spike detection disabled: insufficient baseline', { model: input.model, scenario: input.scenario, sampleCount: stats.count, mean: stats.mean });
+    return [];
+  }
   const threshold = stats.mean * cfg.multiple;
   if (cost > threshold) {
     return [{
@@ -122,14 +134,17 @@ function costSpikeDetector(input: RunAnalysisInput, config: AnomalyDetectionConf
 
 // ── Error rate ────────────────────────────────────────────────────────────────
 
-function errorRateDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
+export function errorRateDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
   const cfg = config.errorRate;
   if (!cfg.enabled || !input.result) return [];
   const totalToolCalls = input.result.totalToolCalls;
   const errorCount = input.trace ? input.trace.errorCount : (input.result.errors?.length ?? 0);
   const frac = totalToolCalls > 0 ? errorCount / totalToolCalls : (errorCount > 0 ? 1 : 0);
   const stats = errorRateStats(history, input.model, input.scenario);
-  if (stats.count < config.minSampleSize || stats.std === 0) return [];
+  if (stats.count < config.minSampleSize || stats.std === 0) {
+    logger.warn('Error-rate detection disabled: insufficient baseline', { model: input.model, scenario: input.scenario, sampleCount: stats.count, std: stats.std });
+    return [];
+  }
   const z = (frac - stats.mean) / stats.std;
   if (z >= cfg.zScoreThreshold && frac > stats.mean) {
     return [{
@@ -146,7 +161,7 @@ function errorRateDetector(input: RunAnalysisInput, config: AnomalyDetectionConf
 
 // ── Silent failure (criteria mismatch) ────────────────────────────────────────
 
-function silentFailureDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): NewAnomaly[] {
+export function silentFailureDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): NewAnomaly[] {
   const cfg = config.silentFailure;
   if (!cfg.enabled || !input.result || input.judgeScore == null) return [];
   const success = input.result.success;
@@ -174,12 +189,12 @@ function silentFailureDetector(input: RunAnalysisInput, config: AnomalyDetection
 }
 
 export const ALL_DETECTORS: Detector[] = [
-  (i, c, h) => latencyDetector(i, c, h),
-  (i, c) => loopDetector(i, c),
-  (i, c, h) => tokenSpikeDetector(i, c, h),
-  (i, c, h) => costSpikeDetector(i, c, h),
-  (i, c, h) => errorRateDetector(i, c, h),
-  (i, c) => silentFailureDetector(i, c),
+  latencyDetector,
+  loopDetector,
+  tokenSpikeDetector,
+  costSpikeDetector,
+  errorRateDetector,
+  silentFailureDetector,
 ];
 
 export { readResult };

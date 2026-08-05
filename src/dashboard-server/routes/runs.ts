@@ -80,7 +80,7 @@ export function createRunsRouter(): Router {
         runId: spec.runId,
         scenario: spec.scenario,
         startedAt: spec.startedAt,
-        models: spec.models.map((m) => ({ model: m.model, procName: m.procName })),
+        models: spec.models.map((m) => ({ model: m.model })),
       });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
@@ -101,7 +101,7 @@ export function createRunsRouter(): Router {
     }
     const spec = {
       runId: rec.runId, scenario: rec.scenario, ts: '', startedAt: rec.startedAt,
-      models: rec.perModel.map((m) => ({ model: m.model, providerId: 'unknown', procName: m.procName, outputDir: m.outputDir, sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath, reportPath: m.reportPath, logFile: m.logFile })),
+      models: rec.perModel.map((m) => ({ model: m.model, providerId: 'unknown', outputDir: m.outputDir, sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath, reportPath: m.reportPath, logFile: m.logFile })),
     } satisfies RunSpec;
     let statuses: { model: string; status: string; online: boolean; exitCode: number | null }[] = [];
     try {

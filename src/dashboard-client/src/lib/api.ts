@@ -46,10 +46,11 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   return fetch(API_BASE + path, { ...init, headers });
 }
 
-/** Low-level HTTP namespace (get/post/patch/del) returning a `Response`. */
+/** Low-level HTTP namespace (get/post/put/patch/del) returning a `Response`. */
 export const api = {
   get: (path: string, init?: RequestInit) => request(path, { ...init, method: 'GET' }),
   post: (path: string, init?: RequestInit) => request(path, { ...init, method: 'POST' }),
+  put: (path: string, init?: RequestInit) => request(path, { ...init, method: 'PUT' }),
   patch: (path: string, init?: RequestInit) => request(path, { ...init, method: 'PATCH' }),
   del: (path: string, init?: RequestInit) => request(path, { ...init, method: 'DELETE' }),
 };
@@ -298,6 +299,12 @@ export async function createSchedule(opts: {
 export async function deleteSchedule(id: string): Promise<void> {
   await apiFetch(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
+export async function updateSchedule(id: string, opts: { enabled: boolean }): Promise<Schedule> {
+  return apiFetch<Schedule>(`/api/schedules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(opts),
+  });
+}
 
 // ── Regression ───────────────────────────────────────────────────────────────
 export interface RegressionResult {
@@ -314,6 +321,11 @@ export async function listRegressionSuites(): Promise<string[]> {
 }
 export async function runRegression(opts: { suite: string; model?: string; updateBaseline?: boolean }): Promise<RegressionResult> {
   return apiFetch('/api/regression', { method: 'POST', body: JSON.stringify(opts) });
+}
+export async function listRegressionResults(limit?: number): Promise<RegressionResult[]> {
+  const q = limit ? `?limit=${limit}` : '';
+  const r = await apiFetch<{ results: RegressionResult[] }>(`/api/regression/results${q}`);
+  return r.results;
 }
 
 // ── Diff ─────────────────────────────────────────────────────────────────────
@@ -418,6 +430,92 @@ export async function listFiles(params?: {
     }
   }
   return apiFetch<{ files: FileRow[]; total: number }>(`/api/files?${sp.toString()}`);
+}
+
+// ── Prompts ─────────────────────────────────────────────────────────────────
+export interface PromptRow {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  latest_version: number | null;
+  latest_tag: string | null;
+}
+export interface PromptVersion {
+  id: string;
+  prompt_id: string;
+  version: number;
+  system_prompt: string;
+  task: string;
+  config: string | null;
+  tag: string | null;
+  created_at: string;
+  created_by: string;
+}
+export async function listPrompts(): Promise<PromptRow[]> {
+  const r = await apiFetch<{ prompts: PromptRow[] }>('/api/prompts');
+  return r.prompts;
+}
+export async function createPrompt(input: {
+  name: string; description?: string; systemPrompt: string; task: string; tag?: string;
+}): Promise<{ id: string; version: number }> {
+  return apiFetch('/api/prompts', { method: 'POST', body: JSON.stringify(input) });
+}
+export async function updatePrompt(
+  id: string,
+  input: { name?: string; description?: string },
+): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/prompts/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+export async function deletePrompt(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/prompts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+export async function listPromptVersions(id: string): Promise<PromptVersion[]> {
+  const r = await apiFetch<{ prompt: PromptRow; versions: PromptVersion[] }>(
+    `/api/prompts/${encodeURIComponent(id)}`,
+  );
+  return r.versions;
+}
+export async function enqueuePrompt(input: {
+  promptId: string; promptVersion?: number; models: string[]; scenario: string;
+}): Promise<{ tasks: Array<{ taskId: string; model: string; provider: string }>; count: number }> {
+  return apiFetch('/api/prompts/enqueue', { method: 'POST', body: JSON.stringify(input) });
+}
+
+// ── Output Mappings ─────────────────────────────────────────────────────────
+export interface OutputMappingRow {
+  id: string;
+  scope: string;
+  scope_id: string;
+  parent_folder: string;
+  per_model_pattern: string;
+  created_at: string;
+  updated_at: string;
+}
+export async function listOutputMappings(): Promise<OutputMappingRow[]> {
+  const r = await apiFetch<{ mappings: OutputMappingRow[] }>('/api/output-mappings');
+  return r.mappings;
+}
+export async function createOutputMapping(input: {
+  scope: string; scopeId: string; parentFolder: string; perModelPattern: string;
+}): Promise<OutputMappingRow> {
+  return apiFetch('/api/output-mappings', { method: 'POST', body: JSON.stringify(input) });
+}
+export async function updateOutputMapping(
+  id: string,
+  input: { scope?: string; scopeId?: string; parentFolder?: string; perModelPattern?: string },
+): Promise<OutputMappingRow> {
+  return apiFetch(`/api/output-mappings/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+export async function deleteOutputMapping(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/output-mappings/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 // ── Audit ────────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import type { Task, TaskQueue } from './types.js';
-import { queueDepth } from '../observability/metrics.js';
+import { DEFAULT_MAX_ATTEMPTS } from './types.js';
+import { queueDepth, dlqDepth } from '../observability/metrics.js';
 
 interface Waiter {
   resolve: (t: Task | null) => void;
@@ -7,6 +8,7 @@ interface Waiter {
 }
 
 export class InMemoryQueue implements TaskQueue {
+  readonly maxAttempts = DEFAULT_MAX_ATTEMPTS;
   private pending: Task[] = [];
   private inFlight = new Map<string, Task>();
   private waiters: Waiter[] = [];
@@ -31,6 +33,10 @@ export class InMemoryQueue implements TaskQueue {
 
   private syncQueueDepth(): void {
     queueDepth.set({ provider: 'in-memory' }, this.pending.length);
+  }
+
+  private syncDlqDepth(): void {
+    dlqDepth.set({ provider: 'in-memory' }, this.dead.length);
   }
 
   async enqueue(task: Task): Promise<void> {
@@ -77,9 +83,10 @@ export class InMemoryQueue implements TaskQueue {
     if (t) {
       this.inFlight.delete(taskId);
       t.attempts += 1;
-      if (t.attempts >= 5) {
+      if (t.attempts >= this.maxAttempts) {
         this.dead.push(t);
         this.syncQueueDepth();
+        this.syncDlqDepth();
         return;
       }
       this.pending.unshift(t);
@@ -92,12 +99,29 @@ export class InMemoryQueue implements TaskQueue {
     return this.pending.length + this.inFlight.size;
   }
 
+  async pendingCount(): Promise<number> {
+    return this.pending.length;
+  }
+
   async deadLetterSize(): Promise<number> {
     return this.dead.length;
   }
 
   async deadLetterPeek(limit: number): Promise<Task[]> {
     return this.dead.slice(0, limit);
+  }
+
+  async deadLetterRetry(taskId: string): Promise<boolean> {
+    const idx = this.dead.findIndex((t) => t.taskId === taskId);
+    if (idx < 0) return false;
+    const [t] = this.dead.splice(idx, 1);
+    if (!t) return false;
+    t.attempts = 0;
+    this.pending.unshift(t);
+    this.syncQueueDepth();
+    this.syncDlqDepth();
+    this._notifyNext();
+    return true;
   }
 
   async close(): Promise<void> {

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageShell } from '../components/ui/PageShell';
-import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
+import { Panel, PanelBody } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';

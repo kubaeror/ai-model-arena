@@ -3,58 +3,184 @@ info:
   title: ai-model-arena API
   version: 1.0.0
   description: |
-    Public REST API for ai-model-arena — multi-model agentic coding arena.
-    All endpoints are versioned under `/api/v1/` and protected by API-key
-    auth (`X-API-Key` header) with per-key rate limiting. Interactive docs are
-    served at `/api/docs`. Run-management endpoints used by the dashboard SPA
-    are also available under `/api/*` via JWT auth.
+    HTTP + WebSocket API for ai-model-arena — multi-model agentic coding arena.
+
+    Two authenticated API surfaces, both enforced by RBAC/permission middleware:
+
+    - `/api/*` — dashboard API, JWT auth (`Authorization: Bearer <token>` from
+      `POST /api/auth/login`), roles viewer/editor/admin.
+    - `/api/v1/*` — public API, API-key auth (`X-API-Key` header, keys in
+      `configs/api-keys.yaml`), per-key permissions.
+
+    WebSocket endpoints (`/ws`, `/runner`, `/lobby`) are documented as `ws`
+    entries and authenticate via `Sec-WebSocket-Protocol: access_token, <JWT>`.
+    Interactive docs: `/api/docs`.
   contact:
     name: ai-model-arena
 servers:
-  - url: http://localhost:4000/api/v1
+  - url: http://localhost:4000
     description: Local dashboard server
 security:
-  - ApiKeyAuth: []
-tags:
-  - name: models
-  - name: scenarios
-  - name: runs
-  - name: cost
-  - name: tool-analytics
-  - name: export
-  - name: traces
-  - name: anomalies
-  - name: observability
-  - name: webhooks
+  - BearerAuth: []
 paths:
-  /models:
+  # ── System ────────────────────────────────────────────────────────────────
+  /health:
     get:
-      tags: [models]
-      summary: List configured models
+      security: []
+      summary: Liveness + DB connectivity probe
       responses:
-        '200':
-          description: Model list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  models:
-                    type: array
-                    items: { $ref: '#/components/schemas/Model' }
-  /scenarios:
+        '200': { description: Healthy (db connected) }
+        '503': { description: Degraded (db unavailable) }
+  /metrics:
     get:
-      tags: [scenarios]
-      summary: List scenarios
-      responses: { '200': { description: Scenario list } }
-  /runs:
-    get:
-      tags: [runs]
-      summary: List runs (newest first)
-      responses: { '200': { description: Run list } }
+      summary: Prometheus metrics (JWT admin, or METRICS_TOKEN bearer)
+      responses:
+        '200': { description: Prometheus text exposition }
+        '401': { description: Missing or invalid token }
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+  /api/auth/login:
     post:
-      tags: [runs]
-      summary: Trigger a new run
+      security: []
+      summary: Authenticate and receive a JWT (env admin or DB-backed user)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        '200': { description: Login succeeded (token, username, role) }
+        '401': { description: Invalid credentials }
+  /api/auth/logout:
+    post:
+      summary: Revoke the presented JWT and clear the auth cookie
+      responses:
+        '200': { description: Revoked }
+  /api/roles:
+    get:
+      summary: List all roles
+      responses:
+        '200': { description: Role list }
+
+  # ── Ops ────────────────────────────────────────────────────────────────────
+  /api/ops/killswitch:
+    get:
+      summary: Kill-switch state (blocks new runs while active)
+      responses:
+        '200': { description: Kill-switch status }
+    post:
+      summary: Activate the kill-switch
+      responses:
+        '200': { description: Kill-switch activated }
+    delete:
+      summary: Deactivate the kill-switch
+      responses:
+        '200': { description: Kill-switch deactivated }
+
+  # ── Models ─────────────────────────────────────────────────────────────────
+  /api/models:
+    get:
+      summary: List catalog models (config-consumer shape)
+      responses:
+        '200': { description: Model list }
+    post:
+      summary: Register a custom OpenAI-compatible model/provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 128 }
+                apiBase: { type: string, format: uri }
+                authScheme: { type: string, enum: [bearer, x-api-key, none], default: bearer }
+                envVar: { type: string }
+                adapter: { type: string, enum: [openai-compat, anthropic, google, bedrock], default: openai-compat }
+      responses:
+        '201': { description: Created (updated model list) }
+        '400': { description: Invalid input }
+  /api/models/{name}:
+    delete:
+      summary: Remove a custom provider by id
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Deleted (updated model list) }
+        '400': { description: Invalid provider id }
+
+  # ── Scenarios ──────────────────────────────────────────────────────────────
+  /api/scenarios:
+    get:
+      summary: List scenarios
+      responses:
+        '200': { description: Scenario list }
+    post:
+      summary: Create a scenario (editor; permissive shell policy requires admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                shellPolicy: { type: string, enum: [restricted, permissive] }
+                starterFilesContent:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      path: { type: string }
+                      content: { type: string }
+      responses:
+        '201': { description: Created (scenario config) }
+        '400': { description: Invalid scenario name/body }
+        '403': { description: Permissive shell policy requires admin }
+        '409': { description: Scenario already exists; use PUT }
+  /api/scenarios/{name}:
+    get:
+      summary: One scenario + its starter files
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Scenario config }
+        '400': { description: Invalid scenario name }
+        '404': { description: Not found }
+    put:
+      summary: Edit a scenario (optionally rename)
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Updated scenario config }
+        '400': { description: Invalid scenario name/body }
+        '403': { description: Permissive shell policy requires admin }
+        '404': { description: Not found }
+    delete:
+      summary: Delete a scenario (and its starter-file templates)
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Deleted }
+        '400': { description: Invalid scenario name }
+        '404': { description: Not found }
+
+  # ── Runs ───────────────────────────────────────────────────────────────────
+  /api/runs:
+    get:
+      summary: List runs (newest first)
+      responses:
+        '200': { description: Run list }
+    post:
+      summary: Trigger a new run (editor)
       requestBody:
         required: true
         content:
@@ -65,111 +191,140 @@ paths:
               properties:
                 scenario: { type: string }
                 models: { type: array, items: { type: string } }
-      responses: { '202': { description: Run started } }
-  /runs/{runId}:
+      responses:
+        '202': { description: Run started (runId, scenario, models) }
+        '400': { description: Invalid scenario/models or rejected by orchestrator }
+  /api/runs/{runId}:
     get:
-      tags: [runs]
-      summary: Get a run + per-model status
-      parameters: [{ $ref: '#/components/parameters/RunId' }]
-      responses: { '200': { description: Run detail } }
-  /runs/{runId}/stop:
+      summary: Run metadata + live per-model status (owner or admin)
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200': { description: Run detail }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run not found }
+  /api/runs/{runId}/stop:
     post:
-      tags: [runs]
-      summary: Stop a running run
-      parameters: [{ $ref: '#/components/parameters/RunId' }]
-      responses: { '202': { description: Stop requested } }
-  /runs/{runId}/restart:
+      summary: Stop a running run (editor, owner or admin)
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200': { description: Stop requested }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run not found }
+  /api/runs/{runId}/restart:
     post:
-      tags: [runs]
-      summary: Restart a run
-      parameters: [{ $ref: '#/components/parameters/RunId' }]
-      responses: { '202': { description: Restart requested } }
-  /runs/{runId}/models/{model}/conversation:
-    get:
-      tags: [runs]
-      summary: Get conversation.json for a model run
-      parameters: [{ $ref: '#/components/parameters/RunId' }, { $ref: '#/components/parameters/Model' }]
-      responses: { '200': { description: Conversation } }
-  /runs/{runId}/models/{model}/report:
-    get:
-      tags: [runs]
-      summary: Get report.md for a model run
-      parameters: [{ $ref: '#/components/parameters/RunId' }, { $ref: '#/components/parameters/Model' }]
-      responses: { '200': { description: Markdown report } }
-  /analytics/tools:
-    get:
-      tags: [tool-analytics]
-      summary: Tool-call distribution + loop incidents
+      summary: Restart a run (editor, owner or admin)
       parameters:
-        - in: query
-          name: model
-          schema: { type: string }
-      responses: { '200': { description: Tool analytics } }
-  /export/csv:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200': { description: Restart requested }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run not found }
+  /api/runs/{runId}/models/{model}/conversation:
     get:
-      tags: [export]
-      summary: Export all runs as CSV
-      responses: { '200': { description: CSV } }
-  /export/runs/{runId}/csv:
-    get:
-      tags: [export]
-      summary: Export a single run's conversation as CSV
-      parameters: [{ $ref: '#/components/parameters/RunId' }]
-      responses: { '200': { description: CSV } }
-  /traces/{runId}:
-    get:
-      tags: [traces]
-      summary: Stored span metadata tree for a run
-      description: |
-        Returns per-model trace metadata reconstructed from the locally stored
-        `trace-meta.json`. Traces are rendered in-app via the TraceWaterfall
-        component and Observability page — no external backend required.
+      summary: conversation.json for a model run (owner or admin)
       parameters:
-        - { $ref: '#/components/parameters/RunId' }
-        - in: query
-          name: model
-          schema: { type: string }
-      responses: { '200': { description: Trace tree } }
-  /anomalies:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: Conversation entries }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run or model not found }
+  /api/runs/{runId}/models/{model}/report:
     get:
-      tags: [anomalies]
-      summary: List detected anomalies
+      summary: report.md for a model run (owner or admin)
       parameters:
-        - in: query
-          name: model
-          schema: { type: string }
-        - in: query
-          name: type
-          schema: { $ref: '#/components/schemas/AnomalyType' }
-        - in: query
-          name: severity
-          schema: { $ref: '#/components/schemas/AnomalySeverity' }
-        - in: query
-          name: resolved
-          schema: { type: boolean }
-        - in: query
-          name: from
-          schema: { type: string, format: date-time }
-        - in: query
-          name: to
-          schema: { type: string, format: date-time }
-        - in: query
-          name: limit
-          schema: { type: integer, default: 100 }
-        - in: query
-          name: offset
-          schema: { type: integer, default: 0 }
-      responses: { '200': { description: Anomaly list } }
-  /anomalies/{id}:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: Markdown report }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run or model not found }
+  /api/runs/{runId}/models/{model}/files:
     get:
-      tags: [anomalies]
-      summary: Full anomaly detail incl. related run + span data
-      parameters: [{ $ref: '#/components/parameters/AnomalyId' }]
-      responses: { '200': { description: Anomaly detail } }
+      summary: List sandbox files for a model run (owner or admin)
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: File path list }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run or model not found }
+  /api/runs/{runId}/models/{model}/files/{filepath}:
+    get:
+      summary: Read one sandbox file (owner or admin; path-traversal safe)
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+        - $ref: '#/components/parameters/Filepath'
+      responses:
+        '200': { description: File contents (text/plain) }
+        '400': { description: Path escapes the sandbox }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run/model/file not found }
+  /api/runs/{runId}/models/{model}/logs:
+    get:
+      summary: Tail the PM2 log for a model run (owner or admin)
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: Log tail (text/plain) }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run or model not found }
+  /api/runs/{runId}/models/{model}/diff:
+    get:
+      summary: Git diff of generated output for a model run (owner or admin)
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: Diff patch }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run or model not found }
+
+  # ── Traces ─────────────────────────────────────────────────────────────────
+  /api/traces/{runId}:
+    get:
+      summary: Stored span metadata tree per model (owner or admin)
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Trace tree }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run not found }
+
+  # ── Anomalies ──────────────────────────────────────────────────────────────
+  /api/anomalies:
+    get:
+      summary: List detected anomalies (filterable)
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string, enum: [latency, loop, token_spike, cost_spike, error_rate, silent_failure] } }
+        - { name: severity, in: query, schema: { type: string, enum: [low, medium, high, critical] } }
+        - { name: resolved, in: query, schema: { type: boolean } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: Anomaly list }
+        '500': { description: Internal error }
+  /api/anomalies/{id}:
+    get:
+      summary: Anomaly detail incl. related run + trace data
+      parameters:
+        - $ref: '#/components/parameters/IntId'
+      responses:
+        '200': { description: Anomaly detail }
+        '400': { description: Invalid anomaly id }
+        '404': { description: Not found }
     patch:
-      tags: [anomalies]
-      summary: Mark anomaly resolved / false positive
-      parameters: [{ $ref: '#/components/parameters/AnomalyId' }]
+      summary: Mark an anomaly resolved or false positive
+      parameters:
+        - $ref: '#/components/parameters/IntId'
       requestBody:
         required: true
         content:
@@ -178,32 +333,42 @@ paths:
               type: object
               required: [resolved_as]
               properties:
-                resolved_as:
-                  type: string
-                  enum: [resolved, false_positive]
-      responses: { '200': { description: Updated anomaly } }
-  /observability/stats:
+                resolved_as: { type: string, enum: [resolved, false_positive] }
+      responses:
+        '200': { description: Updated anomaly }
+        '400': { description: Invalid id or resolved_as }
+        '404': { description: Not found }
+
+  # ── Observability ──────────────────────────────────────────────────────────
+  /api/observability/stats:
     get:
-      tags: [observability]
       summary: Aggregated latency/error/baseline stats
       parameters:
-        - in: query
-          name: model
-          schema: { type: string }
-      responses: { '200': { description: Observability stats } }
-  /observability/health:
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Observability stats }
+  /api/observability/recent-traces:
     get:
-      tags: [observability]
-      summary: Healthcheck (OTel exporter, SQLite, PM2)
-      responses: { '200': { description: Healthy }, '503': { description: Degraded } }
-  /webhooks:
+      summary: Recent traces across all runs
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200': { description: Trace index entries }
+  /api/observability/health:
     get:
-      tags: [webhooks]
-      summary: List registered webhooks
-      responses: { '200': { description: Webhook list } }
+      summary: Observability healthcheck (DB probe)
+      responses:
+        '200': { description: Healthy }
+        '503': { description: DB degraded }
+
+  # ── Webhooks ───────────────────────────────────────────────────────────────
+  /api/webhooks:
+    get:
+      summary: List registered webhooks (admin)
+      responses:
+        '200': { description: Webhook list }
     post:
-      tags: [webhooks]
-      summary: Register a webhook URL for events
+      summary: Register a webhook URL for events (admin)
       requestBody:
         required: true
         content:
@@ -215,146 +380,1468 @@ paths:
                 url: { type: string, format: uri }
                 events:
                   type: array
-                  items:
-                    type: string
-                    enum: [run_completed, anomaly_detected, budget_exceeded]
+                  items: { type: string, enum: [run_completed, anomaly_detected, budget_exceeded] }
                 secret: { type: string }
-      responses: { '201': { description: Webhook registered } }
-  /webhooks/{id}:
+      responses:
+        '201': { description: Registered }
+        '400': { description: Invalid url or no events }
+  /api/webhooks/{id}:
     delete:
-      tags: [webhooks]
-      summary: Remove a webhook
+      summary: Remove a webhook (admin)
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: integer }
-      responses: { '204': { description: Deleted }, '404': { description: Not found } }
-  /catalog/models:
+        - $ref: '#/components/parameters/IntId'
+      responses:
+        '204': { description: Deleted }
+        '400': { description: Invalid id }
+        '404': { description: Not found }
+
+  # ── Providers ──────────────────────────────────────────────────────────────
+  /api/providers:
     get:
-      summary: List catalog models
-      tags: [Catalog]
+      summary: List builtin + custom providers (admin)
+      responses:
+        '200': { description: Provider list }
+    post:
+      summary: Add/upsert a custom provider with runtime reachability probe (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, name, authScheme, adapter]
+              properties:
+                id: { type: string, pattern: '^[a-z0-9-]+$', maxLength: 64 }
+                name: { type: string, maxLength: 128 }
+                apiBase: { type: string, format: uri }
+                authScheme: { type: string, enum: [bearer, x-api-key, none] }
+                envVar: { type: string }
+                headerName: { type: string }
+                adapter: { type: string, enum: [openai-compat, anthropic, google, bedrock] }
+      responses:
+        '201': { description: Created (id + probe health) }
+        '400': { description: Invalid provider input }
+        '403': { description: Missing permission }
+  /api/providers/{id}:
+    delete:
+      summary: Remove a custom provider (admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+        '403': { description: Missing permission }
+        '500': { description: Delete failed }
+
+  # ── Secrets ────────────────────────────────────────────────────────────────
+  /api/secrets:
+    get:
+      summary: List provider secrets with masked values (admin; k8s or env store)
+      responses:
+        '200': { description: Secret entries (values masked) }
+  /api/secrets/{envVar}:
+    put:
+      summary: Set a secret value (admin; k8s secret or env store)
+      parameters:
+        - $ref: '#/components/parameters/EnvVar'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string }
+      responses:
+        '200': { description: Set }
+        '400': { description: envVar or value missing }
+    delete:
+      summary: Remove a secret (admin)
+      parameters:
+        - $ref: '#/components/parameters/EnvVar'
+      responses:
+        '200': { description: Removed }
+        '400': { description: envVar missing }
+
+  # ── Catalog ────────────────────────────────────────────────────────────────
+  /api/catalog/models:
+    get:
+      summary: List catalog models (filterable)
       parameters:
         - { name: provider, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
         - { name: reasoning, in: query, schema: { type: string, enum: ['1', '0'] } }
         - { name: tool_call, in: query, schema: { type: string, enum: ['1', '0'] } }
         - { name: min_context, in: query, schema: { type: integer } }
         - { name: sort, in: query, schema: { type: string, enum: [name, context] } }
       responses:
         '200': { description: Model list }
-  /catalog/models/{id}:
+  /api/catalog/models/{id}:
     get:
       summary: Full model detail (caps + pricing + benchmarks + runtime stats)
-      tags: [Catalog]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Model detail }
         '404': { description: Not found }
-  /catalog/providers:
-    get:
-      summary: List all providers (builtin + custom)
-      tags: [Catalog]
-      responses: { '200': { description: Provider list } }
-    post:
-      summary: Add custom OpenAI-compatible provider
-      tags: [Catalog]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { id: {type: string}, name: {type: string}, apiBase: {type: string}, authScheme: {type: string}, envVar: {type: string}, adapter: {type: string} } } } } }
-      responses: { '201': { description: Created } }
-  /catalog/providers/{id}:
-    delete:
-      summary: Remove custom provider
-      tags: [Catalog]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Deleted } }
-  /catalog/benchmarks:
+  /api/catalog/benchmarks:
     get:
       summary: List benchmarks (filter by name/source/model)
-      tags: [Catalog]
       parameters:
         - { name: name, in: query, schema: { type: string } }
         - { name: source, in: query, schema: { type: string } }
         - { name: model, in: query, schema: { type: string } }
-      responses: { '200': { description: Benchmark list } }
-  /catalog/benchmarks/{modelId}:
+      responses:
+        '200': { description: Benchmark list }
+  /api/catalog/benchmarks/{modelId}:
     get:
       summary: Benchmarks for one model
-      tags: [Catalog]
-      parameters: [{ name: modelId, in: path, required: true, schema: { type: string } }]
-      responses: { '200': { description: Benchmarks } }
-  /catalog/pricing:
+      parameters:
+        - { name: modelId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Benchmarks }
+  /api/catalog/pricing:
     get:
-      summary: Pricing table
-      tags: [Catalog]
-      parameters: [{ name: model, in: query, schema: { type: string } }]
-      responses: { '200': { description: Pricing } }
-  /metrics/runtime:
+      summary: Pricing table (optionally one model)
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Pricing rows }
+
+  # ── Metrics ────────────────────────────────────────────────────────────────
+  /api/metrics/runtime:
     get:
       summary: Arena-measured runtime stats
-      tags: [Metrics]
       parameters:
         - { name: model, in: query, schema: { type: string } }
         - { name: from, in: query, schema: { type: string } }
         - { name: to, in: query, schema: { type: string } }
-        - { name: limit, in: query, schema: { type: integer, default: 100 } }
-      responses: { '200': { description: Runtime stats } }
-  /metrics/tps:
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 1000 } }
+      responses:
+        '200': { description: Runtime stats }
+  /api/metrics/tps:
     get:
       summary: TPS leaderboard (arena measurements)
-      tags: [Metrics]
-      responses: { '200': { description: TPS leaderboard } }
-  /cache/stats:
+      responses:
+        '200': { description: TPS leaderboard }
+
+  # ── Cache ──────────────────────────────────────────────────────────────────
+  /api/cache/stats:
     get:
-      summary: Cache state per source
-      tags: [Cache]
-      responses: { '200': { description: Cache states } }
-  /cache/leaderboard:
+      summary: Cache state per catalog source
+      responses:
+        '200': { description: Cache states }
+  /api/cache/leaderboard:
     get:
       summary: Combined catalog benchmarks + arena measurements
-      tags: [Cache]
-      responses: { '200': { description: Leaderboard } }
-  /cache/refresh:
+      responses:
+        '200': { description: Leaderboard }
+  /api/cache/refresh:
     post:
-      summary: Force refresh a catalog source
-      tags: [Cache]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { source: { type: string, enum: [models.dev, modelbench, zeroeval] } } } } } }
-      responses: { '200': { description: Refresh result } }
+      summary: Force-refresh a catalog source (editor)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string, enum: [models.dev, modelbench, zeroeval] }
+      responses:
+        '200': { description: Refresh result }
+        '400': { description: Unknown source }
+        '403': { description: Missing permission }
+
+  # ── Analytics ──────────────────────────────────────────────────────────────
+  /api/analytics/tools:
+    get:
+      summary: Tool-call distribution + loop incidents
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: scenario, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Tool analytics }
+  /api/analytics/tools/trends:
+    get:
+      summary: Daily tool success-rate trends
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: tool, in: query, schema: { type: string } }
+        - { name: days, in: query, schema: { type: integer, default: 30, maximum: 90 } }
+      responses:
+        '200': { description: Trend points }
+  /api/analytics/cost:
+    get:
+      summary: Cost leaderboard (cost ledger + run models)
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Cost leaderboard }
+
+  # ── Export ─────────────────────────────────────────────────────────────────
+  /api/export/csv:
+    get:
+      summary: Export all runs as CSV (optionally filtered)
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: scenario, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+      responses:
+        '200': { description: CSV download }
+  /api/export/runs/{runId}/csv:
+    get:
+      summary: Export one run's conversation as CSV (owner or admin)
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200': { description: CSV download }
+        '403': { description: Not the run owner and not admin }
+        '404': { description: Run not found }
+
+  # ── Prompts ────────────────────────────────────────────────────────────────
+  /api/prompts:
+    get:
+      summary: List prompts with latest version info
+      responses:
+        '200': { description: Prompt list }
+    post:
+      summary: Create a prompt + initial version (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, systemPrompt, task]
+              properties:
+                name: { type: string, maxLength: 128 }
+                description: { type: string }
+                systemPrompt: { type: string }
+                task: { type: string }
+                config: { type: object }
+                tag: { type: string }
+      responses:
+        '201': { description: Created (id, version) }
+        '400': { description: Invalid input }
+  /api/prompts/{id}:
+    get:
+      summary: One prompt with all versions
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Prompt + versions }
+        '404': { description: Not found }
+    put:
+      summary: Update prompt metadata (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 128 }
+                description: { type: string }
+      responses:
+        '200': { description: Updated }
+        '400': { description: Invalid input }
+        '404': { description: Not found }
+    delete:
+      summary: Delete a prompt and cascade its versions (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+  /api/prompts/{id}/versions:
+    post:
+      summary: Create a new version of a prompt (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [systemPrompt, task]
+              properties:
+                systemPrompt: { type: string }
+                task: { type: string }
+                config: { type: object }
+                tag: { type: string }
+      responses:
+        '201': { description: Created (id, version) }
+        '400': { description: Invalid input }
+        '404': { description: Prompt not found }
+  /api/prompts/enqueue:
+    post:
+      summary: Enqueue prompt runs to the task queue (editor)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [promptId, models, scenario]
+              properties:
+                promptId: { type: string }
+                promptVersion: { type: integer, minimum: 1 }
+                models: { type: array, items: { type: string }, minItems: 1 }
+                scenario: { type: string }
+      responses:
+        '200': { description: Enqueued tasks (tasks, count) }
+        '400': { description: Invalid input }
+        '404': { description: Prompt not found }
+
+  # ── Output mappings ────────────────────────────────────────────────────────
+  /api/output-mappings:
+    get:
+      summary: List output mappings
+      responses:
+        '200': { description: Mapping list }
+    post:
+      summary: Create an output mapping (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, scopeId, parentFolder, perModelPattern]
+              properties:
+                scope: { type: string, maxLength: 64 }
+                scopeId: { type: string, maxLength: 128 }
+                parentFolder: { type: string }
+                perModelPattern: { type: string }
+      responses:
+        '201': { description: Created (mapping with id) }
+        '400': { description: Invalid input }
+  /api/output-mappings/{id}:
+    put:
+      summary: Update an output mapping (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope: { type: string, maxLength: 64 }
+                scopeId: { type: string, maxLength: 128 }
+                parentFolder: { type: string }
+                perModelPattern: { type: string }
+      responses:
+        '200': { description: Updated }
+        '400': { description: Invalid input }
+        '404': { description: Not found }
+    delete:
+      summary: Delete an output mapping (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+
+  # ── Sessions ───────────────────────────────────────────────────────────────
+  /api/sessions:
+    get:
+      summary: List sessions (paginated, filterable)
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: Session list with pagination }
+  /api/sessions/{id}:
+    get:
+      summary: Session detail with message/call counts
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Session detail }
+        '404': { description: Not found }
+    delete:
+      summary: Delete a session and cascade (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+  /api/sessions/{id}/messages:
+    get:
+      summary: All messages of a session ordered by turn
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Message list }
+        '404': { description: Session not found }
+  /api/sessions/{id}/calls:
+    get:
+      summary: All model calls of a session ordered by turn
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Model call list }
+        '404': { description: Session not found }
+
+  # ── Users ──────────────────────────────────────────────────────────────────
+  /api/users:
+    get:
+      summary: List all users with roles (admin)
+      responses:
+        '200': { description: User list }
+    post:
+      summary: Create a user (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, pattern: '^[a-zA-Z0-9_-]+$', maxLength: 64 }
+                password: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        '201': { description: Created (user without roles) }
+        '400': { description: Invalid input }
+        '409': { description: Username already exists }
+  /api/users/roles:
+    get:
+      summary: List all available roles (admin)
+      responses:
+        '200': { description: Role list }
+  /api/users/{id}:
+    put:
+      summary: Update a user's username or password (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string, pattern: '^[a-zA-Z0-9_-]+$', maxLength: 64 }
+                password: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        '200': { description: Updated }
+        '400': { description: Invalid input }
+        '404': { description: Not found }
+        '409': { description: Username already exists }
+    delete:
+      summary: Delete a user and role assignments (admin; never the last admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '400': { description: Cannot delete the last admin }
+        '404': { description: Not found }
+  /api/users/{id}/roles:
+    get:
+      summary: List roles for a user (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Role list }
+        '404': { description: User not found }
+    post:
+      summary: Assign a role to a user (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roleId]
+              properties:
+                roleId: { type: string, maxLength: 64 }
+      responses:
+        '201': { description: Assigned }
+        '400': { description: Invalid input }
+        '404': { description: User or role not found }
+  /api/users/{id}/roles/{roleId}:
+    delete:
+      summary: Remove a role from a user (admin; last admin protected)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+        - $ref: '#/components/parameters/RoleId'
+      responses:
+        '200': { description: Removed }
+        '400': { description: Cannot remove the last admin role }
+        '404': { description: User not found }
+
+  # ── Audit ──────────────────────────────────────────────────────────────────
+  /api/audit:
+    get:
+      summary: Paginated, filterable audit log (admin)
+      parameters:
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: entity_type, in: query, schema: { type: string } }
+        - { name: entity_id, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: Audit entries with pagination }
+
+  # ── Files ──────────────────────────────────────────────────────────────────
+  /api/files:
+    get:
+      summary: Paginated, filterable produced-file listing
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: runId, in: query, schema: { type: string } }
+        - { name: promptId, in: query, schema: { type: string } }
+        - { name: tool, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: File rows with pagination }
+
+  # ── Budget ─────────────────────────────────────────────────────────────────
+  /api/budget:
+    get:
+      summary: Current budget status (spend, remaining, alerts)
+      responses:
+        '200': { description: Budget status }
+
+  # ── Schedules ──────────────────────────────────────────────────────────────
+  /api/schedules:
+    get:
+      summary: List schedules with current state
+      responses:
+        '200': { description: Schedule list }
+    post:
+      summary: Create a schedule (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenario, models, cron]
+              properties:
+                id: { type: string }
+                scenario: { type: string }
+                models: { type: array, items: { type: string } }
+                cron: { type: string }
+                enabled: { type: boolean, default: true }
+                options: { type: object }
+      responses:
+        '201': { description: Created (id) }
+        '400': { description: scenario/models/cron required }
+        '409': { description: Add rejected }
+  /api/schedules/{id}:
+    get:
+      summary: One schedule with state
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Schedule with state }
+        '404': { description: Not found }
+    patch:
+      summary: Toggle a schedule enabled/disabled (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200': { description: Updated schedule }
+        '400': { description: enabled (boolean) required }
+        '404': { description: Not found }
+    delete:
+      summary: Remove a schedule (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+
+  # ── Regression ─────────────────────────────────────────────────────────────
+  /api/regression/suites:
+    get:
+      summary: List regression suite names
+      responses:
+        '200': { description: Suite name list }
+  /api/regression/suites/{name}:
+    get:
+      summary: One regression suite config
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Suite config }
+        '404': { description: Not found }
+  /api/regression/results:
+    get:
+      summary: Most recent saved suite results
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200': { description: Suite results }
+  /api/regression:
+    post:
+      summary: Run a regression suite against stored results (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [suite]
+              properties:
+                suite: { type: string }
+                model: { type: string }
+                updateBaseline: { type: boolean }
+      responses:
+        '200': { description: Suite result (scenario results, judge comparisons) }
+        '400': { description: Missing suite or no matching models }
+        '404': { description: Suite not found }
+
+  # ── Runners ────────────────────────────────────────────────────────────────
+  /api/runners:
+    get:
+      summary: List runner deployments + pods (admin; k8s)
+      responses:
+        '200': { description: Runner list }
+        '503': { description: k8s API unavailable }
+  /api/runners/{name}/scale:
+    post:
+      summary: Patch runner deployment replicas (admin; k8s)
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [replicas]
+              properties:
+                replicas: { type: integer, minimum: 0 }
+      responses:
+        '200': { description: Scaled (name, replicas) }
+        '400': { description: replicas must be a non-negative number }
+        '503': { description: k8s API unavailable }
+  /api/runners/{name}/drain:
+    post:
+      summary: Scale a runner deployment to zero (admin; k8s)
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Drained }
+        '503': { description: k8s API unavailable }
+  /api/runners/{name}/logs:
+    get:
+      summary: Tail logs from a runner's first pod (admin; k8s)
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Log tail (text/plain) }
+        '404': { description: No pods found }
+        '503': { description: k8s API unavailable }
+
+  # ── Queues ─────────────────────────────────────────────────────────────────
+  /api/queues:
+    get:
+      summary: Queue depth / DLQ / consumer lag per provider (admin)
+      responses:
+        '200': { description: Queue stats }
+  /api/queues/{provider}/tasks:
+    get:
+      summary: Peek dead-letter queue tasks (admin)
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200': { description: DLQ task list }
+  /api/queues/{provider}/tasks/{id}/retry:
+    post:
+      summary: Retry a dead-letter task (admin)
+      parameters:
+        - $ref: '#/components/parameters/Provider'
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retried }
+        '404': { description: Task not found in DLQ }
+        '501': { description: DLQ retry not supported by current queue driver }
+
+  # ── OpenAPI docs ───────────────────────────────────────────────────────────
+  /api/docs:
+    get:
+      summary: Swagger UI for this specification
+      responses:
+        '200': { description: HTML page }
+  /api/docs/openapi.yaml:
+    get:
+      summary: Raw spec as YAML
+      responses:
+        '200': { description: YAML document }
+  /api/docs/openapi.json:
+    get:
+      summary: Raw spec as JSON
+      responses:
+        '200': { description: JSON document }
+  /api/v1/docs:
+    get:
+      summary: Redirect to /api/docs
+      responses:
+        '302': { description: Redirect }
+
+  # ── Public API v1 (API-key auth) ───────────────────────────────────────────
+  /api/v1/models:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List catalog models (same shape as GET /api/models)
+      responses:
+        '200': { description: Model list }
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Register a custom model/provider
+      responses:
+        '201': { description: Created }
+        '400': { description: Invalid input }
+  /api/v1/models/{name}:
+    delete:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Remove a custom provider by id
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Deleted }
+  /api/v1/scenarios:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List scenarios
+      responses:
+        '200': { description: Scenario list }
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Create a scenario
+      responses:
+        '201': { description: Created }
+        '400': { description: Invalid input }
+        '409': { description: Already exists }
+  /api/v1/scenarios/{name}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: One scenario + starter files
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Scenario config }
+        '404': { description: Not found }
+    put:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Edit a scenario
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Updated }
+        '404': { description: Not found }
+    delete:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Delete a scenario
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Deleted }
+  /api/v1/runs:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List runs
+      responses:
+        '200': { description: Run list }
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Trigger a new run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenario, models]
+              properties:
+                scenario: { type: string }
+                models: { type: array, items: { type: string } }
+      responses:
+        '202': { description: Run started }
+        '400': { description: Invalid input }
+  /api/v1/runs/{runId}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Run metadata + per-model status
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200': { description: Run detail }
+        '404': { description: Run not found }
+  /api/v1/runs/{runId}/stop:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Stop a run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200': { description: Stop requested }
+  /api/v1/runs/{runId}/restart:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Restart a run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200': { description: Restart requested }
+  /api/v1/runs/{runId}/models/{model}/conversation:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Conversation for a model run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: Conversation }
+        '404': { description: Run or model not found }
+  /api/v1/runs/{runId}/models/{model}/report:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: report.md for a model run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: Markdown report }
+  /api/v1/runs/{runId}/models/{model}/files:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List sandbox files for a model run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: File path list }
+  /api/v1/runs/{runId}/models/{model}/files/{filepath}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Read one sandbox file
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+        - $ref: '#/components/parameters/Filepath'
+      responses:
+        '200': { description: File contents (text/plain) }
+        '404': { description: Not found }
+  /api/v1/runs/{runId}/models/{model}/logs:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Tail PM2 log for a model run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: Log tail (text/plain) }
+  /api/v1/runs/{runId}/models/{model}/diff:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Git diff of generated output
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Model'
+      responses:
+        '200': { description: Diff patch }
+  /api/v1/traces/{runId}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Trace metadata tree for a run
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Trace tree }
+  /api/v1/anomalies:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List anomalies (see GET /api/anomalies for filters)
+      responses:
+        '200': { description: Anomaly list }
+  /api/v1/anomalies/{id}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Anomaly detail
+      parameters:
+        - $ref: '#/components/parameters/IntId'
+      responses:
+        '200': { description: Anomaly detail }
+        '404': { description: Not found }
+    patch:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Mark an anomaly resolved / false positive
+      parameters:
+        - $ref: '#/components/parameters/IntId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolved_as]
+              properties:
+                resolved_as: { type: string, enum: [resolved, false_positive] }
+      responses:
+        '200': { description: Updated anomaly }
+  /api/v1/observability/stats:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Aggregated latency/error/baseline stats
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Observability stats }
+  /api/v1/observability/recent-traces:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Recent traces across all runs
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        '200': { description: Trace index entries }
+  /api/v1/observability/health:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Observability healthcheck
+      responses:
+        '200': { description: Healthy }
+        '503': { description: DB degraded }
+  /api/v1/webhooks:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List registered webhooks
+      responses:
+        '200': { description: Webhook list }
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Register a webhook URL
+      responses:
+        '201': { description: Registered }
+        '400': { description: Invalid url or no events }
+  /api/v1/webhooks/{id}:
+    delete:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Remove a webhook
+      parameters:
+        - $ref: '#/components/parameters/IntId'
+      responses:
+        '204': { description: Deleted }
+        '404': { description: Not found }
+  /api/v1/providers:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List builtin + custom providers
+      responses:
+        '200': { description: Provider list }
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Add/upsert a custom provider
+      responses:
+        '201': { description: Created }
+        '400': { description: Invalid input }
+        '403': { description: Missing permission }
+  /api/v1/providers/{id}:
+    delete:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Remove a custom provider
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+        '403': { description: Missing permission }
+  /api/v1/catalog/models:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List catalog models (see GET /api/catalog/models for filters)
+      responses:
+        '200': { description: Model list }
+  /api/v1/catalog/models/{id}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Full model detail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Model detail }
+        '404': { description: Not found }
+  /api/v1/catalog/benchmarks:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List benchmarks
+      parameters:
+        - { name: name, in: query, schema: { type: string } }
+        - { name: source, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Benchmark list }
+  /api/v1/catalog/benchmarks/{modelId}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Benchmarks for one model
+      parameters:
+        - { name: modelId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Benchmarks }
+  /api/v1/catalog/pricing:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Pricing table
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Pricing rows }
+  /api/v1/metrics/runtime:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Arena-measured runtime stats
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 1000 } }
+      responses:
+        '200': { description: Runtime stats }
+  /api/v1/metrics/tps:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: TPS leaderboard
+      responses:
+        '200': { description: TPS leaderboard }
+  /api/v1/cache/stats:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Cache state per source
+      responses:
+        '200': { description: Cache states }
+  /api/v1/cache/leaderboard:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Combined catalog + arena leaderboard
+      responses:
+        '200': { description: Leaderboard }
+  /api/v1/cache/refresh:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Force-refresh a catalog source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string, enum: [models.dev, modelbench, zeroeval] }
+      responses:
+        '200': { description: Refresh result }
+        '400': { description: Unknown source }
+        '403': { description: Missing permission }
+  /api/v1/budget:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Current budget status
+      responses:
+        '200': { description: Budget status }
+  /api/v1/analytics/tools:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Tool-call distribution + loop incidents (see GET /api/analytics/tools)
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: scenario, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Tool analytics }
+  /api/v1/analytics/tools/trends:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Daily tool success-rate trends
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: tool, in: query, schema: { type: string } }
+        - { name: days, in: query, schema: { type: integer, default: 30, maximum: 90 } }
+      responses:
+        '200': { description: Trend points }
+  /api/v1/analytics/cost:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Cost leaderboard
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Cost leaderboard }
+  /api/v1/export/csv:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Export all runs as CSV (optionally filtered)
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: scenario, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+      responses:
+        '200': { description: CSV download }
+  /api/v1/export/runs/{runId}/csv:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Export one run's conversation as CSV
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200': { description: CSV download }
+        '404': { description: Run not found }
+  /api/v1/schedules:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List schedules with state
+      responses:
+        '200': { description: Schedule list }
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Create a schedule
+      responses:
+        '201': { description: Created (id) }
+        '400': { description: scenario/models/cron required }
+        '409': { description: Add rejected }
+  /api/v1/schedules/{id}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: One schedule with state
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Schedule with state }
+        '404': { description: Not found }
+    patch:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Toggle schedule enabled/disabled
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200': { description: Updated }
+        '400': { description: enabled (boolean) required }
+        '404': { description: Not found }
+    delete:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Remove a schedule
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+  /api/v1/regression/suites:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List regression suite names
+      responses:
+        '200': { description: Suite name list }
+  /api/v1/regression/suites/{name}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: One regression suite config
+      parameters:
+        - $ref: '#/components/parameters/Name'
+      responses:
+        '200': { description: Suite config }
+        '404': { description: Not found }
+  /api/v1/regression/results:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Recent saved suite results
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200': { description: Suite results }
+  /api/v1/regression:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Run a regression suite
+      responses:
+        '200': { description: Suite result }
+        '400': { description: Missing suite or no matching models }
+        '404': { description: Suite not found }
+  /api/v1/files:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Paginated, filterable produced-file listing
+      parameters:
+        - { name: model, in: query, schema: { type: string } }
+        - { name: runId, in: query, schema: { type: string } }
+        - { name: promptId, in: query, schema: { type: string } }
+        - { name: tool, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: File rows with pagination }
+  /api/v1/sessions:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List sessions (paginated, filterable)
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: Session list with pagination }
+  /api/v1/sessions/{id}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Session detail
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Session detail }
+        '404': { description: Not found }
+    delete:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Delete a session (cascade)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+  /api/v1/sessions/{id}/messages:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: All messages of a session
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Message list }
+        '404': { description: Session not found }
+  /api/v1/sessions/{id}/calls:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: All model calls of a session
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Model call list }
+        '404': { description: Session not found }
+  /api/v1/prompts:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List prompts with latest version info
+      responses:
+        '200': { description: Prompt list }
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Create a prompt + initial version
+      responses:
+        '201': { description: Created (id, version) }
+        '400': { description: Invalid input }
+  /api/v1/prompts/{id}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: One prompt with all versions
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Prompt + versions }
+        '404': { description: Not found }
+    put:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Update prompt metadata
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Updated }
+        '404': { description: Not found }
+    delete:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Delete a prompt (cascade versions)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+  /api/v1/prompts/{id}/versions:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Create a new prompt version
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '201': { description: Created (id, version) }
+        '400': { description: Invalid input }
+        '404': { description: Prompt not found }
+  /api/v1/prompts/enqueue:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Enqueue prompt runs to the task queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [promptId, models, scenario]
+              properties:
+                promptId: { type: string }
+                promptVersion: { type: integer, minimum: 1 }
+                models: { type: array, items: { type: string }, minItems: 1 }
+                scenario: { type: string }
+      responses:
+        '200': { description: Enqueued tasks (tasks, count) }
+        '400': { description: Invalid input }
+        '404': { description: Prompt not found }
+  /api/v1/output-mappings:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: List output mappings
+      responses:
+        '200': { description: Mapping list }
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Create an output mapping
+      responses:
+        '201': { description: Created }
+        '400': { description: Invalid input }
+  /api/v1/output-mappings/{id}:
+    put:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Update an output mapping
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Updated }
+        '404': { description: Not found }
+    delete:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Delete an output mapping
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not found }
+
+  # ── WebSocket ──────────────────────────────────────────────────────────────
+  /ws:
+    ws:
+      summary: LiveHub WebSocket gateway
+      description: |
+        Live process status, conversation streaming, and log tailing for the
+        dashboard. Authenticate with `Sec-WebSocket-Protocol: access_token,
+        <JWT>`. Message protocol is internal to the dashboard client.
+  /runner:
+    ws:
+      summary: Runner relay WebSocket
+      description: |
+        Long-lived runners connect here and relay messages by sessionId.
+        Requires an authenticated JWT (admin role) via subprotocol header or
+        `?token=` fallback. 1 MiB per-frame cap, 200-connection cap.
+  /lobby:
+    ws:
+      summary: Session stream lobby WebSocket
+      description: |
+        Dashboard clients subscribe with `?sessionId=` to receive runner
+        messages for a session they own (or an admin). Authenticated via
+        subprotocol header or `?token=` fallback.
+
 components:
   securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'Dashboard JWT from POST /api/auth/login (Authorization: Bearer <token>)'
     ApiKeyAuth:
       type: apiKey
       in: header
       name: X-API-Key
-      description: API key from configs/api-keys.yaml. Rate-limited per key.
+      description: API key from configs/api-keys.yaml; per-key permissions
   parameters:
     RunId:
       in: path
       name: runId
       required: true
       schema: { type: string }
+      description: Run id
     Model:
       in: path
       name: model
       required: true
       schema: { type: string }
-    AnomalyId:
+      description: Model id
+    Name:
+      in: path
+      name: name
+      required: true
+      schema: { type: string }
+      description: Resource name (scenario / model / runner / suite)
+    StrId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+      description: Resource id (uuid or slug)
+    IntId:
       in: path
       name: id
       required: true
       schema: { type: integer }
-  schemas:
-    Model:
-      type: object
-      properties:
-        name: { type: string }
-        provider: { type: string }
-        model: { type: string }
-        maxTurns: { type: integer }
-        temperature: { type: number }
-        maxTokens: { type: integer }
-    AnomalyType:
-      type: string
-      enum: [latency, loop, token_spike, cost_spike, error_rate, silent_failure]
-    AnomalySeverity:
-      type: string
-      enum: [low, medium, high, critical]
-
+      description: Numeric row id
+    EnvVar:
+      in: path
+      name: envVar
+      required: true
+      schema: { type: string }
+      description: Environment variable name
+    Filepath:
+      in: path
+      name: filepath
+      required: true
+      schema: { type: string }
+      description: Sandbox-relative file path
+    Provider:
+      in: path
+      name: provider
+      required: true
+      schema: { type: string }
+      description: Provider id (queue name)
+    RoleId:
+      in: path
+      name: roleId
+      required: true
+      schema: { type: string }
+      description: Role id (viewer / editor / admin)

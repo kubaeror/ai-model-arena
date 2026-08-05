@@ -38,3 +38,17 @@ test('ack removes; nack requeues', async () => {
   await q.ack(t2!.taskId);
   assert.equal(await q.size(), 0);
 });
+
+test('pending counts only waiting tasks, not in-flight', async () => {
+  const q = new InMemoryQueue();
+  await q.enqueue(mkTask('t1'));
+  await q.enqueue(mkTask('t2'));
+  assert.equal(await q.pendingCount(), 2);
+
+  const t = await q.dequeue(100);
+  assert.equal(t?.taskId, 't1');
+  assert.equal(await q.pendingCount(), 1, 'in-flight task is not waiting');
+
+  await q.ack(t!.taskId);
+  assert.equal(await q.pendingCount(), 1, 'acked task does not return to pending');
+});

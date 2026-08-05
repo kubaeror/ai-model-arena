@@ -9,7 +9,7 @@ resources:
 
 images:
   - name: ghcr.io/kubaeror/ai-model-arena-runner
-    newTag: 2a66f3c
+    newTag: latest
 
 patches:
   - target:
@@ -25,10 +25,10 @@ patches:
           spec:
             initContainers:
               - name: db-migrate
-                imagePullPolicy: Never
+                imagePullPolicy: IfNotPresent
             containers:
               - name: dashboard
-                imagePullPolicy: Never
+                imagePullPolicy: IfNotPresent
   - target:
       kind: Deployment
       labelSelector: app=runner
@@ -42,10 +42,10 @@ patches:
           spec:
             initContainers:
               - name: db-migrate
-                imagePullPolicy: Never
+                imagePullPolicy: IfNotPresent
             containers:
               - name: runner
-                imagePullPolicy: Never
+                imagePullPolicy: IfNotPresent
   - target:
       kind: CronJob
       name: arena-scheduler
@@ -61,10 +61,10 @@ patches:
               spec:
                 initContainers:
                   - name: db-migrate
-                    imagePullPolicy: Never
+                    imagePullPolicy: IfNotPresent
                 containers:
                   - name: scheduler
-                    imagePullPolicy: Never
+                    imagePullPolicy: IfNotPresent
   - target:
       kind: PersistentVolumeClaim
       name: outputs

@@ -41,6 +41,9 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
+            - name: metrics-token
+              mountPath: /etc/prometheus-token
+              readOnly: true
             - name: data
               mountPath: /prometheus
             - name: tmp
@@ -73,6 +76,9 @@ spec:
             claimName: prometheus-data
         - name: tmp
           emptyDir: {}
+        - name: metrics-token
+          secret:
+            secretName: metrics-token
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -83,6 +89,8 @@ data:
   prometheus.yml: |
     global:
       scrape_interval: 15s
+    rule_files:
+      - /etc/prometheus/alerting-rules.yaml
     scrape_configs:
       - job_name: otel-collector
         static_configs:
@@ -92,6 +100,9 @@ data:
           - targets: ['dashboard.ai-arena:4000']
         metrics_path: /metrics
         scrape_interval: 15s
+        authorization:
+          type: Bearer
+          credentials_file: /etc/prometheus-token/token
       - job_name: arena-runner
         kubernetes_sd_configs:
           - role: pod
@@ -106,6 +117,66 @@ data:
             regex: '4001'
         metrics_path: /metrics
         scrape_interval: 15s
+  alerting-rules.yaml: |
+    groups:
+      - name: arena
+        rules:
+          - alert: ArenaHighErrorRate
+            expr: rate(arena_tasks_total{status="failed"}[5m]) / rate(arena_tasks_total[5m]) > 0.05
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High task error rate (>5% over 5m)"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#higherrorrate"
+          - alert: ArenaRunnerDown
+            expr: up{job="arena-runner"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Runner pod is down"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#runnerdown"
+          - alert: ArenaQueueBacklog
+            expr: arena_queue_depth > 100
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Queue depth exceeds 100 for >10m"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#queuebacklog"
+          - alert: ArenaDLQGrowing
+            expr: arena_dlq_depth > 0
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Dead-letter queue has {{ $value }} entries for {{ $labels.provider }}"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#dlqgrowing"
+          - alert: ArenaScheduleFailures
+            expr: increase(arena_schedule_failures_total[15m]) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Scheduler job {{ $labels.schedule_id }} failing"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#schedulefailures"
+          - alert: ArenaBudgetEightyPercent
+            expr: arena_budget_percent > 80
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Budget >80% consumed for {{ $labels.model }}"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#budget"
+          - alert: ArenaBudgetExhausted
+            expr: arena_budget_percent >= 100
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Budget exhausted for {{ $labels.model }}"
+              runbook_url: "https://github.com/lmhub/ai-model-arena/blob/main/docs/runbooks.md#budget"
 ---
 apiVersion: v1
 kind: Service

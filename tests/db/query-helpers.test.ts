@@ -113,6 +113,21 @@ test('listCatalogModels filters + getModelDetail via Drizzle joins', async () =>
   } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
+test('getModelDetail returns exactly one base-tier pricing row with tiered pricing present', async () => {
+  const tmp = freshDb();
+  try {
+    await seedCatalog();
+    const db = getDb();
+    db.prepare(`INSERT INTO pricing (model_id, input, output, cache_read, cache_write, tier_size, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run('openai/gpt-4o', 1.1, 4.4, 0.5, 0.5, 128000, new Date().toISOString());
+
+    const detail = await getModelDetail('openai/gpt-4o');
+    assert.equal(detail.length, 1);
+    assert.equal(detail[0].tier_size, 0);
+    assert.equal(detail[0].input, 2.5);
+  } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 test('getCostSummary groups by model and by day', async () => {
   const tmp = freshDb();
   try {

@@ -5,7 +5,6 @@ import { eq, desc } from 'drizzle-orm';
 export interface RunIndexModelEntry {
   model: string;
   runId: string;
-  procName: string;
   outputDir: string;
   sandboxDir: string;
   resultPath: string;
@@ -42,7 +41,6 @@ function pmToDb(entry: RunIndexModelEntry): Record<string, unknown> {
   return {
     run_id: entry.runId,
     model: entry.model,
-    proc_name: entry.procName,
     output_dir: entry.outputDir,
     sandbox_dir: entry.sandboxDir,
     result_path: entry.resultPath,
@@ -62,7 +60,6 @@ function dbToPm(row: any): RunIndexModelEntry {
   return {
     runId: String(row.run_id ?? ''),
     model: String(row.model ?? ''),
-    procName: row.proc_name ? String(row.proc_name) : '',
     outputDir: row.output_dir ? String(row.output_dir) : '',
     sandboxDir: row.sandbox_dir ? String(row.sandbox_dir) : '',
     resultPath: row.result_path ? String(row.result_path) : '',
@@ -161,7 +158,6 @@ export async function upsertRun(record: RunIndexRecord): Promise<void> {
       await db.insert(run_models).values(pmToDb(pm) as any).onConflictDoUpdate({
         target: [run_models.run_id, run_models.model],
         set: {
-          proc_name: pm.procName,
           output_dir: pm.outputDir,
           sandbox_dir: pm.sandboxDir,
           result_path: pm.resultPath,

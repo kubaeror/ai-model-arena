@@ -96,7 +96,7 @@ export const PROFILES: Record<ExecutionProfile, ProfileDefinition> = {
     label: 'Artifact Validation',
     description: 'Validate generated artifacts against checksums and success criteria. Read-only.',
     allowedTools: READ_ONLY_TOOLS,
-    shellAllowed: true, // allow running test commands to validate
+    shellAllowed: false,
     webAccess: false,
     maxTurns: 5,
     maxCostUsd: 3,
@@ -108,7 +108,7 @@ export const PROFILES: Record<ExecutionProfile, ProfileDefinition> = {
     label: 'Restricted Production Support',
     description: 'Emergency production debugging. Read-only. No shell beyond status checks. No network.',
     allowedTools: READ_ONLY_TOOLS,
-    shellAllowed: true,
+    shellAllowed: false,
     webAccess: false,
     maxTurns: 15,
     maxCostUsd: 20,

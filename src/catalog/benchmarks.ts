@@ -2,11 +2,10 @@ import { getDrizzleDb } from '../db/index.js';
 import { benchmarks, catalog_cache_state, models } from '../db/schema.js';
 import { ModelbenchResponseSchema, type ModelbenchResponse, ZeroEvalModelSchema } from './types.js';
 import { matchModelToCanonical, type CatalogEntry } from './match.js';
-import type { SyncResult } from './sync.js';
+import { refreshIntervalMs, type SyncResult } from './sync.js';
 
 const MODELBENCH_API = 'https://modelbench.lol/api/v1/models';
 const ZEROEVAL_API = 'https://api.zeroeval.com/leaderboard/models/full';
-const REFRESH_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 const PREFERRED_MODELBENCH = new Set(['Intelligence Index', 'Coding Score', 'Agentic Score', 'Speed TPS']);
 const ZEROEVAL_BENCH_MAP: Record<string, string> = {
   swebench: 'SWE-bench', gpqa: 'GPQA Diamond', mmlu: 'MMLU', humaneval: 'HumanEval', math: 'MATH',
@@ -14,6 +13,10 @@ const ZEROEVAL_BENCH_MAP: Record<string, string> = {
 
 export interface BenchmarkOpts {
   force?: boolean;
+}
+
+export function getRefreshIntervalMs(): number {
+  return refreshIntervalMs();
 }
 
 export async function fetchBenchmarks(source: 'modelbench' | 'zeroeval', _opts: BenchmarkOpts = {}): Promise<SyncResult> {
@@ -38,9 +41,9 @@ async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number
   let count = 0;
   let page = 1;
   const limit = 50;
-  let total = Infinity;
+  const maxModels = 10_000;
   const fields = 'slug,name,intelligence_score,coding_score,agentic_score,speed_tps,benchmark_data,source';
-  while (page <= Math.ceil(total / limit) && page <= 20) {
+  while (page * limit <= maxModels) {
     const url = `${MODELBENCH_API}?limit=${limit}&page=${page}&fields=${fields}`;
     const res = await fetch(url);
     if (!res.ok) {
@@ -49,7 +52,6 @@ async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number
     }
     const raw = await res.json();
     const parsed = ModelbenchResponseSchema.parse(raw) as ModelbenchResponse;
-    total = parsed.meta?.total ?? parsed.data.length;
     for (const m of parsed.data) {
       const canonicalId = matchModelToCanonical(undefined, undefined, catalog, m.name);
       if (!canonicalId) continue;
@@ -76,6 +78,7 @@ async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number
       }
     }
     page++;
+    if (parsed.data.length < limit) break;
   }
   return count;
 }
@@ -113,7 +116,7 @@ async function fetchZeroEval(db: any, catalog: CatalogEntry[]): Promise<number> 
 
 async function updateCacheState(db: any, source: string, status: string, error: string | undefined, count: number): Promise<void> {
   const now = new Date();
-  const next = new Date(now.getTime() + REFRESH_INTERVAL_MS).toISOString();
+  const next = new Date(now.getTime() + getRefreshIntervalMs()).toISOString();
   await db.insert(catalog_cache_state).values({
     source, last_fetch: now.toISOString(), last_status: status,
     last_error: error ?? null, count, next_refresh: next,

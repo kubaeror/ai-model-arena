@@ -10,6 +10,7 @@ import {
   getAllScheduleStates,
   addSchedule,
   removeSchedule,
+  setScheduleEnabled,
 } from '../../scheduler/manager.js';
 import { createLogger } from '../../logger/pino-logger.js';
 
@@ -63,6 +64,26 @@ export function createSchedulesRouter(): Router {
     } catch (err) {
       res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
     }
+  });
+
+  router.patch('/:id', requireRole('admin'), async (req, res) => {
+    const { enabled } = req.body ?? {};
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({ error: 'enabled (boolean) is required' });
+      return;
+    }
+    const schedule = getSchedule(req.params.id as string);
+    if (!schedule) {
+      res.status(404).json({ error: 'Schedule not found' });
+      return;
+    }
+    const ok = await setScheduleEnabled(configPath(), req.params.id as string, enabled, logger);
+    if (!ok) {
+      res.status(404).json({ error: 'Schedule not found' });
+      return;
+    }
+    const updated = getSchedule(req.params.id as string)!;
+    res.json({ ...updated, state: getScheduleState(req.params.id as string) ?? null });
   });
 
   router.delete('/:id', requireRole('admin'), async (req, res) => {

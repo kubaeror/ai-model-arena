@@ -28,6 +28,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
+    this.providerLabel = descriptor.id;
     // Fail fast on unconfigured placeholder URLs (e.g. azure-openai's
     // https://{resource}.openai.azure.com/openai/v1) instead of POSTing to a
     // literal '{resource}' hostname and failing with a confusing DNS error.
@@ -43,7 +44,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
   supportsPromptCaching(): boolean { return true; }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const body = this.buildBody(messages, tools, opts);
       const res = await this.fetchEndpoint('/chat/completions', body);
       if (!res.ok) {
@@ -52,7 +53,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
       }
       const json = (await res.json()) as OpenAIResponse;
       return this.parseResponse(json);
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
@@ -71,6 +72,7 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
     }
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+    if (opts?.reasoning?.type === 'effort') body.reasoning_effort = String(opts.reasoning.value ?? 'medium');
     return body;
   }
 

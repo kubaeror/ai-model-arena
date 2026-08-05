@@ -1,13 +1,15 @@
 import { listDueSchedules, updateScheduleRun } from '../db/query.js';
 import { CronExpressionParser } from 'cron-parser';
-import { updateScheduleState, getScheduleState } from './manager.js';
+import { updateScheduleState, getScheduleState, getSchedule } from './manager.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { scheduleFailures } from '../observability/metrics.js';
+import type { RunStartOptions } from '../orchestrator/run-lifecycle.js';
 
 const logger = createLogger('ai-arena:scheduler');
 
-export async function tickScheduler(): Promise<{ ticked: string[]; failures: string[] }> {
-  const now = new Date().toISOString();
+export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions: RunStartOptions) => Promise<unknown> } = {}): Promise<{ ticked: string[]; failures: string[] }> {
+  const now = opts.now?.toISOString() ?? new Date().toISOString();
+  const start = opts.startRunFn ?? (await import('../orchestrator/run-lifecycle.js')).startRun;
   const rows = await listDueSchedules(now);
 
   const ticked: string[] = [];
@@ -30,13 +32,21 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
     let scheduleFailed = false;
 
     try {
-      // Route through startRun() for proper budget check + run registration
-      const { startRun } = await import('../orchestrator/run-lifecycle.js');
-      await startRun({
+      // Route through startRun() for proper budget check + run registration.
+      // Per-schedule options (timeoutMs/forceBudget) come from the YAML config,
+      // not the DB row — join via the in-memory schedule record.
+      const schedule = getSchedule(scheduleId);
+      if (!schedule) {
+        logger.warn('Schedule due in DB but missing from loaded schedules config; options (timeoutMs/forceBudget) will not be applied', { scheduleId });
+      }
+      const runOptions: RunStartOptions = {
         scenario: String(row.scenario),
         models,
         source: 'scheduler',
-      });
+      };
+      if (schedule?.options?.timeoutMs !== undefined) runOptions.timeoutMs = schedule.options.timeoutMs;
+      if (schedule?.options?.forceBudget !== undefined) runOptions.forceBudget = schedule.options.forceBudget;
+      await start(runOptions);
     } catch (err) {
       scheduleFailed = true;
       logger.warn('Schedule startRun failed', {
@@ -45,10 +55,12 @@ export async function tickScheduler(): Promise<{ ticked: string[]; failures: str
       });
     }
 
-    // next_run advances only on success; a failed attempt backs off 1h so a
-    // persistently broken schedule does not hot-loop every tick.
+    // next_run advances only on success; a failed attempt backs off
+    // SCHEDULER_FAILURE_BACKOFF_MS (default 1h) so a persistently broken
+    // schedule does not hot-loop every tick.
     if (scheduleFailed) {
-      const backoff = new Date(nowMs + 3600000).toISOString();
+      const backoffMs = Number(process.env.SCHEDULER_FAILURE_BACKOFF_MS ?? 3_600_000);
+      const backoff = new Date(nowMs + (Number.isFinite(backoffMs) && backoffMs > 0 ? backoffMs : 3_600_000)).toISOString();
       await updateScheduleRun(scheduleId, now, backoff);
       scheduleFailures.inc({ schedule_id: scheduleId });
       failures.push(scheduleId);

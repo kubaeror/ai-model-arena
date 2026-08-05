@@ -17,14 +17,21 @@ export interface Task {
   _traceparent?: string;
 }
 
+/** Max delivery attempts before a task dead-letters (in-memory hardcode + redis default). */
+export const DEFAULT_MAX_ATTEMPTS = 5;
+
 export interface TaskQueue {
   enqueue(task: Task): Promise<void>;
   dequeue(timeoutMs?: number): Promise<Task | null>;
   ack(taskId: string): Promise<void>;
   nack(taskId: string, reason?: string): Promise<void>;
+  /** Delivery attempts after which nack dead-letters instead of requeuing. */
+  maxAttempts?: number;
   size(): Promise<number>;
+  /** Number of tasks waiting to be processed (not in-flight). */
+  pendingCount?(): Promise<number>;
   deadLetterSize?(): Promise<number>;
   deadLetterPeek?(limit: number): Promise<Task[]>;
-  deadLetterRetry?(taskId: string): Promise<void>;
+  deadLetterRetry?(taskId: string): Promise<boolean>;
   close?(): Promise<void>;
 }

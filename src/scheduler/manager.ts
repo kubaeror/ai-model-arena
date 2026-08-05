@@ -7,8 +7,6 @@ import { SchedulesConfigSchema } from './types.js';
 
 let schedulesConfig: SchedulesConfig | null = null;
 const scheduleStates = new Map<string, ScheduleState>();
-let _schedulerStarted = false;
-void _schedulerStarted;
 
 export function loadSchedulesConfig(configPath: string, logger?: Logger): SchedulesConfig {
   if (schedulesConfig) return schedulesConfig;
@@ -94,6 +92,27 @@ export async function removeSchedule(configPath: string, id: string, logger?: Lo
   return true;
 }
 
+export async function setScheduleEnabled(configPath: string, id: string, enabled: boolean, logger?: Logger): Promise<boolean> {
+  const config = loadSchedulesConfig(configPath, logger);
+  const schedule = config.schedules.find(s => s.id === id);
+  if (!schedule) return false;
+
+  schedule.enabled = enabled;
+
+  const resolvedPath = path.resolve(configPath);
+  fs.writeFileSync(resolvedPath, dump(config));
+
+  try {
+    // Full re-sync so the edited YAML (enabled, scenario, cron, models)
+    // propagates to the DB the ticker reads, not just the enabled flag.
+    await syncSchedulesToDb(configPath, logger);
+  } catch (err) {
+    logger?.warn('syncSchedulesToDb failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+  }
+
+  return true;
+}
+
 export async function syncSchedulesToDb(configPath: string, logger?: Logger): Promise<void> {
   try {
     const config = loadSchedulesConfig(configPath, logger);
@@ -115,5 +134,4 @@ export async function syncSchedulesToDb(configPath: string, logger?: Logger): Pr
 export function resetSchedulesCache(): void {
   schedulesConfig = null;
   scheduleStates.clear();
-  _schedulerStarted = false;
 }

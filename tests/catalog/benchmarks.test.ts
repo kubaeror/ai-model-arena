@@ -33,6 +33,16 @@ function freshDb() {
   return () => fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+function modelbenchPage(page: number, limit: number, total: number, pageModels: number) {
+  const data = Array.from({ length: pageModels }, () => ({
+    slug: 'openai/gpt-4o', name: 'GPT-4o', developer: 'OpenAI',
+    intelligence_score: 75.2, coding_score: 80.1, agentic_score: 72.0, speed_tps: 48.0,
+    benchmark_data: { 'Intelligence Index': 75.2, 'Coding Score': 80.1, 'GPQA Diamond': 60.5 },
+    source: 'https://modelbench.lol/models/openai/gpt-4o',
+  }));
+  return { data, meta: { page, limit, total } };
+}
+
 function mockFetchImpl(urlMap: Record<string, () => unknown>): typeof fetch {
   return (async (input: RequestInfo | URL) => {
     const u = String(input);
@@ -65,6 +75,44 @@ test('fetchBenchmarks modelbench upserts benchmark rows with is_preferred flags'
     assert.equal(gpqa.is_preferred, 0);
     const cs = rows.find(r => r.benchmark === 'Coding Score')!;
     assert.equal(cs.is_preferred, 1);
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
+test('fetchBenchmarks modelbench paginates past the 20-page cap and ingests all models', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  const limit = 50;
+  const fullPages = 20;
+  const lastCount = 10;
+  const total = fullPages * limit + lastCount;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const u = String(input);
+    if (u.includes('models.dev/api.json')) {
+      return { status: 200, ok: true, json: async () => MODELS_DEV } as unknown as Response;
+    }
+    if (u.includes('modelbench.lol/api/v1/models')) {
+      const page = Number(new URL(u).searchParams.get('page'));
+      if (page <= fullPages) {
+        return { status: 200, ok: true, json: async () => modelbenchPage(page, limit, total, limit) } as unknown as Response;
+      }
+      if (page === fullPages + 1) {
+        return { status: 200, ok: true, json: async () => modelbenchPage(page, limit, total, lastCount) } as unknown as Response;
+      }
+      return { status: 200, ok: true, json: async () => modelbenchPage(page, limit, total, 0) } as unknown as Response;
+    }
+    return { status: 404, ok: false, json: async () => ({}), text: async () => 'not found' } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    const result = await fetchBenchmarks('modelbench', { force: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.count, total * 5);
+    const rows = getDb().prepare('SELECT COUNT(DISTINCT benchmark) AS b FROM benchmarks').all() as Array<{ b: number }>;
+    assert.equal(rows[0].b, 5);
   } finally {
     globalThis.fetch = origFetch;
     closeDb();

@@ -1,12 +1,17 @@
 import type { DispatchEvent, NotificationResult } from './types.js';
 import type { Logger } from '../types.js';
+import { postWithRetry } from './retry.js';
 
 function regressionSummary(data: Record<string, unknown>): string {
   const regressions = data.regressions;
   if (Array.isArray(regressions)) {
     return regressions.map((r) => {
-      const x = r as { metric?: string; baseline?: number; current?: number };
-      return `${x.metric}`;
+      const x = r as { metric?: string; baseline?: number; current?: number; threshold?: number };
+      const parts = [`${x.metric}`];
+      if (x.baseline != null) parts.push(`baseline=${x.baseline}`);
+      if (x.current != null) parts.push(`current=${x.current}`);
+      if (x.threshold != null) parts.push(`threshold=${x.threshold}`);
+      return parts.join(' ');
     }).join(', ');
   }
   if (regressions == null) return 'n/a';
@@ -102,11 +107,7 @@ export async function sendDiscordNotification(
   const timestamp = new Date().toISOString();
   
   try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formatDiscordPayload(event)),
-    });
+    const response = await postWithRetry(webhookUrl, JSON.stringify(formatDiscordPayload(event)), {}, logger);
     
     if (!response.ok) {
       const text = await response.text();

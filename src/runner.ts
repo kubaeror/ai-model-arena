@@ -6,11 +6,11 @@ import { outputRoot, dbPath, findProjectRoot } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState } from './db/query.js';
 import { resumeFrom } from './runner/checkpoint.js';
-import { createQueue, type TaskQueue, type Task } from './queue/index.js';
+import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun } from './db/model-resolver.js';
-import { loadScenario, resolveScenarioPath, type ScenarioConfig } from './config.js';
+import { loadScenario, resolveScenarioPath, toSendOptsReasoning, type ScenarioConfig } from './config.js';
 import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { writeReport } from './logger/report-logger.js';
@@ -18,19 +18,20 @@ import { writeResultJson, type RunResult } from './logger/result-logger.js';
 import { Sandbox, sandboxEnv } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
-import { generateManifest, writeManifest } from './sandbox/artifact-manifest.js';
+import { generateManifest, writeManifest, buildProducedByTool } from './sandbox/artifact-manifest.js';
 import { getProfile, getAllowedTools } from './profiles/definitions.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
-import { resolveFallback, type FallbackConfig } from './providers/fallback.js';
+import { resolveFallback, resolveMaxFallbackHops, type FallbackConfig } from './providers/fallback.js';
 import { loadBudgetConfig, checkBudget, computeCost } from './cost-tracking/index.js';
-import { isKillSwitchActive, isRunCancelled, clearRunCancelled } from './orchestrator/run-lifecycle.js';
-import { activeTasks, taskCounter, taskDuration, startMetricsServer } from './observability/metrics.js';
+import { isKillSwitchActive, isRunCancelled, clearRunCancelled, dispatchBudgetExceeded } from './orchestrator/run-lifecycle.js';
+import { activeTasks, taskCounter, taskDuration, tasksClaimed, tasksFailed, startMetricsServer } from './observability/metrics.js';
 import type { ToolExecutionContext, TokenUsage, ChatMessage } from './types.js';
 import type { StoredMessage } from './session/store.js';
 import { closeDb } from './db/index.js';
 import { secretStore } from './secrets/store.js';
+import { assertRequiredEnv } from './env/required.js';
 
 export interface RunnerOptions {
   queue?: TaskQueue;
@@ -126,10 +127,24 @@ export async function runSuccessCriteria(
 }
 
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
+  const logger = createLogger('ai-arena:runner');
+
+  // Fail fast on missing required env before createQueue/initDb connect.
+  try {
+    assertRequiredEnv('runner');
+  } catch (err) {
+    logger.error(err instanceof Error ? err.message : String(err), { component: 'runner', action: 'exit' });
+    process.exit(1);
+  }
+
   const queue = opts.queue ?? createQueue();
+  // Mirrors each queue driver's nack dead-letter decision: a nack bumps the
+  // task's attempts and dead-letters at >= maxAttempts, so the attempt being
+  // nacked right now is terminal iff attempts + 1 >= maxAttempts.
+  const maxTaskAttempts = queue.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const isTerminalFailure = (attempts: number): boolean => attempts + 1 >= maxTaskAttempts;
   const ac = new AbortController();
   const signal = opts.signal ?? ac.signal;
-  const logger = createLogger('ai-arena:runner');
   const runnerId = process.env.REDIS_CONSUMER_NAME ?? `runner-${process.pid}`;
 
   const root = findProjectRoot();
@@ -242,6 +257,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         await queue.ack(task._redisId ?? task.taskId);
         continue;
       }
+      // Only count claimed once the task is actually executed — a cancelled
+      // task acked without running would skew claimed/failed ratios.
+      tasksClaimed.inc();
 
       logger.info('Task dequeued', { taskId: task.taskId, model: task.model, scenario: task.scenario });
 
@@ -253,7 +271,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       let session = await store.loadSession(task.sessionId);
       let resumedMessages: ChatMessage[] | undefined;
       if (!session) {
-        session = await store.createSession({ model: task.model });
+        session = await store.createSession({ id: task.sessionId, model: task.model });
         // Nothing to resume — nothing persisted yet.
       } else {
         const resumed = await resumeFrom(session.id);
@@ -326,9 +344,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const resolved = await resolveModelForRun(modelName);
       if (!resolved) {
         logger.error('Model not found', { model: modelName });
-        taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-        taskDuration.observe((Date.now() - startedAt.getTime()) / 1000);
-        taskCounted = true;
+        // nack requeues below the DLQ threshold — count failed + duration
+        // only when the nack dead-letters (terminal).
+        if (isTerminalFailure(task!.attempts)) {
+          taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
+          taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
+          taskCounted = true;
+          tasksFailed.inc();
+        }
         await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
         continue;
       }
@@ -348,8 +371,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           logger.warn('Failed to write failed state', { error: String(e) }),
         );
         taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-        taskDuration.observe((Date.now() - startedAt.getTime()) / 1000);
+        taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
         taskCounted = true;
+        tasksFailed.inc();
         await queue.ack(task!._redisId ?? task!.taskId);
         continue;
       }
@@ -382,10 +406,13 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         allowedTools: toolCtx.allowedTools,
       };
       let loopResult;
-      let maxFallbackHops = 3;
+      let maxFallbackHops = resolveMaxFallbackHops();
       // Cumulative spend of this run's tokens, so per-turn budget checks see
       // the current run (addSpend is only called during finalize otherwise).
       let prevRunCost = 0;
+      // Scenario-configured reasoning, converted to the adapter union shape.
+      // Undefined when the scenario sets nothing — no behavior change.
+      const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
 
       // Transition to 'running'
       transitionTaskState(runId, task.model, 'running', runnerId).catch(e =>
@@ -413,11 +440,12 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             model: currentModel,
             temperature: 0,
             maxTokens: 0,
+            sendOpts: reasoningOpt ? { reasoning: reasoningOpt } : undefined,
             scenario: scenarioName,
             runId: modelRunId,
             modelConfig: modelName,
             outputDir: runOutputDir,
-            onTurnComplete: async (turn, newMessages, usage) => {
+            onTurnComplete: async (turn, newMessages, usage, durationMs) => {
               // Persist the real conversation so checkpoint/resume replays
               // actual content instead of empty stubs.
               for (const m of newMessages) {
@@ -433,6 +461,29 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                   tokenOutput: usage.completion ?? null,
                   createdAt: new Date().toISOString(),
                 });
+              }
+              // Record the model call for this turn; the request latency is
+              // the TTFT for non-streaming sends (first byte ≈ full latency).
+              try {
+                const assistantMsg = [...newMessages].reverse().find((m) => m.role === 'assistant');
+                await store.recordModelCall({
+                  sessionId: session.id,
+                  turn,
+                  provider: currentProvider,
+                  model: currentModel,
+                  requestHash: `${task!.taskId}:${turn}`,
+                  responseText: assistantMsg?.content ?? null,
+                  usage: {
+                    prompt: usage.prompt ?? 0,
+                    completion: usage.completion ?? 0,
+                    total: usage.total ?? 0,
+                    cacheReadTokens: usage.cacheReadTokens ?? 0,
+                  },
+                  latencyMs: durationMs ?? null,
+                  ttftMs: durationMs ?? null,
+                });
+              } catch (e) {
+                logger.warn('Failed to record model call (non-fatal)', { turn, err: String(e) });
               }
               // Track this run's spend so the per-turn budget check below can
               // trip on it (spend only reaches the ledger at finalize time).
@@ -456,6 +507,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               const budgetCheck = checkBudget(modelName, root, false, logger, prevRunCost);
               if (!budgetCheck.allowed) {
                 logger.warn('Budget exceeded during run', { model: modelName, spent: budgetCheck.spentUsd, limit: budgetCheck.limitUsd });
+                void dispatchBudgetExceeded(modelName, budgetCheck, logger).catch(() => undefined);
                 return false;
               }
               return true;
@@ -532,7 +584,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         logger.warn('Failed to write final state', { error: String(e) }),
       );
       try {
-        const manifest = generateManifest(sandboxDir, modelRunId, modelName);
+        const producedByTool = buildProducedByTool(conv.entries);
+        const manifest = generateManifest(sandboxDir, modelRunId, modelName, producedByTool);
         writeManifest(manifest, runOutputDir, logger);
         // Persist per-file rows so the dashboard Files page has lineage data.
         // Replaced per runId so restarts do not duplicate rows.
@@ -562,7 +615,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
 
       taskCounter.inc({ model: modelName, scenario: scenarioName, status: finalStatus });
-      taskDuration.observe((finishedAt.getTime() - startedAt.getTime()) / 1000);
+      taskDuration.observe({ model: modelName, scenario: scenarioName }, (finishedAt.getTime() - startedAt.getTime()) / 1000);
       taskCounted = true;
 
       logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed, success });
@@ -584,10 +637,15 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
           logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: failedTask.taskId, modelRunId: failedTask.config.modelRunId ?? failedTask.sessionId, ...detail });
         });
-        if (!taskCounted) {
+        // nack requeues below the DLQ threshold — count failed + duration
+        // only when the nack dead-letters (terminal).
+        if (!taskCounted && isTerminalFailure(failedTask.attempts)) {
           taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
-          if (taskStartedAt) taskDuration.observe((Date.now() - taskStartedAt.getTime()) / 1000);
+          if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
+          taskCounted = true;
         }
+        // nack requeues below the DLQ threshold — count only when it dead-letters.
+        if (isTerminalFailure(failedTask.attempts)) tasksFailed.inc();
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {

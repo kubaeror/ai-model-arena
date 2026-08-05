@@ -3,6 +3,7 @@ import {
   createSession, getSessionById, updateSessionStatus,
   createMessage, listMessagesBySession,
   upsertModelCall, getModelCallBySessionAndTurn,
+  deleteSessionCascade,
 } from '../db/query.js';
 
 export type SessionStatus = 'active' | 'completed' | 'errored';
@@ -39,21 +40,24 @@ export interface ModelCallRecord {
   responseText: string | null;
   usage: Record<string, unknown> | null;
   latencyMs: number | null;
+  /** Time-to-first-token in ms (non-streaming: equals the request latency). */
+  ttftMs?: number | null;
 }
 
 export interface SessionStore {
-  createSession(opts: { promptId?: string; promptVersion?: number; model: string }): Promise<Session>;
+  createSession(opts: { id?: string; promptId?: string; promptVersion?: number; model: string }): Promise<Session>;
   loadSession(sessionId: string): Promise<Session | null>;
   appendMessage(sessionId: string, msg: StoredMessage): Promise<void>;
   listMessages(sessionId: string): Promise<StoredMessage[]>;
   recordModelCall(call: ModelCallRecord): Promise<void>;
   getModelCall(sessionId: string, turn: number): Promise<ModelCallRecord | null>;
   updateSessionStatus(sessionId: string, status: SessionStatus): Promise<void>;
+  deleteSession(sessionId: string): Promise<void>;
 }
 
 class SqliteSessionStore implements SessionStore {
-  async createSession(opts: { promptId?: string; promptVersion?: number; model: string }): Promise<Session> {
-    const id = crypto.randomUUID();
+  async createSession(opts: { id?: string; promptId?: string; promptVersion?: number; model: string }): Promise<Session> {
+    const id = opts.id ?? crypto.randomUUID();
     const now = new Date().toISOString();
     await createSession({
       id, promptId: opts.promptId ?? null, promptVersion: opts.promptVersion ?? null,
@@ -105,7 +109,7 @@ class SqliteSessionStore implements SessionStore {
       id: crypto.randomUUID(), sessionId: call.sessionId, turn: call.turn,
       provider: call.provider, model: call.model, requestHash: call.requestHash,
       responseText: call.responseText, usage: call.usage ? JSON.stringify(call.usage) : null,
-      latencyMs: call.latencyMs, createdAt: new Date().toISOString(),
+      latencyMs: call.latencyMs, ttftMs: call.ttftMs ?? null, createdAt: new Date().toISOString(),
     });
   }
 
@@ -121,11 +125,16 @@ class SqliteSessionStore implements SessionStore {
       responseText: row.response_text ?? null,
       usage: row.usage ? JSON.parse(row.usage) : null,
       latencyMs: row.latency_ms ?? null,
+      ttftMs: row.ttft_ms ?? null,
     };
   }
 
   async updateSessionStatus(sessionId: string, status: SessionStatus): Promise<void> {
     await updateSessionStatus(sessionId, status);
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await deleteSessionCascade(sessionId);
   }
 }
 

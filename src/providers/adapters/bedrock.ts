@@ -35,12 +35,13 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
   // like clock skew or revoked credentials require a fresh client).
   private static CLIENT_MAX_AGE_MS = 55 * 60 * 1000;
 
-  constructor(_descriptor: ProviderDescriptor, modelId: string, opts: CreateAdapterOpts) {
+  constructor(descriptor: ProviderDescriptor, modelId: string, opts: CreateAdapterOpts) {
     super(opts.logger);
     this.modelId = modelId;
     this.gatewayUrl = opts.baseUrl ?? process.env.AWS_BEDROCK_GATEWAY_URL;
     this.gatewayKey = opts.apiKey ?? process.env.AWS_BEDROCK_GATEWAY_KEY;
     this.useGateway = !!this.gatewayUrl;
+    this.providerLabel = descriptor.id;
 
     // Resolve region: env var > AWS_REGION > AWS_DEFAULT_REGION
     // No hardcoded fallback — require explicit configuration
@@ -94,7 +95,7 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
 
   /** Native SigV4 via AWS SDK Converse API */
   private async sendViaSdk(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const client = await this.getClient();
 
       const converseMessages: Array<{
@@ -188,12 +189,12 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
         stopReason: response.stopReason,
         raw: response,
       };
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
   /** Gateway proxy fallback (backward compatible) */
   private async sendViaGateway(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const body: Record<string, unknown> = {
         model: this.modelId,
         messages: messages.map(m => ({
@@ -230,11 +231,11 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
       }
       return {
         text: choice.message.content ?? null,
-        toolCalls: (choice.message.tool_calls ?? []).map(tc => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: JSON.parse(tc.function.arguments || '{}'),
-        })),
+        toolCalls: (choice.message.tool_calls ?? []).map(tc => {
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { args = {}; }
+          return { id: tc.id, name: tc.function.name, arguments: args };
+        }),
         usage: {
           prompt: json.usage.prompt_tokens,
           completion: json.usage.completion_tokens,
@@ -243,6 +244,6 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
         stopReason: choice.finish_reason,
         raw: json,
       };
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 }

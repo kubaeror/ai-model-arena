@@ -4,6 +4,7 @@ export const PricingSchema = z.record(z.string(), z.object({
   input: z.number().min(0),
   output: z.number().min(0),
   cached: z.number().min(0).optional().default(0),
+  cache_write: z.number().min(0).optional(),
 }));
 
 export const PricingConfigSchema = z.object({
@@ -43,6 +44,7 @@ export interface BudgetState {
     daily: Record<string, number>;
     monthly: Record<string, number>;
   }>;
+  reservations?: Record<string, Array<{ amount: number; dailyKey: string }>>;
   lastReset: string;
 }
 

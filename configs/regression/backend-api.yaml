@@ -2,7 +2,7 @@ models:
   - gpt-4o
   - claude-sonnet-4
 scenarios:
-  - backend-api
+  - express-rest
 baselineDir: outputs/baselines
 thresholds:
   scoreDrop: 1.0

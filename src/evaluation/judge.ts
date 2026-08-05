@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
-import { ProviderRegistry, loadBuiltins } from '../providers/index.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
+import type { ModelAdapter } from '../providers/adapters/base.js';
 import type { EvaluationConfig, JudgeResult, JudgeScore, Rubric } from './types.js';
 import { EvaluationConfigSchema } from './types.js';
 
@@ -21,6 +21,47 @@ export function loadEvaluationConfig(configPath: string, logger?: Logger): Evalu
 
 export function clampScore(n: number): number {
   return Math.min(100, Math.max(0, n));
+}
+
+/**
+ * Extract the first JSON object from a model response.
+ * Tries, in order: direct parse, fenced block (```json ... ```), balanced-brace
+ * scan (handles trailing prose), then null when no valid JSON is present.
+ */
+export function extractJsonObject(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch { /* fall through */ }
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+  const candidate = fenced ? fenced[1]! : trimmed;
+  try {
+    return JSON.parse(candidate.trim());
+  } catch { /* fall through */ }
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+  try {
+    return JSON.parse(candidate.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Weighted average: Σ(score·maxScore)/Σ(maxScore). Falls back to a plain mean
+ * when any score is missing a usable maxScore.
+ */
+export function computeAverageScore(scores: JudgeScore[]): number {
+  if (scores.length === 0) return 0;
+  const allWeighted = scores.every((s) => typeof s.maxScore === 'number' && s.maxScore > 0);
+  if (allWeighted) {
+    const weighted = scores.reduce((sum, s) => sum + s.score * s.maxScore, 0);
+    const weights = scores.reduce((sum, s) => sum + s.maxScore, 0);
+    return weighted / weights;
+  }
+  return scores.reduce((sum, s) => sum + s.score, 0) / scores.length;
 }
 
 function buildJudgePrompt(rubric: Rubric | undefined, task: string, files: Record<string, string>): string {
@@ -67,53 +108,55 @@ export async function runJudgeScoring(
   task: string,
   files: Record<string, string>,
   config: EvaluationConfig,
-  logger?: Logger
+  logger?: Logger,
+  adapter?: ModelAdapter
 ): Promise<JudgeResult | null> {
   const judgeConfig = config.judge;
   if (!judgeConfig?.enabled) return null;
 
-  const resolved = await resolveModelForRun(judgeConfig.model);
-  if (!resolved) {
-    logger?.warn('Judge model not found in catalog', { model: judgeConfig.model });
-    return null;
+  let llmAdapter = adapter;
+  if (!llmAdapter) {
+    const resolved = await resolveModelForRun(judgeConfig.model);
+    if (!resolved) {
+      logger?.warn('Judge model not found in catalog', { model: judgeConfig.model });
+      return null;
+    }
+    const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
+    const { ProviderRegistry, loadBuiltins } = await import('../providers/index.js');
+    const registry = new ProviderRegistry();
+    loadBuiltins(registry);
+    await registry.loadCustomFromDb();
+    llmAdapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger?.child('judge') });
   }
-  const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
-  const registry = new ProviderRegistry();
-  loadBuiltins(registry);
-  await registry.loadCustomFromDb();
-  const adapter = registry.createAdapter(resolved.providerId, resolved.apiModelId, { apiKey, logger: logger?.child('judge') });
-  
+
   const prompt = buildJudgePrompt(config.rubric, task, files);
   
   try {
-    const response = await adapter.sendMessage(
+    const response = await llmAdapter.sendMessage(
       [{ role: 'user', content: prompt }],
       []
     );
     
     const text = response.text ?? '';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    const parsed = extractJsonObject(text);
+    if (!parsed) {
       logger?.warn('Judge response did not contain valid JSON');
       return null;
     }
-    
-    const parsed = JSON.parse(jsonMatch[0]);
-    const scores: JudgeScore[] = parsed.scores ?? [];
-    const averageScore = clampScore(
-      scores.reduce((sum: number, s: JudgeScore) => sum + s.score, 0) / Math.max(scores.length, 1)
-    );
-    
+    const json = parsed as { scores?: JudgeScore[]; summary?: string };
+    const scores: JudgeScore[] = json.scores ?? [];
+    const averageScore = clampScore(computeAverageScore(scores));
+
     const result: JudgeResult = {
       model,
       runId,
       scores,
       averageScore,
-      summary: parsed.summary ?? 'No summary provided',
+      summary: json.summary ?? 'No summary provided',
       judgedAt: new Date().toISOString(),
       judgeModel: judgeConfig.model,
     };
-    
+
     return result;
   } catch (err) {
     logger?.error('Judge scoring failed', { error: String(err) });

@@ -43,6 +43,34 @@
       "when": 1785851928103,
       "tag": "0005_query_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785882839214,
+      "tag": "0006_wet_morgan_stark",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785895452610,
+      "tag": "0007_steady_spyke",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785896868348,
+      "tag": "0008_strong_thing",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785897503041,
+      "tag": "0009_rapid_shotgun",
+      "breakpoints": true
     }
   ]
 }

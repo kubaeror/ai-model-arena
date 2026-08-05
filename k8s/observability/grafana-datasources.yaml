@@ -1,10 +1,10 @@
+# Provisioned via file provisioning (mounted at
+# /etc/grafana/provisioning/datasources by grafana.yaml) — no sidecar needed.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-datasources
   namespace: observability
-  labels:
-    grafana_datasource: "1"
 data:
   datasources.yaml: |
     apiVersion: 1
@@ -18,3 +18,9 @@ data:
         type: loki
         access: proxy
         url: http://loki.observability:3100
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://tempo.observability:3200
+        jsonData:
+          httpMethod: GET

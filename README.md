@@ -78,8 +78,8 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 | **Runner entry** | `src/runner-entry.ts` | Container entrypoint (starts OTel + runner) |
 | **Queue** | `src/queue/` | Abstraction: `types`, `in-memory`, `redis` (Streams with consumer groups + XAUTOCLAIM), `router`, `redis-config` |
 | **Agent loop** | `src/agent-loop/loop.ts` | Core send→tool→loop with per-turn budget/cancellation checks |
-| **Providers** | `src/providers/` | Provider registry (59 providers), descriptor system, 4 adapter families (openai-compat, anthropic, google, bedrock) |
-| **Provider adapters** | `src/providers/adapters/` | Wire-format translation: `openai-compat`, `anthropic`, `google`, `bedrock` (4 adapter families covering all 59 providers) |
+| **Providers** | `src/providers/` | Provider registry (58 providers), descriptor system, 4 adapter families (openai-compat, anthropic, google, bedrock) |
+| **Provider adapters** | `src/providers/adapters/` | Wire-format translation: `openai-compat`, `anthropic`, `google`, `bedrock` (4 adapter families covering all 58 providers) |
 | **Tools** | `src/tools/` | 13 tools: read_file, write_file, edit_file, glob, list_files, run_shell_command, search_code, web_fetch, web_search, todo_read, todo_write, task (subagent), task_complete — with JSON-Schema definitions, Zod-validated executors, sandbox enforcement, shell policy, and web access gating |
 | **Sandbox** | `src/sandbox/` | Isolated workspace with path escape prevention, shell policy, git integration |
 | **Session store** | `src/session/store.ts` | Message + session persistence per turn |

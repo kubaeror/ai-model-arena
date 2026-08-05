@@ -6,7 +6,7 @@ import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing } from '../cost-tracking/index.js';
-import { ARENA_PREFIX, projectRoot, timestamp, sanitizeName } from './utils.js';
+import { projectRoot, timestamp } from './utils.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/index.js';
@@ -21,13 +21,43 @@ import {
 } from './run-index.js';
 import { analyzeRun } from '../anomaly-detection/index.js';
 import { runJudgeScoring, loadEvaluationConfig, writeJudgeResult } from '../evaluation/judge.js';
+import { insertJudgeScore } from '../db/query.js';
+import type { ModelAdapter } from '../providers/adapters/base.js';
 
 function makeIdempotencyKey(scenario: string, models: string[]): string {
   return crypto.createHash('sha256').update(`${scenario}:${models.join(',')}`).digest('hex').slice(0, 32);
 }
 
+/** Non-blocking: fire budget_exceeded webhooks for a model that tripped its budget limit. */
+export async function dispatchBudgetExceeded(
+  modelName: string,
+  check: { spentUsd: number; limitUsd: number | null; percentUsed: number; reason?: string },
+  logger?: Logger,
+): Promise<void> {
+  try {
+    const { dispatchWebhooks } = await import('../notifications/webhooks.js');
+    await dispatchWebhooks('budget_exceeded', {
+      model: modelName,
+      spentUsd: check.spentUsd,
+      limitUsd: check.limitUsd,
+      percentUsed: check.percentUsed,
+      reason: check.reason ?? `Budget exceeded for ${modelName}`,
+    }, logger);
+  } catch { /* non-blocking */ }
+}
+
 /** Per-run budget reservations (runId -> model -> reserved USD). */
 const runReservations = new Map<string, Map<string, number>>();
+
+/**
+ * Tokens per turn used for the up-front cost estimate. Configurable via
+ * RUN_COST_ESTIMATE_TOKENS (integer, fallback 8000, clamped to >= 1).
+ */
+function costEstimateTokensPerTurn(): number {
+  const raw = Number.parseInt(process.env.RUN_COST_ESTIMATE_TOKENS ?? '', 10);
+  if (Number.isNaN(raw)) return 8000;
+  return Math.max(1, raw);
+}
 
 let anomalyAnalysisFailures = 0;
 let statsWritebackFailures = 0;
@@ -35,7 +65,6 @@ let statsWritebackFailures = 0;
 export interface PerModelSpec {
   model: string;
   providerId: string;
-  procName: string;
   outputDir: string;
   sandboxDir: string;
   resultPath: string;
@@ -72,13 +101,7 @@ export interface RunStartOptions {
 
 export interface PerModelStatus {
   model: string;
-  procName: string;
   status: string;
-  pid: number | null;
-  cpu?: number;
-  memory?: number;
-  uptime?: number;
-  restarts?: number;
   exitCode: number | null;
   online: boolean;
 }
@@ -99,14 +122,12 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   const runId = `${opts.scenario}_${ts}`;
   const perModel: PerModelSpec[] = await Promise.all(opts.models.map(async (model) => {
     const resolved = await resolveModelForRun(model);
-    const procName = sanitizeName(`${ARENA_PREFIX}${model}-${opts.scenario}-${ts}`);
     const outputDir = path.join(outputRoot(), model, runId);
     const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
     fs.mkdirSync(pm2LogDir, { recursive: true });
     return {
       model,
       providerId: resolved?.providerId ?? 'unknown',
-      procName,
       outputDir,
       sandboxDir: path.join(outputDir, 'files'),
       resultPath: path.join(outputDir, 'result.json'),
@@ -131,7 +152,7 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
 /** Register a run (status=running) in the index. */
 export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli', createdBy?: string): Promise<void> {
   const perModel: RunIndexModelEntry[] = spec.models.map((m) => ({
-    model: m.model, runId: spec.runId, procName: m.procName, outputDir: m.outputDir,
+    model: m.model, runId: spec.runId, outputDir: m.outputDir,
     sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
     reportPath: m.reportPath, logFile: m.logFile, status: 'running',
   }));
@@ -145,6 +166,11 @@ export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | '
 /** Non-blocking: validate, build, spawn workers, register in index, return spec. */
 export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   const root = projectRoot();
+  // Budget STATE (cumulative spend + reservations) follows the output root
+  // when OUTPUT_ROOT is set, so test/dev runs never pollute the repo's
+  // shared state file; otherwise it stays under projectRoot (AI_ARENA_ROOT
+  // honored) exactly as before.
+  const budgetStateRoot = process.env.OUTPUT_ROOT ? outputRoot() : root;
   const logger = opts.logger ?? createLogger('ai-arena:orchestrator');
   
   // Load budget config for enforcement (pricing now comes from the SQLite catalog)
@@ -154,35 +180,24 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   const reservations: Array<{ model: string; estimated: number }> = [];
   try {
     for (const modelName of opts.models) {
-    const budgetCheck = checkBudget(modelName, root, opts.forceBudget ?? false, logger);
+    const budgetCheck = checkBudget(modelName, budgetStateRoot, opts.forceBudget ?? false, logger);
     if (!budgetCheck.allowed) {
       const reason = budgetCheck.reason ?? `Budget exceeded for ${modelName}`;
       // Dispatch budget_exceeded webhook first (non-blocking), then throw.
-      void (async () => {
-        try {
-          const { dispatchWebhooks } = await import('../notifications/webhooks.js');
-          await dispatchWebhooks('budget_exceeded', {
-            model: modelName,
-            spentUsd: budgetCheck.spentUsd,
-            limitUsd: budgetCheck.limitUsd,
-            percentUsed: budgetCheck.percentUsed,
-            reason,
-          }, logger);
-        } catch { /* non-blocking */ }
-      })();
+      void dispatchBudgetExceeded(modelName, budgetCheck, logger);
       throw new Error(reason);
     }
 
     // Estimate cost: assume maxTurns tokens × worst-case pricing
     const resolved = await resolveModelForRun(modelName);
     const maxTurns = resolved?.maxTurns ?? 20;
-    const estTokensPerTurn = 8000; // conservative estimate
+    const estTokensPerTurn = costEstimateTokensPerTurn();
     const pricingData = await getPricing(modelName);
     const inputPrice = pricingData?.input ?? 0;
     const outputPrice = pricingData?.output ?? 0;
     const estimatedCost = maxTurns * estTokensPerTurn * (inputPrice + outputPrice) / 1_000_000;
 
-    const reservation = reserveBudget(modelName, estimatedCost, root, logger);
+    const reservation = reserveBudget(modelName, estimatedCost, budgetStateRoot, logger);
     if (!reservation.ok) {
       throw new Error(reservation.reason ?? `Budget reservation failed for ${modelName}`);
     }
@@ -249,7 +264,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     // Never leak reservations: release everything reserved for this run,
     // whether a later model failed budget, createRunSpec, or enqueue did.
     for (const r of reservations) {
-      releaseReservation(r.model, r.estimated, 0, root, logger);
+      releaseReservation(r.model, r.estimated, 0, budgetStateRoot, logger);
     }
     throw err;
   }
@@ -261,26 +276,28 @@ export async function checkRunStatus(spec: RunSpec): Promise<PerModelStatus[]> {
   return spec.models.map((m) => {
     const pm = rec?.perModel.find((x) => x.model === m.model);
     return {
-      model: m.model, procName: m.procName,
+      model: m.model,
       status: pm?.status ?? (rec ? 'completed' : 'absent'),
-      pid: null,
-      cpu: undefined, memory: undefined,
-      uptime: undefined, restarts: 0,
       exitCode: null, online: pm?.status === 'running',
     };
   });
 }
 
+/** Statuses that mean a model's task reached an end state (never restarts on its own). */
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'dead', 'errored']);
+
 export function isRunComplete(spec: RunSpec): Promise<boolean> {
   const statuses = checkRunStatus(spec);
-  return statuses.then(ss => ss.every((s: PerModelStatus) => !s.online));
+  return statuses.then((ss) => ss.every((s: PerModelStatus) =>
+    !s.online && TERMINAL_STATUSES.has(s.status),
+  ));
 }
 
-/** True iff every model in a run is stopped (from the runs table). */
+/** True iff every model in a run reached a terminal status (from the runs table). */
 export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
   const rec = await getRunRecord(runId);
-  if (!rec || rec.perModel.length === 0) return true;
-  return rec.perModel.every((m) => m.status !== 'running');
+  if (!rec || rec.perModel.length === 0) return false;
+  return rec.perModel.every((m) => TERMINAL_STATUSES.has(m.status));
 }
 
 interface AggregateInput {
@@ -339,7 +356,7 @@ async function buildPerModelEntries(
   return Promise.all(rec!.perModel.map(async (m) => {
     const r = entries.find((x) => x.model === m.model)?.result;
     const base = {
-      model: m.model, runId, procName: m.procName, outputDir: m.outputDir,
+      model: m.model, runId, outputDir: m.outputDir,
       sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
       reportPath: m.reportPath, logFile: m.logFile,
     };
@@ -374,7 +391,7 @@ async function buildPerModelEntries(
  * runs anomaly analysis + stats writeback, persists judge scores, and dispatches
  * the run_completed notification + webhook. Never throws on ancillary failures.
  */
-async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: Logger): Promise<{ mdPath: string; jsonPath: string }> {
+async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   // Idempotency guard: the CLI and the dashboard watcher can both finalize a
@@ -385,6 +402,9 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
     return { mdPath: rec.comparisonMdPath ?? '', jsonPath: rec.comparisonJsonPath ?? '' };
   }
   const root = projectRoot();
+  // Release budget reservations against the same state root they were
+  // reserved under in startRun, so estimates always match.
+  const budgetStateRoot = process.env.OUTPUT_ROOT ? outputRoot() : root;
   const { mdPath, jsonPath } = aggregate(root, {
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
@@ -401,7 +421,7 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
   for (const entry of entries) {
     const actualCost = entry.result?.costUsd ?? 0;
     const reserved = reservations.get(entry.model) ?? 0;
-    releaseReservation(entry.model, reserved, actualCost, root, logger);
+    releaseReservation(entry.model, reserved, actualCost, budgetStateRoot, logger);
   }
   runReservations.delete(runId);
 
@@ -432,8 +452,23 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
               files[f.name] = fs.readFileSync(path.join(m.sandboxDir, f.name), 'utf8').slice(0, 4000);
             }
           } catch { /* sandbox may not exist */ }
-          const verdict = await runJudgeScoring(m.model, runId, task, files, evalCfg, logger);
-          if (verdict) writeJudgeResult(m.outputDir, verdict, logger);
+          const verdict = await runJudgeScoring(m.model, runId, task, files, evalCfg, logger, judgeAdapter);
+          if (verdict) {
+            writeJudgeResult(m.outputDir, verdict, logger);
+            try {
+              await insertJudgeScore({
+                runId,
+                model: m.model,
+                judgeModel: verdict.judgeModel,
+                averageScore: verdict.averageScore,
+                summary: verdict.summary,
+                scoresJson: JSON.stringify(verdict.scores),
+                judgedAt: verdict.judgedAt,
+              });
+            } catch (e) {
+              logger.warn('judge score DB persist failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e) });
+            }
+          }
         }
       }
     } catch (e) {
@@ -456,7 +491,7 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
 }
 
 /** Read results, write comparison, update index. Used by the CLI (has a spec). */
-export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
+export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{
   entries: ComparisonEntry[];
   mdPath: string;
   jsonPath: string;
@@ -465,12 +500,12 @@ export async function finalizeRun(spec: RunSpec, logger: Logger): Promise<{
     runId: spec.runId, scenario: spec.scenario, startedAt: spec.startedAt,
     models: spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
-  const core = await finalizeCore(spec.runId, entries, logger);
+  const core = await finalizeCore(spec.runId, entries, logger, judgeAdapter);
   return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath };
 }
 
 /** Finalize by runId (resolves paths from the index). Used by the dashboard watcher. */
-export async function finalizeRunByRunId(runId: string, logger: Logger): Promise<void> {
+export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) return;
   const root = projectRoot();
@@ -478,7 +513,7 @@ export async function finalizeRunByRunId(runId: string, logger: Logger): Promise
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
-  await finalizeCore(runId, entries, logger);
+  await finalizeCore(runId, entries, logger, judgeAdapter);
 }
 
 let killSwitchActive = false;

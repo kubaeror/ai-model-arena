@@ -80,9 +80,76 @@ test('OpenAICompatAdapter.sendMessage extracts cached_tokens from prompt_tokens_
   }
 });
 
+test('OpenAICompatAdapter.sendMessage maps reasoning effort into reasoning_effort', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], { reasoning: { type: 'effort', value: 'high' } });
+    assert.equal(capturedBody.reasoning_effort, 'high');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter.sendMessage ignores non-effort reasoning options', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], { reasoning: { type: 'budget_tokens', value: 4096 } });
+    assert.ok(!('reasoning_effort' in capturedBody), 'budget_tokens must not leak into reasoning_effort');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter.sendMessage leaves body unchanged when reasoning is absent', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.deepEqual(capturedBody, {
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('OpenAICompatAdapter.supportsPromptCaching returns true', () => {
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   assert.equal(adapter.supportsPromptCaching(), true);
+});
+
+test('OpenAICompatAdapter.sendMessage attaches durationMs to the response', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => mockResponse({
+    choices: [{ message: { role: 'assistant', content: 'Hello' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  }) as Response) as typeof fetch;
+  try {
+    const result = await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.equal(typeof result.durationMs, 'number');
+    assert.ok(result.durationMs! >= 0);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 });
 
 test('OpenAICompatAdapter tolerates non-JSON tool call arguments', async () => {
@@ -137,6 +204,63 @@ test('OpenAICompatAdapter refuses unconfigured placeholder base URLs', () => {
     () => new OpenAICompatAdapter(desc, 'gpt-4o', { apiKey: 'k' }),
     /unconfigured baseUrl/,
   );
+});
+
+test('OpenAICompatAdapter serializes tools and tool-call messages into the body', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([
+      { role: 'assistant', content: null, toolCalls: [{ id: 'tc1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+      { role: 'tool', toolCallId: 'tc1', name: 'read_file', content: 'contents' },
+    ], [{ name: 'read_file', description: 'Read a file', parameters: { type: 'object' } }]);
+    assert.deepEqual(capturedBody.tools, [{ type: 'function', function: { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } } }]);
+    assert.deepEqual(capturedBody.messages, [
+      { role: 'assistant', content: null, tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] },
+      { role: 'tool', content: 'contents', tool_call_id: 'tc1', name: 'read_file' },
+    ]);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter returns an empty response for empty choices', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => mockResponse({ choices: [] }) as Response) as typeof fetch;
+  try {
+    const result = await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.equal(result.text, null);
+    assert.deepEqual(result.toolCalls, []);
+    assert.equal(result.stopReason, undefined);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter custom headerName sends the key for non-bearer schemes', async () => {
+  const desc: ProviderDescriptor = {
+    id: 'custom2', name: 'Custom2', apiBase: 'https://custom.example/v1',
+    authScheme: 'none', headerName: 'x-custom-key', envVar: 'CUSTOM2_KEY', adapter: 'openai-compat', isBuiltin: false,
+  };
+  const adapter = new OpenAICompatAdapter(desc, 'model-2', { apiKey: 'secret-2' });
+  let capturedHeaders: Record<string, string> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedHeaders = init?.headers as Record<string, string>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    assert.equal(capturedHeaders['x-custom-key'], 'secret-2');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 });
 
 test('OpenAICompatAdapter retries 429 and 5xx, surfaces HttpError after retries', async () => {

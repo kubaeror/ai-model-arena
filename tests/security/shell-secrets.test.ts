@@ -105,3 +105,36 @@ test('sanitizeSecrets is idempotent — redacted output contains no raw secrets'
   assert.equal(second.sanitized, first.sanitized);
   assert.deepEqual(second.findings, []);
 });
+
+// Task 26: the generic_api_key pattern must be context-aware. It should only
+// fire when the token appears in an assignment/key-value context (= or :, with
+// an optional key/token/secret/password/bearer keyword), not when a long token
+// simply appears in prose (e.g. build hashes, base64-looking text).
+
+test('sanitizeSecrets redacts a long token in a bare = assignment (x=<token>)', () => {
+  const input = 'x=' + 'abcdefghijklmnopqrstuvwxyz1234567890';
+  const { sanitized, findings } = sanitizeSecrets(input);
+  assert.equal(sanitized, 'x=[REDACTED:generic_api_key]');
+  assert.match(findings.join(','), /generic_api_key/);
+});
+
+test('sanitizeSecrets redacts a long token after a keyword assignment (TOKEN=<token>)', () => {
+  // 33-char token: long enough for generic_api_key, and TOKEN= + token stays
+  // under 40 class chars so the loose aws_secret_key pattern does not fire.
+  const input = 'TOKEN=' + 'abcdefghijklmnopqrstuvwxyz1234567';
+  const { sanitized, findings } = sanitizeSecrets(input);
+  assert.equal(sanitized, 'TOKEN=[REDACTED:generic_api_key]');
+  assert.match(findings.join(','), /generic_api_key/);
+});
+
+test('sanitizeSecrets does NOT redact a long build hash in prose (no =/: context)', () => {
+  // 40-char token total (build-hash- + 29 a's). A 40-char run of plain
+  // alphanumerics would also trip the aws_secret_key pattern, so the run is
+  // kept under 40 to isolate the generic_api_key behavior under test.
+  const hash = 'build-hash-' + 'a'.repeat(29);
+  assert.equal(hash.length, 40);
+  const input = `the ${hash} was built`;
+  const { sanitized, findings } = sanitizeSecrets(input);
+  assert.equal(sanitized, input);
+  assert.ok(!findings.join(',').includes('generic_api_key'));
+});

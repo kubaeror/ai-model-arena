@@ -22,13 +22,14 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
+    this.providerLabel = descriptor.id;
   }
 
   supportsReasoning(): boolean { return true; }
   supportsPromptCaching(): boolean { return true; }
 
   async sendMessage(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
-    return this.withRetry(async () => {
+    return this.withRetry(() => this.timed(async () => {
       const body = this.buildBody(messages, tools, opts);
       const res = await this.fetchEndpoint('/v1/messages', body);
       if (!res.ok) {
@@ -37,7 +38,7 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
       }
       const json = (await res.json()) as AnthropicResponse;
       return this.parseResponse(json);
-    }, { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
