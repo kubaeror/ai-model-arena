@@ -116,6 +116,8 @@ jobs:
         run: kubectl kustomize k8s/overlays/prod > .tmp/k8s-prod.yaml
       - name: Render kustomize (observability)
         run: kubectl kustomize k8s/observability > .tmp/k8s-observability.yaml
+      - name: Render kustomize (e2e)
+        run: kubectl kustomize k8s/overlays/e2e > .tmp/k8s-e2e.yaml
       - uses: docker://openpolicyagent/conftest:latest
         with:
           args: test -p policy/k8s .tmp/k8s-dev.yaml
@@ -125,6 +127,9 @@ jobs:
       - uses: docker://openpolicyagent/conftest:latest
         with:
           args: test -p policy/k8s .tmp/k8s-observability.yaml
+      - uses: docker://openpolicyagent/conftest:latest
+        with:
+          args: test -p policy/k8s .tmp/k8s-e2e.yaml
 
   compose-validate:
     runs-on: ubuntu-latest
