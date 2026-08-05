@@ -21,6 +21,15 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
+    // Fail fast on unconfigured placeholder URLs (e.g. google-vertex's
+    // https://{location}-aiplatform.googleapis.com) instead of POSTing to a
+    // literal '{location}' hostname and failing with a confusing DNS error.
+    if (/\{/.test(this.baseUrl ?? '')) {
+      throw new Error(
+        `Provider "${descriptor.id}" has an unconfigured baseUrl "${this.baseUrl}". ` +
+        `Set a concrete baseUrl in the provider settings (replace {location} placeholders).`,
+      );
+    }
   }
 
   supportsReasoning(): boolean { return true; }
