@@ -4,15 +4,32 @@ import type { RequestHandler } from 'express';
 import { requireRole } from '../../auth/rbac.js';
 import { INTERNAL_ERROR } from '../error-sanitizer.js';
 
-const kc = new KubeConfig();
-kc.loadFromDefault();
-const appsApi = kc.makeApiClient(AppsV1Api);
-const coreApi = kc.makeApiClient(CoreV1Api);
 const NAMESPACE = process.env.KUBE_NAMESPACE ?? 'ai-arena';
+
+let cachedKube: KubeConfig | null = null;
+
+function getKube(): KubeConfig | null {
+  if (cachedKube) return cachedKube;
+  try {
+    const kc = new KubeConfig();
+    kc.loadFromDefault();
+    cachedKube = kc;
+    return kc;
+  } catch {
+    return null;
+  }
+}
 
 export function registerRunnerRoutes(router: Router, auth: RequestHandler): void {
   // GET /api/runners — list runner deployments + their pods
   router.get('/api/runners', auth, requireRole('admin'), async (_req: Request, res: Response) => {
+    const kube = getKube();
+    if (!kube) {
+      res.status(503).json({ error: 'k8s API unavailable' });
+      return;
+    }
+    const appsApi = kube.makeApiClient(AppsV1Api);
+    const coreApi = kube.makeApiClient(CoreV1Api);
     try {
       const deploys = await appsApi.listNamespacedDeployment({ namespace: NAMESPACE, labelSelector: 'app=runner' });
       const pods = await coreApi.listNamespacedPod({ namespace: NAMESPACE, labelSelector: 'app=runner' });
@@ -53,6 +70,12 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
       res.status(400).json({ error: 'replicas must be a non-negative number' });
       return;
     }
+    const kube = getKube();
+    if (!kube) {
+      res.status(503).json({ error: 'k8s API unavailable' });
+      return;
+    }
+    const appsApi = kube.makeApiClient(AppsV1Api);
     try {
       const name = String(req.params.name);
       await appsApi.patchNamespacedDeployment({
@@ -68,6 +91,12 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
 
   // POST /api/runners/:name/drain — scale to 0
   router.post('/api/runners/:name/drain', auth, requireRole('admin'), async (req: Request, res: Response) => {
+    const kube = getKube();
+    if (!kube) {
+      res.status(503).json({ error: 'k8s API unavailable' });
+      return;
+    }
+    const appsApi = kube.makeApiClient(AppsV1Api);
     try {
       const name = String(req.params.name);
       await appsApi.patchNamespacedDeployment({
@@ -83,6 +112,12 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
 
   // GET /api/runners/:name/logs — stream pod logs
   router.get('/api/runners/:name/logs', auth, requireRole('admin'), async (req: Request, res: Response) => {
+    const kube = getKube();
+    if (!kube) {
+      res.status(503).json({ error: 'k8s API unavailable' });
+      return;
+    }
+    const coreApi = kube.makeApiClient(CoreV1Api);
     try {
       const provider = String(req.params.name).replace('runner-', '');
       const pods = await coreApi.listNamespacedPod({
