@@ -84,9 +84,14 @@ export class CircuitBreaker {
   static cleanup(): void {
     const now = Date.now();
     for (const [key, breaker] of breakers) {
-      if (breaker.state === 'closed' || breaker.state === 'halfOpen') {
-        breakers.delete(key);
-      } else if (breaker.state === 'open' && (now - breaker.openedAt > 3_600_000)) {
+      const stale = breaker.state === 'closed' || breaker.state === 'halfOpen' ||
+        (breaker.state === 'open' && (now - breaker.openedAt > 3_600_000));
+      if (stale) {
+        // Drop the prom-client series too — otherwise a deleted breaker
+        // leaves a stale 1=open gauge value behind forever.
+        if (breaker.providerLabel) {
+          circuitState.remove({ provider: breaker.providerLabel, model: breaker.modelLabel ?? '' });
+        }
         breakers.delete(key);
       }
     }

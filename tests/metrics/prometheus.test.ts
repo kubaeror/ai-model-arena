@@ -163,6 +163,25 @@ test('metricsHandler: arena_circuit_state reflects open/close via CircuitBreaker
   }
 });
 
+test('metricsHandler: CircuitBreaker.cleanup removes the gauge series for dropped breakers', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  try {
+    circuitState.reset();
+    const cb = CircuitBreaker.for('openai', 'gpt-4o', { failureThreshold: 1, resetTimeoutMs: 50 });
+    await assert.rejects(() => cb.exec(async () => { throw new Error('boom'); }));
+    assert.match(await scrapeMetrics(), /^arena_circuit_state\{provider="openai",model="gpt-4o"\} 1$/m);
+
+    // Age the open breaker past the 1h retention so cleanup drops it, then
+    // verify the prom-client series goes with it (no stale 1=open forever).
+    t.mock.timers.tick(3_700_000);
+    CircuitBreaker.cleanup();
+    assert.doesNotMatch(await scrapeMetrics(), /arena_circuit_state\{provider="openai",model="gpt-4o"\}/, 'series removed on cleanup');
+  } finally {
+    t.mock.timers.reset();
+    CircuitBreaker.cleanup();
+  }
+});
+
 test('metricsHandler: arena_budget_percent reflects percentUsed from checkBudget', async () => {
   budgetPercent.reset();
   resetBudgetCache();
