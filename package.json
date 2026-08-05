@@ -26,6 +26,7 @@
     "dashboard:dev": "concurrently -k -n api,web -c green,cyan \"tsx src/dashboard-server/server.ts\" \"npm --prefix src/dashboard-client run dev\"",
     "dashboard:build": "tsc && npm --prefix src/dashboard-client run build",
     "dashboard:start": "node dist/dashboard-server/server.js",
+    "e2e": "playwright test",
     "test:db-pg": "DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena npm run db:migrate && DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena tsx --test tests/db/postgres-smoke.test.ts"
   },
   "engines": {
@@ -61,6 +62,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/better-sqlite3": "^9.6.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",

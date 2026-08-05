@@ -29,6 +29,8 @@ Thumbs.db
 coverage/
 tap.out
 .nyc_output/
+playwright-report/
+test-results/
 
 # PM2 / scratch process artifacts
 *.pid
