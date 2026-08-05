@@ -223,11 +223,7 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.strictEqual(fs.existsSync(judgeFile), false, 'judge_score.json not written when judge disabled');
   });
 
-  it('finalizeCore judge step persists a judge_scores row for each judged model (single persistence site)', async (t) => {
-    if (typeof (t.mock as { module?: unknown }).module !== 'function') {
-      t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
-      return;
-    }
+  it('finalizeCore judge step persists a judge_scores row for each judged model (single persistence site)', async () => {
     const cfgDir = path.join(root, 'configs');
     fs.mkdirSync(cfgDir, { recursive: true });
     fs.writeFileSync(path.join(cfgDir, 'evaluation.yaml'), [
@@ -256,21 +252,15 @@ describe('finalize merge (run-lifecycle single core)', () => {
        VALUES ('gpt-4o', 'openai', 'gpt-4o')`,
     ).run();
 
-    t.mock.module('../../src/providers/index.js', {
-      exports: {
-        ProviderRegistry: class {
-          async loadCustomFromDb(): Promise<void> {}
-          createAdapter(): { sendMessage: () => Promise<{ text: string }> } {
-            return {
-              sendMessage: async () => ({
-                text: '```json\n{"scores": [{"category": "correctness", "score": 10, "maxScore": 10}], "summary": "Solid work"}\n```',
-              }),
-            };
-          }
-        },
-        loadBuiltins(): void {},
-      },
-    });
+    const judgeAdapter = {
+      sendMessage: async () => ({
+        text: JSON.stringify({ scores: [{ category: 'correctness', score: 8, maxScore: 10 }], summary: 'ok' }),
+        usage: {},
+        toolCalls: [],
+      }),
+      supportsReasoning: () => false,
+      supportsPromptCaching: () => false,
+    };
 
     const runId = 'run_judge_enabled';
     const alpha = makePerModel(runId, 'alpha', root, 't-judge-on');
@@ -278,7 +268,7 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const spec = buildSpec(runId, root, [alpha]);
     await registerRun(spec, 'cli');
 
-    await finalizeRun(spec, logger);
+    await finalizeRun(spec, logger, judgeAdapter);
 
     const deadline = Date.now() + 2000;
     let row: any = null;
@@ -290,8 +280,8 @@ describe('finalize merge (run-lifecycle single core)', () => {
 
     assert.ok(row, 'judge step persists a judge_scores row for the model');
     assert.equal(row.judge_model, 'gpt-4o');
-    assert.equal(row.average_score, 10);
-    assert.equal(row.summary, 'Solid work');
+    assert.equal(row.average_score, 8);
+    assert.equal(row.summary, 'ok');
     assert.ok(row.scores_json.includes('correctness'));
     const count = (dbRaw.prepare('SELECT COUNT(*) AS c FROM judge_scores WHERE run_id = ? AND model = ?').get(runId, 'alpha') as any).c;
     assert.equal(count, 1, 'exactly one judge_scores row per run+model');

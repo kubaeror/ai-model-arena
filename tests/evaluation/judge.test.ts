@@ -84,31 +84,22 @@ test('computeAverageScore falls back to unweighted when maxScore is missing', ()
   assert.equal(computeAverageScore(scores), 6);
 });
 
-test('runJudgeScoring returns a verdict but does not persist judge_scores (single persistence site is run-lifecycle)', async (t) => {
-  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
-    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
-    return;
-  }
+test('runJudgeScoring returns a verdict but does not persist judge_scores (single persistence site is run-lifecycle)', async () => {
   freshDb();
   seedCatalog();
-  t.mock.module('../../src/providers/index.js', {
-    exports: {
-      ProviderRegistry: class {
-        async loadCustomFromDb(): Promise<void> {}
-        createAdapter(): { sendMessage: () => Promise<{ text: string }> } {
-          return {
-            sendMessage: async () => ({
-              text: '```json\n{"scores": [{"category": "correctness", "score": 10, "maxScore": 10}, {"category": "fidelity", "score": 0, "maxScore": 20}], "summary": "Solid work"}\n```',
-            }),
-          };
-        }
-      },
-      loadBuiltins(): void {},
-    },
-  });
+
+  const judgeAdapter = {
+    sendMessage: async () => ({
+      text: '```json\n{"scores": [{"category": "correctness", "score": 10, "maxScore": 10}, {"category": "fidelity", "score": 0, "maxScore": 20}], "summary": "Solid work"}\n```',
+      usage: {},
+      toolCalls: [],
+    }),
+    supportsReasoning: () => false,
+    supportsPromptCaching: () => false,
+  };
 
   try {
-    const result = await runJudgeScoring('gpt-4o', 'run-123', 'Build an API', { 'server.ts': 'code' }, judgeConfig);
+    const result = await runJudgeScoring('gpt-4o', 'run-123', 'Build an API', { 'server.ts': 'code' }, judgeConfig, undefined, judgeAdapter);
     assert.ok(result, 'expected a JudgeResult');
     assert.ok(Math.abs(result!.averageScore - 100 / 30) < 0.001);
 

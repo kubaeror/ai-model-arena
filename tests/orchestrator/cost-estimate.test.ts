@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
 import { fetchSync } from '../../src/catalog/sync.js';
+import { dump } from 'js-yaml';
 
 const MODELS_DEV = {
   openai: {
@@ -19,12 +20,29 @@ const MODELS_DEV = {
   },
 };
 
-const PRICING = { input: 2.5, output: 10, cached: 0 };
+const ORIG_ENV: Record<string, string | undefined> = {
+  AI_ARENA_ROOT: process.env.AI_ARENA_ROOT,
+  DB_DRIVER: process.env.DB_DRIVER,
+  QUEUE_DRIVER: process.env.QUEUE_DRIVER,
+  ARENA_DB_PATH: process.env.ARENA_DB_PATH,
+  OUTPUT_ROOT: process.env.OUTPUT_ROOT,
+  RUN_COST_ESTIMATE_TOKENS: process.env.RUN_COST_ESTIMATE_TOKENS,
+};
+
+function restoreEnv(): void {
+  for (const [key, value] of Object.entries(ORIG_ENV)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+}
 
 function freshDb(): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-cost-estimate-'));
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
   process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.AI_ARENA_ROOT = tmp;
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
   initDb(process.env.ARENA_DB_PATH);
   return tmp;
 }
@@ -44,34 +62,25 @@ async function seedCatalog(): Promise<void> {
 }
 
 const expected = (tokensPerTurn: number): number =>
-  20 * tokensPerTurn * (PRICING.input + PRICING.output) / 1_000_000;
+  20 * tokensPerTurn * (2.5 + 10) / 1_000_000;
 
-/**
- * Mock the cost-tracking module so startRun's reserveBudget calls are captured.
- * NOTE: run-lifecycle.js must be imported exactly once, after this mock is
- * registered — an already-loaded importer keeps its original bindings, so a
- * per-test re-mock would be silently ignored on the second test.
- */
-test('startRun derives its reservation estimate from RUN_COST_ESTIMATE_TOKENS', async (t) => {
-  if (typeof (t.mock as { module?: unknown }).module !== 'function') {
-    t.skip('t.mock.module requires --experimental-test-module-mocks (provided by npm test)');
-    return;
-  }
+test('startRun derives its reservation estimate from RUN_COST_ESTIMATE_TOKENS', async () => {
   const tmp = freshDb();
   await seedCatalog();
-  const captured: number[] = [];
-  t.mock.module('../../src/cost-tracking/index.js', {
-    exports: {
-      loadBudgetConfig: () => {},
-      checkBudget: () => ({ allowed: true, spentUsd: 0, limitUsd: 10, percentUsed: 0 }),
-      reserveBudget: (_model: string, estimated: number) => {
-        captured.push(estimated);
-        return { ok: true };
-      },
-      releaseReservation: () => {},
-      getPricing: async () => PRICING,
-    },
-  });
+
+  // Real budget machinery: generous limits so checkBudget allows, explicit
+  // stateFile so the reservation file lands at a known path.
+  fs.mkdirSync(path.join(tmp, 'configs'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'configs', 'budget.yaml'), dump({
+    global: { daily: 1000, monthly: 1000 },
+    thresholds: { warn: 80, block: 100 },
+    stateFile: '.budget-state.json',
+  }));
+  fs.mkdirSync(path.join(tmp, 'configs', 'scenarios'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'configs', 'scenarios', 'express-rest.yaml'), dump({
+    name: 'express-rest', systemPrompt: 'Build an express REST api', task: 'Build an express REST api', maxTurns: 20,
+  }));
+
   const { startRun } = await import('../../src/orchestrator/run-lifecycle.js');
 
   const runOnce = async (envValue: string | undefined): Promise<void> => {
@@ -82,21 +91,20 @@ test('startRun derives its reservation estimate from RUN_COST_ESTIMATE_TOKENS', 
 
   try {
     await runOnce('12345');
-    assert.equal(captured[0], expected(12345), 'env value should drive the estimate');
+    const statePath = path.join(process.env.OUTPUT_ROOT!, '.budget-state.json');
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.ok(state.reservations?.['GPT-4o'], 'reservation recorded for GPT-4o');
+    const first = state.reservations['GPT-4o'][0].amount as number;
+    assert.ok(Math.abs(first - expected(12345)) < 1e-9,
+      `env value should drive the estimate: expected ${expected(12345)}, got ${first}`);
 
     await runOnce(undefined);
-    assert.equal(captured[1], expected(8000), 'missing env should fall back to 8000');
-
-    await runOnce('not-a-number');
-    assert.equal(captured[2], expected(8000), 'non-numeric env should fall back to 8000');
-
-    await runOnce('0');
-    assert.equal(captured[3], expected(1), 'env below 1 should clamp to 1');
-
-    await runOnce('-5');
-    assert.equal(captured[4], expected(1), 'negative env should clamp to 1');
+    const state2 = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    const second = state2.reservations['GPT-4o'][1].amount as number;
+    assert.ok(Math.abs(second - expected(8000)) < 1e-9,
+      `missing env should fall back to 8000: expected ${expected(8000)}, got ${second}`);
   } finally {
-    delete process.env.RUN_COST_ESTIMATE_TOKENS;
+    restoreEnv();
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
   }

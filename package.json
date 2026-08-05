@@ -13,8 +13,8 @@
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "tsx --test --experimental-test-module-mocks 'tests/**/*.test.ts'",
-    "test:coverage": "c8 --check-coverage --lines 45 --functions 30 --branches 75 --statements 45 tsx --test --experimental-test-module-mocks $(cat .c8-test-list.txt)",
+    "test": "tsx --test 'tests/**/*.test.ts'",
+    "test:coverage": "c8 --reporter=lcov --check-coverage --lines 45 --functions 30 --branches 75 --statements 45 tsx --test $(cat .c8-test-list.txt)",
     "test:ci": "npm run typecheck && npm run lint && npm run test:coverage && npm run test:db",
     "audit": "npm audit --audit-level=high --production",
     "db:generate": "drizzle-kit generate",
@@ -24,6 +24,7 @@
     "dashboard:dev": "concurrently -k -n api,web -c green,cyan \"tsx src/dashboard-server/server.ts\" \"npm --prefix src/dashboard-client run dev\"",
     "dashboard:build": "tsc && npm --prefix src/dashboard-client run build",
     "dashboard:start": "node dist/dashboard-server/server.js",
+    "e2e": "playwright test",
     "test:db-pg": "DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena npm run db:migrate && DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena tsx --test tests/db/postgres-smoke.test.ts"
   },
   "engines": {
@@ -59,6 +60,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/better-sqlite3": "^9.6.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",
