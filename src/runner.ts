@@ -52,9 +52,13 @@ export function markReady(filePath: string = READINESS_FILE): void {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     try {
+      // Fixed probe path is a k8s contract; O_EXCL ('wx') defeats pre-planted
+      // symlinks (EEXIST → unlink the link itself → exclusive re-create).
+      // codeql[js/insecure-temporary-file]
       fs.writeFileSync(filePath, Date.now().toString(), { flag: 'wx' });
     } catch {
       try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+      // codeql[js/insecure-temporary-file]
       try { fs.writeFileSync(filePath, Date.now().toString(), { flag: 'wx' }); } catch { /* non-fatal */ }
     }
   } catch { /* non-fatal — probe will retry */ }
