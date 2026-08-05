@@ -127,6 +127,16 @@ export async function runSuccessCriteria(
 }
 
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
+  const logger = createLogger('ai-arena:runner');
+
+  // Fail fast on missing required env before createQueue/initDb connect.
+  try {
+    assertRequiredEnv('runner');
+  } catch (err) {
+    logger.error(err instanceof Error ? err.message : String(err), { component: 'runner', action: 'exit' });
+    process.exit(1);
+  }
+
   const queue = opts.queue ?? createQueue();
   // Mirrors each queue driver's nack dead-letter decision: a nack bumps the
   // task's attempts and dead-letters at >= maxAttempts, so the attempt being
@@ -135,16 +145,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const isTerminalFailure = (attempts: number): boolean => attempts + 1 >= maxTaskAttempts;
   const ac = new AbortController();
   const signal = opts.signal ?? ac.signal;
-  const logger = createLogger('ai-arena:runner');
   const runnerId = process.env.REDIS_CONSUMER_NAME ?? `runner-${process.pid}`;
-
-  // Fail fast on missing required env before initDb/createQueue connect.
-  try {
-    assertRequiredEnv('runner');
-  } catch (err) {
-    logger.error(err instanceof Error ? err.message : String(err), { component: 'runner', action: 'exit' });
-    process.exit(1);
-  }
 
   const root = findProjectRoot();
   initDb(dbPath());
