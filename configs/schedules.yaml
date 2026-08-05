@@ -6,7 +6,7 @@ schedules:
     scenario: express-rest
     models:
       - gpt-4o
-      - claude-3.7
+      - claude-sonnet-4
     cron: "0 3 * * *"  # 3:00 AM daily
     enabled: true
     notifications:

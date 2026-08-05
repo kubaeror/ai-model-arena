@@ -10,7 +10,7 @@ models:
   gpt-4o:
     daily: 20
     monthly: 150
-  claude-3.7:
+  claude-sonnet-4:
     daily: 25
     monthly: 200
 
