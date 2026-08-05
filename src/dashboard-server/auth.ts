@@ -275,11 +275,26 @@ function cookieName(): string {
   return process.env.NODE_ENV === 'production' ? `__Host-${COOKIE_BASE}` : COOKIE_BASE;
 }
 
+const BEARER_PREFIX = 'Bearer ';
+
+/**
+ * Parse an Authorization header and return the bearer token, or null.
+ * Linear-time string parsing — the previous /^Bearer\s+(.+)$/i regex was
+ * quadratic on headers with long runs of whitespace (CodeQL js/polynomial-redos).
+ */
+export function extractBearerToken(authorization: string): string | null {
+  if (authorization.length <= BEARER_PREFIX.length) return null;
+  if (authorization.slice(0, BEARER_PREFIX.length).toLowerCase() !== BEARER_PREFIX.toLowerCase()) {
+    return null;
+  }
+  const token = authorization.slice(BEARER_PREFIX.length).trim();
+  return token.length > 0 ? token : null;
+}
+
 function extractToken(req: Request): string | null {
   // 1. Authorization: Bearer <token> header (standard)
-  const h = req.headers.authorization ?? '';
-  const m = /^Bearer\s+(.+)$/i.exec(h);
-  if (m?.[1]) return m[1];
+  const token = extractBearerToken(req.headers.authorization ?? '');
+  if (token) return token;
   // 2. httpOnly cookie (production — XSS-resistant)
   const cookies = req.headers.cookie ?? '';
   // Try __Host- prefixed first, then plain
