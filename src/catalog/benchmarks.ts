@@ -38,9 +38,9 @@ async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number
   let count = 0;
   let page = 1;
   const limit = 50;
-  let total = Infinity;
+  const maxModels = 10_000;
   const fields = 'slug,name,intelligence_score,coding_score,agentic_score,speed_tps,benchmark_data,source';
-  while (page <= Math.ceil(total / limit) && page <= 20) {
+  while (page * limit <= maxModels) {
     const url = `${MODELBENCH_API}?limit=${limit}&page=${page}&fields=${fields}`;
     const res = await fetch(url);
     if (!res.ok) {
@@ -49,7 +49,6 @@ async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number
     }
     const raw = await res.json();
     const parsed = ModelbenchResponseSchema.parse(raw) as ModelbenchResponse;
-    total = parsed.meta?.total ?? parsed.data.length;
     for (const m of parsed.data) {
       const canonicalId = matchModelToCanonical(undefined, undefined, catalog, m.name);
       if (!canonicalId) continue;
@@ -76,6 +75,7 @@ async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number
       }
     }
     page++;
+    if (parsed.data.length < limit) break;
   }
   return count;
 }
