@@ -330,6 +330,11 @@ program
   .option('--from <date>', 'From date (ISO format)')
   .option('--to <date>', 'To date (ISO format)')
   .action(async (opts) => {
+    const format = opts.format ?? 'csv';
+    if (format !== 'csv') {
+      console.error(`Unsupported export format: ${format} (supported: csv)`);
+      process.exit(1);
+    }
     const runs = await listRuns();
     
     let filtered = runs;
