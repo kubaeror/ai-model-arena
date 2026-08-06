@@ -22,12 +22,24 @@ export function requireRole(min: Role): RequestHandler {
   };
 }
 
+/**
+ * Default-deny ownership predicate shared by middleware and route gates:
+ * admins pass; otherwise the actor must equal the owner; runs with no
+ * owner are inaccessible to non-admins.
+ */
+export function isOwnerAllowed(
+  actor: { sub?: string; role?: string },
+  ownerId: string | null | undefined,
+): boolean {
+  if (actor.role === 'admin') return true;
+  const ownerIsPresent = typeof ownerId === 'string' && ownerId.length > 0;
+  return ownerIsPresent && actor.sub === ownerId;
+}
+
 export function requireOwnership(
   getOwnerId: (req: Request) => string | undefined,
 ): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
-    const actor = (req as UserRequest).user?.sub;
-    const role = (req as UserRequest).user?.role;
     const owner = getOwnerId(req);
     // Default-DENY: previously a missing owner (legacy/migrated resource)
     // was treated as "allow" (the `if (!owner) return next()` branch), which
@@ -36,9 +48,8 @@ export function requireOwnership(
     // or empty string) is only accessible to admins (who can reassign
     // ownership or delete the orphan). An admin is always allowed. Otherwise
     // the actor must match the owner exactly.
-    const isAdmin = role === 'admin';
-    const ownerIsPresent = typeof owner === 'string' && owner.length > 0;
-    const allowed = isAdmin || (ownerIsPresent && actor === owner);
+    const actor = (req as UserRequest).user;
+    const allowed = isOwnerAllowed({ sub: actor?.sub, role: actor?.role }, owner);
     if (!allowed) {
       res.status(403).json({ error: 'forbidden: not the resource owner' });
       return;

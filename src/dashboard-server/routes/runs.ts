@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
@@ -21,8 +21,19 @@ import type { AuthedRequest } from '../auth.js';
 import { allowIfRunOwner } from '../run-ownership.js';
 import { notFound } from '../helpers.js';
 
-async function findEntry(runId: string, model: string): Promise<RunIndexModelEntry | undefined> {
-  return (await getRunRecord(runId))?.perModel.find((m) => m.model === model);
+async function getOwnedRunModelEntry(
+  req: AuthedRequest,
+  res: Response,
+  runId: string,
+  model: string,
+): Promise<RunIndexModelEntry | null> {
+  if (!(await allowIfRunOwner(req, res, runId))) return null;
+  const entry = (await getRunRecord(runId))?.perModel.find((m) => m.model === model);
+  if (!entry) {
+    notFound(res, 'Run or model', runId);
+    return null;
+  }
+  return entry;
 }
 
 /**
@@ -126,12 +137,8 @@ export function createRunsRouter(): Router {
   router.get('/:runId/models/:model/conversation', async (req, res) => {
     // Default-deny ownership check (H2): runs with no createdBy are only
     // accessible to admins.
-    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
-    const entry = await findEntry(req.params.runId as string, req.params.model);
-    if (!entry) {
-      notFound(res, 'Run or model', req.params.runId as string);
-      return;
-    }
+    const entry = await getOwnedRunModelEntry(req as AuthedRequest, res, req.params.runId as string, req.params.model);
+    if (!entry) return;
     try {
       const raw = await fsp.readFile(entry.conversationPath, 'utf8');
       res.json({ model: req.params.model, conversation: JSON.parse(raw) });
@@ -142,23 +149,15 @@ export function createRunsRouter(): Router {
 
   // GET /api/runs/:runId/models/:model/report
   router.get('/:runId/models/:model/report', async (req, res) => {
-    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
-    const entry = await findEntry(req.params.runId as string, req.params.model);
-    if (!entry) {
-      notFound(res, 'Run or model', req.params.runId as string);
-      return;
-    }
+    const entry = await getOwnedRunModelEntry(req as AuthedRequest, res, req.params.runId as string, req.params.model);
+    if (!entry) return;
     res.type('text/markdown').send(await readTail(entry.reportPath, 100000) || '(report not available yet)');
   });
 
   // GET /api/runs/:runId/models/:model/files — list sandbox files
   router.get('/:runId/models/:model/files', async (req, res) => {
-    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
-    const entry = await findEntry(req.params.runId as string, req.params.model);
-    if (!entry) {
-      notFound(res, 'Run or model', req.params.runId as string);
-      return;
-    }
+    const entry = await getOwnedRunModelEntry(req as AuthedRequest, res, req.params.runId as string, req.params.model);
+    if (!entry) return;
     if (!fs.existsSync(entry.sandboxDir)) {
       res.json({ files: [] });
       return;
@@ -174,12 +173,8 @@ export function createRunsRouter(): Router {
     // Ownership check (H3): without this, any authenticated viewer could read
     // any run's sandbox files by runId — sandbox files frequently contain
     // secrets, prompts, and model-generated credentials.
-    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
-    const entry = await findEntry(req.params.runId as string, req.params.model);
-    if (!entry) {
-      notFound(res, 'Run or model', req.params.runId as string);
-      return;
-    }
+    const entry = await getOwnedRunModelEntry(req as AuthedRequest, res, req.params.runId as string, req.params.model);
+    if (!entry) return;
     const prefix = `/api/runs/${req.params.runId as string}/models/${req.params.model}/files/`;
     const relRaw = req.path.startsWith(prefix) ? req.path.slice(prefix.length) : '';
     let abs: string;
@@ -202,12 +197,8 @@ export function createRunsRouter(): Router {
     // Ownership check (H3): PM2 logs can leak environment variables, build
     // output, and model-generated credentials. Without this check any
     // authenticated viewer could read any run's logs by runId.
-    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
-    const entry = await findEntry(req.params.runId as string, req.params.model);
-    if (!entry) {
-      notFound(res, 'Run or model', req.params.runId as string);
-      return;
-    }
+    const entry = await getOwnedRunModelEntry(req as AuthedRequest, res, req.params.runId as string, req.params.model);
+    if (!entry) return;
     res.type('text/plain').send(await readTail(entry.logFile, 400));
   });
 
@@ -240,12 +231,8 @@ export function createRunsRouter(): Router {
     // Ownership check (H3): diffs expose generated source code; restrict to
     // the run owner or an admin, matching the conversation/report/files-list
     // endpoints above.
-    if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
-    const entry = await findEntry(req.params.runId as string, req.params.model);
-    if (!entry) {
-      notFound(res, 'Run or model', req.params.runId as string);
-      return;
-    }
+    const entry = await getOwnedRunModelEntry(req as AuthedRequest, res, req.params.runId as string, req.params.model);
+    if (!entry) return;
     const diff = await readDiffPatch(entry.outputDir);
     res.json({ model: req.params.model, diff });
   });
