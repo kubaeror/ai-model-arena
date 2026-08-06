@@ -31,7 +31,7 @@ Percentages as measured by the audit on 2026-08-06. "Remains" lists what is stil
 | --- | --- | --- | --- | --- |
 | runner / queue | 88 | Long-lived queue-driven runner, Redis Streams + in-memory queue, DLQ, kill switch + cancellation (fixed this branch), router derived from provider descriptors (fixed this branch) | No idempotency key / priority lanes; nack is Lua+JS dual-path (deliberate) | `tests/queue/*`, `tests/runner/*`, `tests/orchestrator/run-signals.test.ts` |
 | agent-loop | 95 | send→tool→loop with budget intercept, onTurnComplete checkpoint, turn-loop shared with subagents | Streaming never used by the loop; no structured-output mode | `tests/agent-loop/*` |
-| orchestrator | 82 | Run lifecycle, finalization, cost ledger, budget checks — now with working cross-process kill switch and run cancellation (fixed this branch) | Budget state is JSON-file based; tick scheduler still bypasses `startRun()` | `tests/orchestrator/*` |
+| orchestrator | 82 | Run lifecycle, finalization, cost ledger, budget checks — now with working cross-process kill switch and run cancellation (fixed this branch) | Budget state is JSON-file based | `tests/orchestrator/*` |
 | session | 90 | Session + message persistence (SQLite/Postgres via Drizzle) | `session/store` type names not unified with `Db*` aliases (L5 — kept) | `tests/session/*`, db query suite |
 | tools | 93 | File ops, shell, search executors with schemas; task/todo tools | — | `tests/tools/*` |
 | sandbox | 90 | Path-escape prevention, shell policy, git init/final commits, artifact manifest | No per-turn git commits; env denylist flagged as overengineering (kept) | `tests/sandbox/*` |
@@ -43,7 +43,7 @@ Percentages as measured by the audit on 2026-08-06. "Remains" lists what is stil
 | cost-tracking | 88 | Pricing, budgets, spend tracking, ledger writes; driver-based pricing cache key (this branch) | `addSpend` file race (no lock); budget threshold notifications not wired | `tests/cost-tracking/*` |
 | anomaly-detection | 85 | 6 detectors; query layer consolidated into `db/query` (H2/H3 this branch) | Silent-failure detector requires judge score; no z-score | `tests/anomaly-detection/*` |
 | evaluation | 85 | Judge scoring (4-category rubric), objective metrics, regression runner | Judge-file scan shallow; no ensemble judging / calibration; regression suites empty | `tests/evaluation/*` |
-| scheduler | 90 | In-process + DB-driven cron with DB-seeded counters; single tick path | Scheduler bypasses `startRun()` safety checks | `tests/scheduler/*` |
+| scheduler | 90 | In-process + DB-driven cron with DB-seeded counters; single tick path | Per-schedule options come from YAML, not the DB row | `tests/scheduler/*` |
 | notifications | 90 | Slack, Discord, webhooks, outbox with retry (`notifications/retry.ts` kept — imported) | Budget-threshold alerts not dispatched | `tests/notifications/*` |
 | metrics | 90 | Writeback of runtime stats, percentile helpers, cache metrics (`cache-metrics.ts` kept — imported) | — | `tests/metrics/*` |
 | observability | 85 | OTel SDK, TraceRecorder, Prometheus metrics endpoint | Log-to-Loki bridge missing; agent-loop traces not unified on OTel | — |
@@ -153,13 +153,16 @@ Identified by the audit; deliberately left in place — removing them would chur
 
 ## 10. Fixes Applied in This Work
 
-All 16 commits on `refactor/audit-remediation` (main @ ea1790d..HEAD):
+All 19 commits on `refactor/audit-remediation` (main @ ea1790d..HEAD):
 
 | SHA | Subject |
 | --- | --- |
+| 573482f | docs: add audit remediation implementation plan |
+| 9f03cef | docs: update audit report for L7/L9 execution |
 | 4339fac | refactor(scheduler): share tick counter arithmetic |
 | 096021a | refactor(db): extract replaceFilesForRun from runner finalize |
 | 787a087 | docs: add 2026-08-06 audit report |
+| 8745ef3 | feat(db): complete postgres parity with pingDb, driver-based cache keys, and CI |
 | e4e7205 | test(dashboard): derive queues route expectation from knownProviders |
 | 37bdfab | fix(orchestrator): propagate kill switch and run cancellation across processes |
 | e4d293e | fix(queue): derive stream families from provider descriptors |
