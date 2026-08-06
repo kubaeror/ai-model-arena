@@ -54,7 +54,7 @@ export function useCatalogModels(filters: CatalogModelFilters = {}) {
   });
 }
 
-export interface ModelDetail extends CatalogModel {
+interface ModelDetail extends CatalogModel {
   modalities: string | null;
   input_limit: number | null;
   tier_size: number | null;

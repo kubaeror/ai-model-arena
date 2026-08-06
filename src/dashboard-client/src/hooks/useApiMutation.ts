@@ -7,6 +7,7 @@ interface ApiMutationOptions<TData> {
   invalidateQueries?: string[];
 }
 
+/** @internal test support — not part of the public surface. */
 export function useApiMutation<TVariables = void, TData = unknown>(
   mutationFn: (vars: TVariables) => Promise<TData>,
   opts?: ApiMutationOptions<TData>,
