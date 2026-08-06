@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { promises as dns } from 'node:dns';
+import { validateArgs } from './util.js';
 import type { ToolExecutor } from '../types.js';
 
 const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
@@ -18,12 +19,6 @@ const WebSearchArgs = z.object({
 }).strict();
 
 // ── shared helpers ───────────────────────────────────────────────────────────
-
-function validateArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): { ok: true; data: T } | { ok: false; error: string } {
-  const result = schema.safeParse(args);
-  if (result.success) return { ok: true, data: result.data };
-  return { ok: false, error: `Invalid arguments: ${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
-}
 
 /**
  * Private / internal IP ranges and metadata endpoints blocked for SSRF

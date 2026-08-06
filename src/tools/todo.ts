@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod/v4';
+import { validateArgs } from './util.js';
 import type { ToolExecutor } from '../types.js';
 
 interface TodoItem {
@@ -22,12 +23,6 @@ const TodoWriteArgs = z.object({
 }).strict();
 
 const TodoReadArgs = z.object({}).strict();
-
-function validateArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): { ok: true; data: T } | { ok: false; error: string } {
-  const result = schema.safeParse(args);
-  if (result.success) return { ok: true, data: result.data };
-  return { ok: false, error: `Invalid arguments: ${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
-}
 
 function todosPath(sandboxDir: string): string {
   const arenaDir = path.join(sandboxDir, '.arena');

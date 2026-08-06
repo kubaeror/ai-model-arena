@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { validateArgs } from './util.js';
 import type { ToolExecutor, ChatMessage, TokenUsage, SubagentConfig } from '../types.js';
 import { TASK_COMPLETE_TOOL } from './schema.js';
 
@@ -9,12 +10,6 @@ const TaskArgs = z.object({
 }).strict();
 
 const MAX_SUBAGENT_TOOL_RESULT_CHARS = 30_000;
-
-function validateArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): { ok: true; data: T } | { ok: false; error: string } {
-  const result = schema.safeParse(args);
-  if (result.success) return { ok: true, data: result.data };
-  return { ok: false, error: `Invalid arguments: ${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
-}
 
 function truncate(s: string, max = MAX_SUBAGENT_TOOL_RESULT_CHARS): string {
   return s.length <= max ? s : s.slice(0, max) + '\n…[truncated]';
