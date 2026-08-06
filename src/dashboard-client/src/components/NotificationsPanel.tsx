@@ -7,8 +7,7 @@ import { EmptyState } from './ui/EmptyState';
 
 function StatusBadge({ status }: { status: NotificationRow['status'] }) {
   if (status === 'delivered') return <Badge variant="success" value="delivered" />;
-  if (status === 'failed') return <Badge variant="failure" value="failed" />;
-  return <Badge variant="neutral" value="pending" />;
+  return <Badge variant="neutral" value={status} />;
 }
 
 export function NotificationsPanel() {
@@ -85,7 +84,7 @@ export function NotificationsPanel() {
                       {n.lastError ?? '—'}
                     </td>
                     <td className="py-2">
-                      {n.status === 'failed' && (
+                      {n.status === 'pending' && n.attempts > 0 && (
                         <button
                           className="font-mono text-12 text-info hover:text-fg-0"
                           onClick={() => retryMutation.mutate(n.id)}
