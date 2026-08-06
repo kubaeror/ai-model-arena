@@ -10,6 +10,7 @@ import {
   listCatalogModels, getModelDetail, getCostSummary,
   queryModelRuntimeStats, listPromptsWithLatestVersion,
   queryTpsLeaderboard, queryCacheLeaderboard,
+  queryToolCallStats, queryDailyToolTrends, queryCostLeaderboard,
 } from '../../src/db/query.js';
 import {
   insertUser, insertRole, assignUserRole,
@@ -206,6 +207,97 @@ test('queryTpsLeaderboard + queryCacheLeaderboard aggregate via Drizzle', async 
     assert.equal(Number(lb[0].arena_tps), 15);
     assert.equal(Number(lb[0].arena_runs), 2);
     assert.equal(lb[0].intelligence, null);
+  } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('queryToolCallStats + queryDailyToolTrends aggregate tool_call_stats', async () => {
+  const tmp = freshDb();
+  try {
+    const now = new Date().toISOString();
+    const db = getDb();
+    for (const runId of ['r1', 'r2']) {
+      db.prepare(`INSERT INTO runs (run_id, scenario, models, started_at, status, source) VALUES (?, 's', '[]', ?, 'running', 'cli')`)
+        .run(runId, now);
+    }
+    const insertStat = db.prepare(`INSERT INTO tool_call_stats (run_id, model, tool_name, total, success_count, fail_count, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    insertStat.run('r1', 'gpt-4o', 'bash', 5, 4, 1, now);
+    insertStat.run('r1', 'gpt-4o', 'edit', 2, 2, 0, now);
+    insertStat.run('r2', 'claude', 'bash', 3, 1, 2, now);
+
+    const rows = await queryToolCallStats();
+    assert.equal(rows.length, 3);
+    const gptBash = rows.find((r) => r.model === 'gpt-4o' && r.tool_name === 'bash');
+    assert.equal(gptBash?.total, 5);
+    assert.equal(gptBash?.success_count, 4);
+    assert.equal(gptBash?.fail_count, 1);
+
+    const filtered = await queryToolCallStats({ model: 'claude' });
+    assert.equal(filtered.length, 1);
+    assert.equal(filtered[0]?.tool_name, 'bash');
+    assert.equal(filtered[0]?.total, 3);
+
+    const byRuns = await queryToolCallStats({ runIds: ['r1'] });
+    assert.equal(byRuns.length, 2);
+    assert.ok(byRuns.every((r) => r.model === 'gpt-4o'));
+
+    const trends = await queryDailyToolTrends(30);
+    assert.equal(trends.length, 3);
+    assert.ok(trends.every((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date)));
+    const gptTrend = trends.find((r) => r.model === 'gpt-4o' && r.tool_name === 'bash');
+    assert.equal(gptTrend?.total_calls, 5);
+    assert.equal(gptTrend?.success_count, 4);
+    assert.equal(gptTrend?.fail_count, 1);
+    assert.equal(gptTrend?.run_count, 1);
+
+    const modelTrends = await queryDailyToolTrends(30, { model: 'claude' });
+    assert.equal(modelTrends.length, 1);
+    assert.equal(modelTrends[0]?.tool_name, 'bash');
+
+    const toolTrends = await queryDailyToolTrends(30, { tool: 'edit' });
+    assert.equal(toolTrends.length, 1);
+    assert.equal(toolTrends[0]?.model, 'gpt-4o');
+
+    const old = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    insertStat.run('r2', 'gpt-4o', 'bash', 1, 1, 0, old);
+    const recent = await queryDailyToolTrends(30);
+    assert.ok(recent.every((r) => r.date >= now.slice(0, 10)));
+  } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('queryCostLeaderboard merges cost_ledger and run_models', async () => {
+  const tmp = freshDb();
+  try {
+    const now = new Date().toISOString();
+    const db = getDb();
+    for (const runId of ['r1', 'r2', 'r3']) {
+      db.prepare(`INSERT INTO runs (run_id, scenario, models, started_at, status, source) VALUES (?, 's', '[]', ?, 'running', 'cli')`)
+        .run(runId, now);
+    }
+    await insertCostLedgerEntry({ runId: 'r1', model: 'gpt-4o', costUsd: 1, inputTokens: 100, outputTokens: 10, recordedAt: now });
+    await insertCostLedgerEntry({ runId: 'r2', model: 'gpt-4o', costUsd: 2, inputTokens: 200, outputTokens: 20, recordedAt: now });
+    await insertCostLedgerEntry({ runId: 'r3', model: 'claude', costUsd: 5, inputTokens: 500, outputTokens: 50, recordedAt: now });
+
+    const insertRunModel = db.prepare(`INSERT INTO run_models (run_id, model, status, success) VALUES (?, ?, 'completed', ?)`);
+    insertRunModel.run('r1', 'gpt-4o', 1);
+    insertRunModel.run('r2', 'gpt-4o', 0);
+    insertRunModel.run('r3', 'claude', 1);
+
+    const lb = await queryCostLeaderboard();
+    assert.equal(lb.length, 2);
+    const gpt = lb.find((r) => r.model === 'gpt-4o');
+    assert.equal(gpt?.total_cost, 3);
+    assert.equal(gpt?.total_tokens, 330);
+    assert.equal(gpt?.runs, 2);
+    assert.equal(gpt?.successes, 1);
+    const claude = lb.find((r) => r.model === 'claude');
+    assert.equal(claude?.total_cost, 5);
+    assert.equal(claude?.runs, 1);
+    assert.equal(claude?.successes, 1);
+
+    const filtered = await queryCostLeaderboard({ model: 'claude' });
+    assert.equal(filtered.length, 1);
+    assert.equal(filtered[0]?.model, 'claude');
+    assert.equal(filtered[0]?.total_cost, 5);
   } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
