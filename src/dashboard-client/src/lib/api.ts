@@ -20,7 +20,7 @@ const USER_KEY = 'ai-arena-user';
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
-export function setToken(token: string, username: string): void {
+function setToken(token: string, username: string): void {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, username);
 }

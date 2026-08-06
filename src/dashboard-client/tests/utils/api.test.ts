@@ -8,7 +8,7 @@ vi.stubGlobal('localStorage', {
   clear: () => store.clear(),
 });
 
-import { getToken, setToken, clearToken, getUser, api, updateSchedule } from '../../src/lib/api.js';
+import { getToken, clearToken, getUser, login, api, updateSchedule } from '../../src/lib/api.js';
 
 describe('api namespace', () => {
   it('exposes put used by SecretsPanel', () => {
@@ -16,25 +16,35 @@ describe('api namespace', () => {
   });
 });
 
-describe('getToken / setToken / clearToken', () => {
+describe('getToken / clearToken / login', () => {
   beforeEach(() => store.clear());
+
+  async function loginAsAdmin() {
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ token: 'jwt-token-123', username: 'admin' }),
+    }));
+    await login('admin', 'secret');
+  }
 
   it('returns null when no token set', () => {
     expect(getToken()).toBeNull();
   });
 
-  it('returns stored token after setToken', () => {
-    setToken('jwt-token-123', 'admin');
+  it('stores token after login', async () => {
+    await loginAsAdmin();
     expect(getToken()).toBe('jwt-token-123');
   });
 
-  it('returns username after setToken', () => {
-    setToken('jwt-token-123', 'admin');
+  it('stores username after login', async () => {
+    await loginAsAdmin();
     expect(getUser()).toBe('admin');
   });
 
-  it('returns null after clearToken', () => {
-    setToken('jwt-token-123', 'admin');
+  it('returns null after clearToken', async () => {
+    await loginAsAdmin();
     clearToken();
     expect(getToken()).toBeNull();
     expect(getUser()).toBeNull();

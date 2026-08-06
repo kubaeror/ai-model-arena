@@ -19,14 +19,17 @@ export function Skeleton({ className, style }: SkeletonProps) {
   );
 }
 
+/** @internal test support — not part of the public surface. */
 export function SkeletonLine({ className }: { className?: string }) {
   return <Skeleton className={cn('h-4 w-full', className)} />;
 }
 
+/** @internal test support — not part of the public surface. */
 export function SkeletonCard({ className }: { className?: string }) {
   return <Skeleton className={cn('h-32 rounded-panel', className)} />;
 }
 
+/** @internal test support — not part of the public surface. */
 export function SkeletonRow({ columns = 4 }: { columns?: number }) {
   return (
     <div className="flex gap-3 p-3 border-b border-border/50">
@@ -37,6 +40,7 @@ export function SkeletonRow({ columns = 4 }: { columns?: number }) {
   );
 }
 
+/** @internal test support — not part of the public surface. */
 export function SkeletonTable({ columns = 4, rows = 5 }: { columns?: number; rows?: number }) {
   return (
     <div className="overflow-hidden rounded-panel border border-border bg-bg-1">
@@ -56,6 +60,7 @@ export function SkeletonTable({ columns = 4, rows = 5 }: { columns?: number; row
   );
 }
 
+/** @internal test support — not part of the public surface. */
 export function SkeletonStats({ count = 3 }: { count?: number }) {
   return (
     <div className={`grid grid-cols-${Math.min(count, 4)} gap-4`}>
