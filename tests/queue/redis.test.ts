@@ -7,7 +7,7 @@ const it = REDIS_URL ? test : test.skip;
 
 it('enqueue + dequeue round-trip', async () => {
   const prefix = 'arena:test:' + Date.now();
-  const q = new RedisStreamQueue({ url: REDIS_URL!, streamPrefix: prefix, consumerGroup: 'g', consumerName: 'c', maxAttempts: 5, reclaimIdleMs: 60_000, reclaimIntervalMs: 30_000, providerFilter: 'openai' });
+  const q = new RedisStreamQueue({ url: REDIS_URL!, streamPrefix: prefix, consumerGroup: 'g', consumerName: 'c', maxAttempts: 5, retryBackoffMs: 2_000, reclaimIdleMs: 60_000, reclaimIntervalMs: 30_000, providerFilter: 'openai' });
   await q.enqueue({ taskId: 't1', sessionId: 's', provider: 'openai', model: 'gpt-4o', scenario: 'x', config: {}, enqueuedAt: new Date().toISOString(), attempts: 0 });
   const t = await q.dequeue(5000);
   assert.ok(t);
@@ -16,7 +16,7 @@ it('enqueue + dequeue round-trip', async () => {
 
 it('dequeue returns null on empty stream', async () => {
   const prefix = 'arena:test:' + Date.now();
-  const q = new RedisStreamQueue({ url: REDIS_URL!, streamPrefix: prefix, consumerGroup: 'g', consumerName: 'c', maxAttempts: 5, reclaimIdleMs: 60_000, reclaimIntervalMs: 30_000, providerFilter: 'openai' });
+  const q = new RedisStreamQueue({ url: REDIS_URL!, streamPrefix: prefix, consumerGroup: 'g', consumerName: 'c', maxAttempts: 5, retryBackoffMs: 2_000, reclaimIdleMs: 60_000, reclaimIntervalMs: 30_000, providerFilter: 'openai' });
   const t = await q.dequeue(100);
   assert.equal(t, null);
 });

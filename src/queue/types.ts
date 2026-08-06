@@ -9,6 +9,8 @@ export interface Task {
   config: Record<string, unknown>;
   enqueuedAt: string;
   attempts: number;
+  /** Epoch ms — not ready for delivery before this time (retry backoff). */
+  dueAt?: number;
   /** Priority: 0 (highest) to 255 (lowest). Default: 128. */
   priority?: number;
   /** Idempotency key — if set, duplicate enqueues with the same key are silently ignored. */

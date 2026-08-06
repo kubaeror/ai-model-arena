@@ -214,31 +214,47 @@ export class RedisStreamQueue implements TaskQueue {
     const stream = streamKey(this.config.streamPrefix, provider);
     await this.ensureGroup(stream);
 
-    const results = await this.redis.xreadgroup(
-      'GROUP', this.config.consumerGroup, this.config.consumerName,
-      'COUNT', 1,
-      'BLOCK', Math.max(timeoutMs, 0),
-      'STREAMS', stream, '>',
-    ) as [string, [string, string[]][]][] | null;
+    const MAX_RETRY_ROTATIONS = 8;
+    let rotations = 0;
 
-    if (!results || results.length === 0) return null;
+    while (true) {
+      const results = await this.redis.xreadgroup(
+        'GROUP', this.config.consumerGroup, this.config.consumerName,
+        'COUNT', 1,
+        'BLOCK', rotations === 0 ? Math.max(timeoutMs, 0) : 0,
+        'STREAMS', stream, '>',
+      ) as [string, [string, string[]][]][] | null;
 
-    for (const [, messages] of results) {
-      for (const [id, fields] of messages) {
-        const taskData: Record<string, string> = {};
-        for (let i = 0; i < fields.length; i += 2) {
-          taskData[fields[i]!] = fields[i + 1]!;
+      if (!results || results.length === 0) return null;
+
+      for (const [, messages] of results) {
+        for (const [id, fields] of messages) {
+          const taskData: Record<string, string> = {};
+          for (let i = 0; i < fields.length; i += 2) {
+            taskData[fields[i]!] = fields[i + 1]!;
+          }
+          const task = parseTask(JSON.parse(taskData.task ?? '{}'));
+          task._redisId = id;
+          if (taskData.traceparent) task._traceparent = taskData.traceparent;
+          if (task._traceparent) {
+            propagation.extract(context.active(), { traceparent: task._traceparent });
+          }
+
+          if (task.dueAt !== undefined && task.dueAt > Date.now()) {
+            // Not ready yet — rotate to the end of the stream, then re-read.
+            if (rotations >= MAX_RETRY_ROTATIONS) return null;
+            const newFields: (string | number)[] = [...fields];
+            await this.redis.xack(stream, this.config.consumerGroup, id);
+            await this.redis.xdel(stream, id);
+            await this.redis.xadd(stream, '*', ...newFields);
+            rotations++;
+            break; // re-enter the outer loop (BLOCK 0)
+          }
+          return task;
         }
-        const task = parseTask(JSON.parse(taskData.task ?? '{}'));
-        task._redisId = id;
-        if (taskData.traceparent) task._traceparent = taskData.traceparent;
-        if (task._traceparent) {
-          propagation.extract(context.active(), { traceparent: task._traceparent });
-        }
-        return task;
       }
+      return null;
     }
-    return null;
   }
 
   async ack(taskId: string): Promise<void> {
@@ -266,6 +282,7 @@ export class RedisStreamQueue implements TaskQueue {
       local reason = ARGV[2]
       local group = ARGV[3]
       local maxAttempts = tonumber(ARGV[4])
+      local backoffMs = tonumber(ARGV[5]) or 2000
 
       -- Read the message from the stream (single message by exact ID)
       local msgs = redis.call('XRANGE', stream, taskId, taskId)
@@ -300,7 +317,11 @@ export class RedisStreamQueue implements TaskQueue {
         redis.call('XDEL', stream, taskId)
         return {ok = 'dead_lettered', attempts = task['attempts']}
       else
-        -- Re-enqueue with bumped attempts
+        -- Re-enqueue with bumped attempts and exponential backoff
+        -- (delay doubles per retry, capped at 5 minutes)
+        local delayMs = math.min(backoffMs * (2 ^ (task['attempts'] - 1)), 300000)
+        local timeParts = redis.call('TIME')
+        task['dueAt'] = tonumber(timeParts[1]) * 1000 + delayMs
         local newArgs = {'task', cjson.encode(task)}
         if task['_traceparent'] then
           table.insert(newArgs, 'traceparent')
@@ -314,7 +335,7 @@ export class RedisStreamQueue implements TaskQueue {
     `;
 
     try {
-      await this.redis.eval(script, 2, stream, dlq, taskId, reason ?? '', group, String(maxAttempts));
+      await this.redis.eval(script, 2, stream, dlq, taskId, reason ?? '', group, String(maxAttempts), String(this.config.retryBackoffMs));
     } catch {
       // Fallback: if Lua eval fails (e.g., Redis version too old), try atomic pipeline as best-effort
       const msgs = await this.redis.xrange(stream, taskId, taskId);
@@ -334,6 +355,8 @@ export class RedisStreamQueue implements TaskQueue {
         await this.redis.xdel(stream, taskId);
         void this.setDlqDepthGauge();
       } else {
+        // Re-enqueue with bumped attempts and exponential backoff (mirrors the Lua script)
+        task.dueAt = Date.now() + Math.min(this.config.retryBackoffMs * Math.pow(2, task.attempts - 1), 300_000);
         const newFields: (string | number)[] = ['task', JSON.stringify(task)];
         if (task._traceparent) { newFields.push('traceparent'); newFields.push(task._traceparent); }
         await this.redis.xadd(stream, '*', ...newFields);
