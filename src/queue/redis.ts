@@ -101,12 +101,13 @@ export class RedisStreamQueue implements TaskQueue {
           this.config.reclaimIdleMs,
           start,
           'COUNT', 5,
-        ) as [string, Array<[string, string[]]>];
+        ) as [string, Array<[string, string[]]>, Array<string>];
 
         if (!Array.isArray(result) || result.length < 2) break;
 
         const nextStart = result[0] as string;
         const messages = result[1];
+        const deleted = Array.isArray(result[2]) ? result[2] : [];
 
         if (!Array.isArray(messages) || messages.length === 0) break;
 
@@ -129,6 +130,7 @@ export class RedisStreamQueue implements TaskQueue {
             const dlq = dlqStreamKey(this.config.streamPrefix, provider);
             await this.redis.xadd(dlq, '*', 'task', taskData.task ?? '', 'reason', 'XAUTOCLAIM: invalid task payload');
             await this.redis.xdel(stream, id);
+            await this.redis.xack(stream, this.config.consumerGroup, id);
             void this.setDlqDepthGauge();
             continue;
           }
@@ -141,6 +143,7 @@ export class RedisStreamQueue implements TaskQueue {
             ];
             await this.redis.xadd(dlq, '*', ...dlqFields);
             await this.redis.xdel(stream, id);
+            await this.redis.xack(stream, this.config.consumerGroup, id);
             void this.setDlqDepthGauge();
           } else {
             task.attempts = (task.attempts ?? 0) + 1;
@@ -148,7 +151,12 @@ export class RedisStreamQueue implements TaskQueue {
             if (task._traceparent) newFields.push('traceparent', task._traceparent);
             await this.redis.xadd(stream, '*', ...newFields);
             await this.redis.xdel(stream, id);
+            await this.redis.xack(stream, this.config.consumerGroup, id);
           }
+        }
+
+        if (deleted.length > 0) {
+          await this.redis.xack(stream, this.config.consumerGroup, ...deleted);
         }
 
         start = nextStart ?? '0-0';

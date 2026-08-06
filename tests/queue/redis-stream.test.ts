@@ -122,11 +122,47 @@ test('reclaim re-processes stale pending messages via XAUTOCLAIM', async (t) => 
   await new Promise((r) => setTimeout(r, 0)); // flush reclaim's microtask chain
   await new Promise((r) => setTimeout(r, 0));
 
+  const pending = await fake.xpending(MAIN_STREAM, GROUP);
+  assert.equal(pending[0], 0, 'reclaim removes the re-enqueued message from the pending list');
+
   const reclaimed = await q.dequeue(0);
   assert.ok(reclaimed, 'stale pending message is reclaimed and re-delivered');
   assert.equal(reclaimed!.taskId, 't1');
   assert.equal(reclaimed!.attempts, 1, 'reclaim bumps attempts');
   await q.close();
+});
+
+test('reclaim removes DLQed messages from the pending list', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  const fake = createFakeRedis();
+  const queue = makeQueue(fake, { maxAttempts: 1, reclaimIdleMs: 1_000 });
+  // attempts already at maxAttempts so reclaim dead-letters on first pass
+  await queue.enqueue({ ...mkTask('t1'), attempts: 1 });
+  await queue.dequeue(0); // delivered -> pending (deliveredAt = t=0)
+  // The fake's xautoclaim compares Date.now() against the PEL deliveredAt,
+  // not real elapsed time — advance the mocked clock past reclaimIdleMs
+  // instead of waiting, like the existing reclaim test does.
+  t.mock.timers.tick(1_500);
+  await (queue as unknown as { reclaimOrphaned(): Promise<void> }).reclaimOrphaned();
+  const pending = await fake.xpending(MAIN_STREAM, GROUP);
+  assert.equal(pending[0], 0, 'pending count must be 0 after reclaim dead-letters it');
+  assert.ok((await queue.deadLetterSize()) > 0);
+  await queue.close();
+});
+
+test('reclaim quarantines malformed messages and clears the pending list', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  const fake = createFakeRedis();
+  const queue = makeQueue(fake, { reclaimIdleMs: 1_000 });
+  await fake.xgroup('CREATE', MAIN_STREAM, GROUP, '$', 'MKSTREAM');
+  await fake.xadd(MAIN_STREAM, '*', 'task', '{not-json');
+  await fake.xreadgroup('GROUP', GROUP, CONSUMER, 'COUNT', 1, 'BLOCK', 0, 'STREAMS', MAIN_STREAM, '>');
+  t.mock.timers.tick(1_500);
+  await (queue as unknown as { reclaimOrphaned(): Promise<void> }).reclaimOrphaned();
+  const pending = await fake.xpending(MAIN_STREAM, GROUP);
+  assert.equal(pending[0], 0, 'malformed entry must not linger in the pending list');
+  assert.ok((await queue.deadLetterSize()) > 0, 'malformed entry quarantined to the DLQ');
+  await queue.close();
 });
 
 test('enqueue with the same idempotencyKey is a no-op', async () => {
