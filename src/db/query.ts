@@ -12,6 +12,7 @@ export * from './query/models.js';
 export * from './query/prompts.js';
 export * from './query/users.js';
 export * from './query/anomalies.js';
+export * from './query/webhooks.js';
 export * from './query/dashboard.js';
 export * from './query/metrics.js';
 export * from './query/leaderboard.js';

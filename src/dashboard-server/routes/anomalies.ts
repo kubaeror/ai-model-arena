@@ -9,7 +9,7 @@ import {
   type AnomalyType,
   type AnomalySeverity,
   type AnomalyQuery,
-} from '../../anomaly-detection/db.js';
+} from '../../db/query.js';
 import { getRunRecord } from '../../orchestrator/run-index.js';
 import { readTraceMeta } from '../../observability/trace-meta.js';
 
