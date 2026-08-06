@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useRunLive } from '../hooks/useLive.js';
-import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, getRunDiff, stopRun, restartRun, getTrace } from '../lib/api.js';
+import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, getRunDiff, stopRun, restartRun, getTrace, type JudgeScoreRow } from '../lib/api.js';
 import { PageShell } from '../components/ui/PageShell';
 import { Button } from '../components/ui/Button';
 import { Panel } from '../components/ui/Panel';
@@ -20,6 +20,7 @@ const TAB_ITEMS = [
   { id: 'logs', label: 'Logs' },
   { id: 'trace', label: 'Trace' },
   { id: 'diff', label: 'Diff' },
+  { id: 'judge', label: 'Judge' },
 ];
 
 export function RunDetail() {
@@ -98,6 +99,7 @@ export function RunDetail() {
       {tab === 'logs' && <LogsPanel runId={runId} model={activeModel} liveLines={live.logLines} />}
       {tab === 'trace' && <TracePanel runId={runId} model={activeModel} />}
       {tab === 'diff' && <DiffPanel runId={runId} model={activeModel} />}
+      {tab === 'judge' && <JudgePanel scores={runQuery.data?.judge ?? []} loading={runQuery.isLoading} />}
     </div>
     </PageShell>
   );
@@ -202,4 +204,50 @@ function DiffPanel({ runId, model }: { runId: string; model: string }) {
       </pre>
     </Panel>
     );
+}
+
+function JudgePanel({ scores, loading }: { scores: JudgeScoreRow[]; loading: boolean }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  if (loading) {
+    return <div className="p-4 flex gap-2 items-center text-fg-1 text-sm"><Spinner /> Loading judge scores…</div>;
+  }
+  if (scores.length === 0) {
+    return (
+      <Panel className="p-10 text-center">
+        <p className="font-display text-16 text-fg-0">No judge scores</p>
+        <p className="mt-1 font-body text-14 text-fg-1">Enable evaluation config to score this run's models.</p>
+      </Panel>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {scores.map((s) => {
+        let parsed: unknown = null;
+        try { parsed = JSON.parse(s.scores_json); } catch { /* keep raw */ }
+        const open = expanded === s.model;
+        return (
+          <Panel key={s.id} className="p-4">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <span className="font-mono text-14 text-fg-0">{s.model}</span>
+              <Badge variant="tier" value={`${s.average_score.toFixed(1)}/100`} />
+              <span className="font-body text-12 text-fg-1">judge: {s.judge_model}</span>
+              <span className="font-mono text-12 text-fg-1">at {new Date(s.judged_at).toLocaleString()}</span>
+              <button
+                className="ml-auto font-mono text-12 text-accent hover:underline"
+                onClick={() => setExpanded(open ? null : s.model)}
+              >
+                {open ? 'hide scores' : 'show scores'}
+              </button>
+            </div>
+            <p className="mt-2 font-body text-13 text-fg-1">{s.summary}</p>
+            {open && (
+              <pre className="mt-3 max-h-56 overflow-auto rounded bg-bg-2 px-3 py-2 font-mono text-12 whitespace-pre-wrap text-fg-1">
+                {parsed ? JSON.stringify(parsed, null, 2) : s.scores_json}
+              </pre>
+            )}
+          </Panel>
+        );
+      })}
+    </div>
+  );
 }

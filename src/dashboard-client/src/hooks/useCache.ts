@@ -49,6 +49,7 @@ export interface LeaderboardEntry {
   arena_tps: number | null;
   arena_latency: number | null;
   arena_runs: number;
+  arena_judge: number | null;
 }
 
 export function useCacheLeaderboard() {

@@ -365,6 +365,10 @@ export async function listJudgeScores(runId?: string): Promise<DbJudgeScore[]> {
   return rows as DbJudgeScore[];
 }
 
+export async function listJudgeScoresForRun(runId: string): Promise<DbJudgeScore[]> {
+  return listJudgeScores(runId);
+}
+
 export async function listSchedules(): Promise<DbSchedule[]> {
   const db = getDrizzleDb();
   return db.select().from(schedules) as any;
@@ -889,6 +893,7 @@ export async function queryCacheLeaderboard(): Promise<any[]> {
     arena_tps: sql<number>`(SELECT AVG(x.tps) FROM ${r} x WHERE x.model_id = ${models.id})`,
     arena_latency: sql<number>`(SELECT AVG(x.latency_p50_ms) FROM ${r} x WHERE x.model_id = ${models.id})`,
     arena_runs: sql<number>`(SELECT COUNT(*) FROM ${r} x WHERE x.model_id = ${models.id})`,
+    arena_judge: sql<number | null>`(SELECT AVG(j.average_score) FROM ${judge_scores} j WHERE j.model = ${models.name})`,
   })
     .from(models)
     .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
