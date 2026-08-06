@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec, execFile } from 'node:child_process';
 import { z } from 'zod/v4';
+import { validateArgs } from './util.js';
 import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
 import { walkFiles } from '../fs/walk.js';
@@ -38,12 +39,6 @@ const GlobArgs = z.object({
   pattern: z.string().min(1),
   path: z.string().optional().default('.'),
 }).strict();
-
-function validateArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): { ok: true; data: T } | { ok: false; error: string } {
-  const result = schema.safeParse(args);
-  if (result.success) return { ok: true, data: result.data };
-  return { ok: false, error: `Invalid arguments: ${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
-}
 
 const IGNORE_DIRS = ['node_modules', '.git', 'dist', '.cache', '.npm'];
 
