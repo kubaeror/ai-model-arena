@@ -16,6 +16,7 @@ import { safeResolve } from '../../sandbox/sandbox.js';
 import { readDiffPatch } from '../../sandbox/git.js';
 import { walkFiles } from '../../fs/walk.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
+import { listJudgeScoresForRun } from '../../db/query.js';
 import type { AuthedRequest } from '../auth.js';
 import { allowIfRunOwner } from '../run-ownership.js';
 
@@ -111,7 +112,13 @@ export function createRunsRouter(): Router {
     } catch {
       /* pm2 unavailable — still return the index record */
     }
-    res.json({ run: rec, statuses });
+    let judge: unknown[] = [];
+    try {
+      judge = await listJudgeScoresForRun(rec.runId);
+    } catch {
+      /* judge scores are best-effort */
+    }
+    res.json({ run: rec, statuses, judge });
   });
 
   // GET /api/runs/:runId/models/:model/conversation

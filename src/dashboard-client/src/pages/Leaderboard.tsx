@@ -19,6 +19,7 @@ const COLUMNS: Column<LeaderboardEntry>[] = [
   { key: 'arena_tps', header: 'Arena TPS', sortable: true, render: m => <span data-numeric>{m.arena_tps != null ? m.arena_tps.toFixed(1) : '-'}</span> },
   { key: 'arena_latency', header: 'Arena p50', sortable: true, render: m => <span data-numeric>{m.arena_latency != null ? `${Math.round(m.arena_latency)}ms` : '-'}</span> },
   { key: 'arena_runs', header: 'Runs', sortable: true, render: m => <span data-numeric>{m.arena_runs}</span> },
+  { key: 'arena_judge', header: 'Judge', sortable: true, render: m => <span data-numeric className={m.arena_judge != null ? 'text-accent' : undefined}>{m.arena_judge != null ? `${m.arena_judge.toFixed(1)}/100` : '--'}</span> },
 ];
 
 export function Leaderboard() {

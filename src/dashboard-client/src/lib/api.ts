@@ -148,6 +148,17 @@ export async function deleteScenario(name: string): Promise<void> {
 }
 
 // ── Runs ────────────────────────────────────────────────────────────────────
+export interface JudgeScoreRow {
+  id: number;
+  run_id: string;
+  model: string;
+  judge_model: string;
+  average_score: number;
+  summary: string;
+  scores_json: string;
+  judged_at: string;
+}
+
 export async function listRuns(): Promise<RunIndexRecord[]> {
   const r = await apiFetch<{ runs: RunIndexRecord[] }>('/api/runs');
   return r.runs;
@@ -157,6 +168,7 @@ export async function getRun(
 ): Promise<{
   run: RunIndexRecord;
   statuses: { model: string; status: string; online: boolean; exitCode: number | null }[];
+  judge: JudgeScoreRow[];
 }> {
   return apiFetch(`/api/runs/${encodeURIComponent(runId)}`);
 }
