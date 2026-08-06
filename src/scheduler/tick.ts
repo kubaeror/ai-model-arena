@@ -1,4 +1,4 @@
-import { listDueSchedules, updateScheduleRun } from '../db/query.js';
+import { listDueSchedules, updateScheduleRun, updateScheduleStatus } from '../db/query.js';
 import { CronExpressionParser } from 'cron-parser';
 import { updateScheduleState, getScheduleState, getSchedule } from './manager.js';
 import { createLogger } from '../logger/pino-logger.js';
@@ -27,6 +27,9 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
       lastRun: now,
       nextRun: next,
     });
+    // Persist to the DB (fire-and-forget, non-fatal) so the dashboard sees
+    // the running state even if the pod dies mid-tick.
+    void updateScheduleStatus(scheduleId, { lastStatus: 'running' }).catch(() => undefined);
 
     const models = JSON.parse(String(row.models)) as string[];
     let scheduleFailed = false;
@@ -72,6 +75,13 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
         totalRuns: (state.totalRuns ?? 0) + 1,
         totalFailures: (state.totalFailures ?? 0) + 1,
       });
+      await updateScheduleStatus(scheduleId, {
+        lastStatus: 'error',
+        lastError: 'Failed to enqueue one or more model tasks',
+        consecutiveFailures,
+        totalRuns: (state.totalRuns ?? 0) + 1,
+        totalFailures: (state.totalFailures ?? 0) + 1,
+      });
 
       if (consecutiveFailures >= 3) {
         logger.error('Schedule has 3+ consecutive failures', {
@@ -84,6 +94,11 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
       ticked.push(scheduleId);
       updateScheduleState(scheduleId, {
         status: 'idle',
+        consecutiveFailures: 0,
+        totalRuns: (state.totalRuns ?? 0) + 1,
+      });
+      await updateScheduleStatus(scheduleId, {
+        lastStatus: 'idle',
         consecutiveFailures: 0,
         totalRuns: (state.totalRuns ?? 0) + 1,
       });

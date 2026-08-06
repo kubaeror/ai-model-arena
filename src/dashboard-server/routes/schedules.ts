@@ -7,15 +7,29 @@ import {
   getSchedules,
   getSchedule,
   getScheduleState,
-  getAllScheduleStates,
   addSchedule,
   removeSchedule,
   setScheduleEnabled,
 } from '../../scheduler/manager.js';
+import { listSchedules, getScheduleRow } from '../../db/query.js';
+import type { DbSchedule } from '../../db/schema.js';
 import { createLogger } from '../../logger/pino-logger.js';
 
 function configPath(): string {
   return path.join(findProjectRoot(), 'configs', 'schedules.yaml');
+}
+
+function stateFromRow(row: DbSchedule | null | undefined) {
+  return row ? {
+    id: row.id,
+    status: row.last_status ?? 'idle',
+    lastRun: row.last_run ?? null,
+    nextRun: row.next_run ?? null,
+    lastError: row.last_error ?? null,
+    consecutiveFailures: row.consecutive_failures,
+    totalRuns: row.total_runs,
+    totalFailures: row.total_failures,
+  } : null;
 }
 
 export function createSchedulesRouter(): Router {
@@ -24,24 +38,24 @@ export function createSchedulesRouter(): Router {
 
   loadSchedulesConfig(configPath(), logger);
 
-  router.get('/', (_req, res) => {
+  router.get('/', async (_req, res) => {
     const schedules = getSchedules();
-    const states = getAllScheduleStates();
+    const rows = await listSchedules();
     const merged = schedules.map((s) => {
-      const st = states.find((st) => st.id === s.id);
-      return { ...s, state: st ?? null };
+      const row = rows.find((r) => r.id === s.id);
+      return { ...s, state: stateFromRow(row) };
     });
     res.json({ schedules: merged });
   });
 
-  router.get('/:id', (req, res) => {
+  router.get('/:id', async (req, res) => {
     const schedule = getSchedule(req.params.id as string);
     if (!schedule) {
       res.status(404).json({ error: 'Schedule not found' });
       return;
     }
-    const state = getScheduleState(req.params.id as string);
-    res.json({ ...schedule, state: state ?? null });
+    const row = await getScheduleRow(req.params.id as string);
+    res.json({ ...schedule, state: stateFromRow(row) });
   });
 
   router.post('/', requireRole('admin'), async (req, res) => {

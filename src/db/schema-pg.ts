@@ -353,6 +353,11 @@ export const schedules = pgTable('schedules', {
   enabled: integer('enabled').notNull().default(1),
   last_run: text('last_run'),
   next_run: text('next_run'),
+  last_status: text('last_status'),
+  last_error: text('last_error'),
+  consecutive_failures: integer('consecutive_failures').notNull().default(0),
+  total_runs: integer('total_runs').notNull().default(0),
+  total_failures: integer('total_failures').notNull().default(0),
   created_at: text('created_at').notNull(),
 });
 
