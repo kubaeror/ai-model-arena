@@ -13,7 +13,7 @@
 ## 1. Executive Summary
 
 - **Audit date:** 2026-08-06. **Method:** static analysis of `src/` + `tests/` (lint baseline, dead-export scan, duplication scan, cross-process behavior review), with a written remediation plan executed as tasks 0–14.
-- **Verdict:** All remediable findings from this audit are resolved. The two production-behavior bugs found (stale queue router map, cross-process kill switch / cancellation) are fixed. Lint went from 83 warnings to 0. Dead code was removed, all 17 deduplication findings in scope were resolved (H1–H3, M1–M6, L1–L9 minus deliberately-kept L5/L10 — 14 executed on this branch, L7/L9 verified already-clean, L8's shared query-string builder landed on main pre-branch), and Postgres driver parity is complete with CI coverage.
+- **Verdict:** All remediable findings from this audit are resolved. The two production-behavior bugs found (stale queue router map, cross-process kill switch / cancellation) are fixed. Lint went from 83 warnings to 0. Dead code was removed, all 17 deduplication findings in scope were resolved (H1–H3, M1–M6, L1–L9 minus deliberately-kept L5/L10 — 16 executed on this branch, L8's shared query-string builder landed on main pre-branch), and Postgres driver parity is complete with CI coverage.
 - **Final verification (this task):**
   - `npm run lint` → exit 0, 0 errors, 0 warnings (ESLint 10 prints no summary line when clean).
   - `npm run typecheck` and `npm run typecheck:tests` → pass.
@@ -112,9 +112,9 @@ Executed on this branch unless noted:
 | L3 | YAML loader ×6 | `src/config-loader.ts` (`loadYamlConfig`, `expandEnvVars`, `clearConfigCache`) used by budget, notifications, auth-api, anomaly config, config.ts, judge (466086e) |
 | L4 | TaskSchema drift | `TaskSchema` gained `priority: z.number().int().min(0).max(255).optional()` — now validates the full `Task` interface (72970d7) |
 | L6 | Sensitive-key regex shared | `SENSITIVE_KEYS` in `src/secrets/sensitive-keys.ts` used by `dashboard-server/secrets.ts` and `secrets/store.ts` (72970d7) |
-| L7 | files.ts `replaceFilesForRun` | **Verified clean:** no duplicate file-replacement logic exists; `src/dashboard-server/routes/files.ts` is a single paginated route sharing the `paginate` helper |
+| L7 | files.ts `replaceFilesForRun` | Extracted: runner's inline delete+insert file-lineage chore moved into `db/query/files.ts` `replaceFilesForRun(runId, entries, model, producedAt)` (096021a) |
 | L8 | qs() in hooks | **Verified:** hooks share a query-string builder + `apiFetch` via `src/dashboard-client/src/lib/api.ts` (useCache, useCatalog, useMetrics). Fix landed on main pre-branch as cc6e7f8 and is included in this branch's history |
-| L9 | Tick counter helper | **Verified clean:** single tick path in `src/scheduler/tick.ts` (counters seeded from DB rows, no duplicated helper) |
+| L9 | Tick counter helper | Extracted: `nextCounters(base, failed)` shared by both scheduler tick branches; in-memory (state) and DB (row) counter sources stay distinct (4339fac) |
 | L10 | Redis nack Lua+JS fallback | **Kept, deliberately:** Lua atomic nack with JS fallback is intentional Redis <7 support (see section 9 of the plan) |
 | L5 | session/store camelCase→Db* unification | **Kept, deliberately:** high-churn, low value; `Db*` aliases already shared via H1 |
 
@@ -153,11 +153,13 @@ Identified by the audit; deliberately left in place — removing them would chur
 
 ## 10. Fixes Applied in This Work
 
-All 14 commits on `refactor/audit-remediation` (main @ ea1790d..HEAD):
+All 16 commits on `refactor/audit-remediation` (main @ ea1790d..HEAD):
 
 | SHA | Subject |
 | --- | --- |
-| 8745ef3 | feat(db): complete postgres parity with pingDb, driver-based cache keys, and CI |
+| 4339fac | refactor(scheduler): share tick counter arithmetic |
+| 096021a | refactor(db): extract replaceFilesForRun from runner finalize |
+| 787a087 | docs: add 2026-08-06 audit report |
 | e4e7205 | test(dashboard): derive queues route expectation from knownProviders |
 | 37bdfab | fix(orchestrator): propagate kill switch and run cancellation across processes |
 | e4d293e | fix(queue): derive stream families from provider descriptors |
