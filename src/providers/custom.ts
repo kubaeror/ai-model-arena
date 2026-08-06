@@ -1,7 +1,7 @@
 import type { ProviderRow } from '../db/schema.js';
 import { getDrizzleDb } from '../db/index.js';
 import { providers, provider_versions, model_providers } from '../db/schema.js';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import crypto from 'node:crypto';
 
 export interface CustomProviderInput {
@@ -88,28 +88,4 @@ export async function deleteCustomProvider(id: string): Promise<void> {
   await db.delete(provider_versions).where(eq(provider_versions.provider_id, id));
   await db.delete(model_providers).where(eq(model_providers.provider_id, id));
   await db.delete(providers).where(and(eq(providers.id, id), eq(providers.is_builtin, 0)));
-}
-
-export async function getProviderVersion(providerId: string, version: number): Promise<ProviderRow | null> {
-  const db = getDrizzleDb();
-  const rows = await db
-    .select({
-      id: provider_versions.provider_id,
-      name: provider_versions.name,
-      api_base: provider_versions.api_base,
-      auth_scheme: provider_versions.auth_scheme,
-      env_var: provider_versions.env_var,
-      adapter: provider_versions.adapter,
-      header_name: provider_versions.header_name,
-      is_builtin: sql<number>`0`,
-      created_at: provider_versions.created_at,
-      updated_at: provider_versions.created_at,
-    })
-    .from(provider_versions)
-    .where(and(
-      eq(provider_versions.provider_id, providerId),
-      eq(provider_versions.version, version),
-    ))
-    .limit(1) as any[];
-  return rows[0] ?? null;
 }

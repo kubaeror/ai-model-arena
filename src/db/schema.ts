@@ -402,27 +402,6 @@ export interface ProviderRow {
   updated_at: string;
 }
 
-export interface ModelRow {
-  id: string;
-  name: string;
-  family: string | null;
-  provider_id: string;
-  release_date: string | null;
-  attachment: number;
-  reasoning: number;
-  temperature: number;
-  tool_call: number;
-  interleaved: string | null;
-  status: string | null;
-  context_limit: number | null;
-  input_limit: number | null;
-  output_limit: number | null;
-  modalities: string | null;
-  reasoning_options: string | null;
-  source_json: string;
-  last_synced_at: string;
-}
-
 export interface BenchmarkRow {
   id: number;
   model_id: string;
