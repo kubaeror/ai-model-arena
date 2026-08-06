@@ -74,6 +74,7 @@ services:
     environment:
       DB_DRIVER: postgres
       DATABASE_URL: postgres://arena:arena@postgres:5432/arena
+      OUTPUT_ROOT: /var/arena/outputs
       DASHBOARD_PORT: "4000"
       DASHBOARD_USERNAME: admin
       DASHBOARD_PASSWORD: change-me
@@ -86,6 +87,8 @@ services:
         condition: service_healthy
     ports:
       - "4000:4000"
+    volumes:
+      - outputs:/var/arena/outputs
     command: ["node", "dist/dashboard-server/server.js"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
