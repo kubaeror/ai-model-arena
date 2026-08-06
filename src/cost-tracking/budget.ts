@@ -14,6 +14,9 @@ let spendQueue: Promise<void> = Promise.resolve();
 const DAY_KEY = () => new Date().toISOString().slice(0, 10);
 const MONTH_KEY = () => new Date().toISOString().slice(0, 7);
 
+/** Reservations older than this are considered leaked (crashed runs) and pruned. */
+export const RESERVATION_TTL_MS = 4 * 60 * 60 * 1000;
+
 /** Object.prototype keys that a model name must never write through. */
 const LEDGER_RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -141,6 +144,7 @@ function hydrateReservations(state: BudgetState): void {
   for (const [modelName, entries] of Object.entries(state.reservations ?? {})) {
     let total = 0;
     for (const entry of entries) {
+      if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) continue;
       if (entry.dailyKey === today) total += entry.amount;
     }
     if (total > 0) pendingReservations.set(`res:${modelName}:d`, total);
@@ -204,7 +208,7 @@ export function reserveBudget(
   pendingReservations.set(reservationKey, totalReserved + estimatedCostUsd);
   if (!state.reservations) state.reservations = {};
   if (!state.reservations[modelName]) state.reservations[modelName] = [];
-  state.reservations[modelName].push({ amount: estimatedCostUsd, dailyKey: DAY_KEY() });
+  state.reservations[modelName].push({ amount: estimatedCostUsd, dailyKey: DAY_KEY(), expiresAt: Date.now() + RESERVATION_TTL_MS });
   saveBudgetState(rootDir, logger);
   logger?.debug('Budget reserved', {
     model: modelName,

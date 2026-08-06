@@ -44,7 +44,7 @@ export interface BudgetState {
     daily: Record<string, number>;
     monthly: Record<string, number>;
   }>;
-  reservations?: Record<string, Array<{ amount: number; dailyKey: string }>>;
+  reservations?: Record<string, Array<{ amount: number; dailyKey: string; expiresAt?: number }>>;
   lastReset: string;
 }
 
