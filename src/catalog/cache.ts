@@ -18,13 +18,15 @@ export async function getCacheStates(): Promise<CatalogCacheStateRow[]> {
   return db.select().from(catalog_cache_state).orderBy(catalog_cache_state.source);
 }
 
-export async function ensureFresh(source: 'models.dev' | 'modelbench' | 'zeroeval'): Promise<void> {
-  if (!(await isStale(source))) return;
+export async function ensureFresh(
+  source: 'models.dev' | 'modelbench' | 'zeroeval',
+  opts?: { force?: boolean },
+): Promise<{ ok: boolean; error?: string }> {
+  if (!opts?.force && !(await isStale(source))) return { ok: true };
   if (source === 'models.dev') {
     const { fetchSync } = await import('./sync.js');
-    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
-  } else {
-    const { fetchBenchmarks } = await import('./benchmarks.js');
-    await fetchBenchmarks(source, { force: true });
+    return fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
   }
+  const { fetchBenchmarks } = await import('./benchmarks.js');
+  return fetchBenchmarks(source, { force: true });
 }

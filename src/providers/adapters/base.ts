@@ -41,7 +41,17 @@ export abstract class BaseAdapter {
   protected logger?: Logger;
   protected timeoutMs = 60_000;
   protected providerLabel = 'unknown';
-  constructor(logger?: Logger) { this.logger = logger; }
+  constructor(logger?: Logger, baseUrl?: string, providerId?: string) {
+    this.logger = logger;
+    // Fail fast on unconfigured placeholder URLs (e.g. azure-openai's
+    // https://{resource}.openai.azure.com/openai/v1) instead of POSTing to a
+    // literal '{resource}' hostname and failing with a confusing DNS error.
+    if (baseUrl && /\{/.test(baseUrl)) {
+      throw new Error(
+        `Provider "${providerId}" baseUrl contains an unreplaced placeholder: ${baseUrl}`,
+      );
+    }
+  }
 
   /**
    * Shared JSON POST with a sane default timeout. Adapters supply their own

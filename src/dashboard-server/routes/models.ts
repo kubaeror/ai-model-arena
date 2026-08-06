@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { listModelsWithPricing } from '../../db/query.js';
+import { listCatalogModels } from '../../db/query.js';
 import { upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { z } from 'zod';
@@ -11,7 +11,7 @@ export function createModelsRouter(): Router {
 
   // GET /api/models - list catalog models (config-consumer shape: { models })
   router.get('/', async (_req, res) => {
-    const rows = await listModelsWithPricing();
+    const rows = await listCatalogModels({});
     res.json({ models: rows });
   });
 
@@ -29,7 +29,7 @@ export function createModelsRouter(): Router {
     const id = parsed.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
     await upsertCustomProvider({ id, name: parsed.name, apiBase: parsed.apiBase, authScheme: parsed.authScheme, envVar: parsed.envVar, adapter: parsed.adapter });
     auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.name, adapter: parsed.adapter });
-    res.status(201).json({ models: await listModelsWithPricing() });
+    res.status(201).json({ models: await listCatalogModels({}) });
   });
 
   // DELETE /api/models/:name - remove a custom provider by id
@@ -37,7 +37,7 @@ export function createModelsRouter(): Router {
     const name = String(req.params.name);
     await deleteCustomProvider(name);
     auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'model.delete', { type: 'model', id: name });
-    res.json({ models: await listModelsWithPricing() });
+    res.json({ models: await listCatalogModels({}) });
   });
 
   return router;
