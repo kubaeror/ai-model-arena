@@ -1,8 +1,8 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import { load } from 'js-yaml';
+import { z } from 'zod';
 import type { Response, NextFunction, Request } from 'express';
 import type { Logger } from '../types.js';
+import { loadYamlConfigSync } from '../config-loader.js';
 import type { ApiKeysConfig, ApiKeyPermission, RequestContext, RateLimitState } from './auth-api-types.js';
 import { ApiKeysConfigSchema } from './auth-api-types.js';
 import { timingSafeEqual } from '../auth/timing-safe.js';
@@ -13,28 +13,36 @@ let apiKeyMap: Map<string, RequestContext> | null = null;
 let rateLimitPrunerStarted = false;
 let rateLimitPrunerHandle: NodeJS.Timeout | null = null;
 
-function expandEnvVars(str: string): string {
-  return str.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] || '');
-}
+// Env expansion happens inside the shared loader; the permissive schema keeps
+// empty-key entries parseable so the filter below can drop them pre-validation
+// (matching the original order: filter before ApiKeysConfigSchema.parse).
+const RawApiKeysConfigSchema = z.unknown();
+const API_KEYS_FALLBACK: ApiKeysConfig = { apiKeys: [] };
 
 export function loadApiKeysConfig(configPath: string, logger?: Logger): ApiKeysConfig {
   if (apiKeysConfig) return apiKeysConfig;
-  
-  const resolvedPath = path.resolve(configPath);
-  if (!fs.existsSync(resolvedPath)) {
-    const fallback = ApiKeysConfigSchema.parse({ apiKeys: [] });
-    logger?.warn(`API keys config not found at ${resolvedPath}, API key auth disabled`);
-    apiKeysConfig = fallback;
-    return fallback;
+
+  const loaded = loadYamlConfigSync({
+    filePath: configPath,
+    schema: RawApiKeysConfigSchema,
+    fallback: API_KEYS_FALLBACK,
+    expandEnv: true,
+    logger,
+    missingMessage: `API keys config not found at ${path.resolve(configPath)}, API key auth disabled`,
+  });
+
+  // The loader returns the fallback by reference when the file is missing;
+  // in that case keep the original semantics (no apiKeyMap, no pruner).
+  if (loaded === API_KEYS_FALLBACK) {
+    apiKeysConfig = API_KEYS_FALLBACK;
+    return API_KEYS_FALLBACK;
   }
-  
-  const content = fs.readFileSync(resolvedPath, 'utf8');
-  const expanded = expandEnvVars(content);
-  const rawParsed = load(expanded) as { apiKeys?: unknown[] } | null;
+
+  const raw = loaded as { apiKeys?: unknown[] } | null;
   // Drop API-key entries whose `key` resolved to null/empty (env var unset)
   // instead of crashing the server — an unset key is simply not registered.
-  const apiKeys = Array.isArray(rawParsed?.apiKeys)
-    ? rawParsed!.apiKeys.filter((entry): entry is Record<string, unknown> => {
+  const apiKeys = Array.isArray(raw?.apiKeys)
+    ? raw!.apiKeys.filter((entry): entry is Record<string, unknown> => {
         if (!entry || typeof entry !== 'object') return false;
         const k = (entry as Record<string, unknown>).key;
         return typeof k === 'string' && k.length > 0;

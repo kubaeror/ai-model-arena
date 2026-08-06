@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
+import { loadYamlConfigSync, clearConfigCache } from '../config-loader.js';
 import { outputRoot } from '../paths.js';
 import { BudgetConfigSchema, type BudgetConfig, type BudgetState, type BudgetCheckResult } from './types.js';
 import { budgetPercent } from '../observability/metrics.js';
@@ -35,20 +35,16 @@ function getEmptyState(): BudgetState {
 
 export function loadBudgetConfig(configPath: string, logger?: Logger): BudgetConfig {
   if (budgetConfig) return budgetConfig;
-  
-  const resolvedPath = path.resolve(configPath);
-  if (!fs.existsSync(resolvedPath)) {
-    const fallback = BudgetConfigSchema.parse({});
-    logger?.warn(`Budget config not found at ${resolvedPath}, budget checks disabled`);
-    budgetConfig = fallback;
-    return fallback;
-  }
-  
-  const content = fs.readFileSync(resolvedPath, 'utf8');
-  const parsed = load(content);
-  const validated = BudgetConfigSchema.parse(parsed);
-  budgetConfig = validated;
-  return validated;
+
+  budgetConfig = loadYamlConfigSync({
+    filePath: configPath,
+    schema: BudgetConfigSchema,
+    fallback: BudgetConfigSchema.parse({}),
+    cache: true,
+    logger,
+    missingMessage: `Budget config not found at ${path.resolve(configPath)}, budget checks disabled`,
+  });
+  return budgetConfig;
 }
 
 function getStatePath(config: BudgetConfig, rootDir: string): string {
@@ -406,4 +402,5 @@ export function resetBudgetCache(): void {
   budgetState = null;
   spendQueue = Promise.resolve();
   pendingReservations.clear();
+  clearConfigCache();
 }

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
+import { loadYamlConfigSync } from '../config-loader.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { secretStore } from '../secrets/store.js';
 import type { ModelAdapter } from '../providers/adapters/base.js';
@@ -9,15 +9,14 @@ import type { EvaluationConfig, JudgeResult, JudgeScore, Rubric } from './types.
 import { EvaluationConfigSchema } from './types.js';
 
 export function loadEvaluationConfig(configPath: string, logger?: Logger): EvaluationConfig {
-  const resolvedPath = path.resolve(configPath);
-  if (!fs.existsSync(resolvedPath)) {
-    const fallback = EvaluationConfigSchema.parse({});
-    logger?.warn(`Evaluation config not found at ${resolvedPath}, using defaults`);
-    return fallback;
-  }
-  const content = fs.readFileSync(resolvedPath, 'utf8');
-  const parsed = load(content);
-  return EvaluationConfigSchema.parse(parsed);
+  return loadYamlConfigSync({
+    filePath: configPath,
+    schema: EvaluationConfigSchema,
+    fallback: EvaluationConfigSchema.parse({}),
+    cache: false,
+    logger,
+    missingMessage: `Evaluation config not found at ${path.resolve(configPath)}, using defaults`,
+  });
 }
 
 export function clampScore(n: number): number {
