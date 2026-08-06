@@ -50,6 +50,7 @@ function makeQueue(fake: FakeRedis, overrides: Partial<RedisQueueConfig> = {}): 
     consumerGroup: GROUP,
     consumerName: CONSUMER,
     maxAttempts: 5,
+    retryBackoffMs: 2_000,
     reclaimIdleMs: 60_000,
     reclaimIntervalMs: 30_000,
     providerFilter: 'openai',
@@ -80,9 +81,10 @@ test('dequeue returns the oldest message for the provider stream and marks it in
   await q.close();
 });
 
-test('nack re-enqueues with a bumped attempt; after maxAttempts moves the task to the DLQ', async () => {
+test('nack re-enqueues with a bumped attempt; after maxAttempts moves the task to the DLQ', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
   const fake = createFakeRedis();
-  const q = makeQueue(fake);
+  const q = makeQueue(fake, { retryBackoffMs: 50 });
   await q.enqueue(mkTask('t1'));
 
   for (let i = 1; i < 5; i++) {
@@ -92,6 +94,9 @@ test('nack re-enqueues with a bumped attempt; after maxAttempts moves the task t
     await q.nack(task!._redisId!, 'transient');
     assert.equal(await q.size(), 1, 'nack re-adds to pending before maxAttempts');
     assert.equal(await q.deadLetterSize(), 0, 'not dead-lettered before maxAttempts');
+    // Exponential backoff delays the re-delivery (50ms * 2^(attempts-1)) —
+    // advance past it so the next dequeue can pick the task up again.
+    t.mock.timers.tick(50 * 2 ** i);
   }
 
   const last = await q.dequeue(0);
@@ -183,14 +188,17 @@ test('enqueue with the same idempotencyKey is a no-op', async () => {
   await q.close();
 });
 
-test('deadLetterRetry re-enqueues a DLQ message by task id and resets its attempts', async () => {
+test('deadLetterRetry re-enqueues a DLQ message by task id and resets its attempts', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
   const fake = createFakeRedis();
-  const q = makeQueue(fake);
+  const q = makeQueue(fake, { retryBackoffMs: 50 });
   await q.enqueue(mkTask('t1'));
   for (let i = 0; i < 5; i++) {
     const task = await q.dequeue(0);
     assert.ok(task);
     await q.nack(task!._redisId!, 'flaky');
+    // Backoff is 50ms * 2^attempts — advance past it before the next dequeue
+    t.mock.timers.tick(50 * 2 ** i);
   }
   assert.equal(await q.deadLetterSize(), 1);
 
@@ -227,14 +235,17 @@ test('enqueue routes tasks to the provider family stream from the router', async
   await q.close();
 });
 
-test('DLQ ops target the provider family DLQ stream', async () => {
+test('DLQ ops target the provider family DLQ stream', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
   const fake = createFakeRedis();
-  const q = makeQueue(fake, { providerFilter: 'groq' });
+  const q = makeQueue(fake, { providerFilter: 'groq', retryBackoffMs: 50 });
   await q.enqueue({ ...mkTask('t1'), provider: 'groq' });
   for (let i = 0; i < 5; i++) {
     const task = await q.dequeue(0);
     assert.ok(task);
     await q.nack(task!._redisId!, 'boom');
+    // Backoff is 50ms * 2^attempts — advance past it before the next dequeue
+    t.mock.timers.tick(50 * 2 ** i);
   }
   assert.equal(await q.deadLetterSize(), 1);
   assert.equal(fake.getStreamIds(dlqStreamKey(PREFIX, 'groq')).length, 1, 'dead-lettered on the provider DLQ stream');
@@ -260,4 +271,19 @@ test('pending reports waiting (not in-flight) task count', async () => {
   await q.ack(first!._redisId!);
   assert.equal(await q.pendingCount(), 2, 'acked message is waiting again');
   await q.close();
+});
+
+test('nack applies backoff: task is not re-delivered before dueAt', async () => {
+  const fake = createFakeRedis();
+  const queue = makeQueue(fake, { retryBackoffMs: 100 });
+  await queue.enqueue(mkTask('t1'));
+  const first = await queue.dequeue(0);
+  assert.ok(first);
+  await queue.nack(first._redisId!, 'retry me');
+  const tooSoon = await queue.dequeue(0);
+  assert.equal(tooSoon, null, 'task must not be delivered before its backoff elapses');
+  await new Promise((r) => setTimeout(r, 250));
+  const after = await queue.dequeue(0);
+  assert.ok(after);
+  assert.equal(after.attempts, 1);
 });

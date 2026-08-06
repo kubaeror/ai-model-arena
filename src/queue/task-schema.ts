@@ -12,6 +12,7 @@ export const TaskSchema = z.object({
   config: z.record(z.string(), z.unknown()),
   enqueuedAt: z.string().min(1),
   attempts: z.number().int().min(0).default(0),
+  dueAt: z.number().int().optional(),
   idempotencyKey: z.string().optional(),
   _redisId: z.string().optional(),
   _traceparent: z.string().optional(),

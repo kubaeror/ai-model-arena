@@ -10,6 +10,8 @@
  *    entries for messages deleted from the stream (returned as deleted ids)
  *  - XRANGE returns entries by id range
  *  - eval() runs the two Lua scripts redis.ts uses, dispatched on script signature
+ *    (the nack script consumes ARGV[5] = retryBackoffMs and stamps task.dueAt via
+ *    Date.now(), standing in for the real script's redis.call('TIME'))
  *
  * Not modeled: BLOCK on XREADGROUP (returns immediately), TTL on the dedup SETNX key,
  * evalsha/defineCommand (redis.ts never calls them).
@@ -224,14 +226,15 @@ export class FakeRedis {
       return 1;
     }
     if (script.includes(NACK_SCRIPT_MARKER)) {
-      return this.nackScript(args as [string, string, string, string, string, string]);
+      return this.nackScript(args as [string, string, string, string, string, string, string]);
     }
     throw new Error('FakeRedis: eval called with an unsupported Lua script');
   }
 
-  private nackScript(args: [string, string, string, string, string, string]): Record<string, unknown> {
-    const [stream, dlq, taskId, reason, group, maxAttemptsStr] = args;
+  private nackScript(args: [string, string, string, string, string, string, string]): Record<string, unknown> {
+    const [stream, dlq, taskId, reason, group, maxAttemptsStr, backoffStr] = args;
     const maxAttempts = Number(maxAttemptsStr);
+    const backoffMs = Number(backoffStr) || 2_000;
     const streamEntries = this.streamMap(stream);
     const match = [...streamEntries.entries()].find(([id]) => id === taskId);
     if (!match) throw new Error('message_not_found');
@@ -241,16 +244,23 @@ export class FakeRedis {
     const task = JSON.parse(data.task ?? '{}') as Record<string, unknown>;
     task.attempts = ((task.attempts as number | undefined) ?? 0) + 1;
 
-    const newArgs: string[] = ['task', JSON.stringify(task)];
     const dlqArgs: string[] = ['task', JSON.stringify(task), 'reason', reason];
     if (task._traceparent) {
-      newArgs.push('traceparent', String(task._traceparent));
       dlqArgs.push('traceparent', String(task._traceparent));
     }
 
     if ((task.attempts as number) >= maxAttempts) {
       this.streamMap(dlq).set(this.nextId(), dlqArgs);
     } else {
+      // Mirror the real Lua nack script: exponential backoff capped at 300s.
+      // redis.call('TIME') is unavailable here, so Date.now() stands in for
+      // the server wall clock (dequeue only compares dueAt against Date.now()).
+      const delayMs = Math.min(backoffMs * 2 ** ((task.attempts as number) - 1), 300_000);
+      task.dueAt = Date.now() + delayMs;
+      const newArgs: string[] = ['task', JSON.stringify(task)];
+      if (task._traceparent) {
+        newArgs.push('traceparent', String(task._traceparent));
+      }
       streamEntries.set(this.nextId(), newArgs);
     }
     this.pelFor(stream, group).delete(id);
