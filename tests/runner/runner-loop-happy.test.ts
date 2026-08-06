@@ -94,10 +94,22 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
   }
 
   // run_models row must exist before the runner's transitionTaskState UPDATEs.
+  // Full per-model paths so the runner's self-finalize (finalizeRunByRunId)
+  // can read the real result.json and keeps the model 'completed' instead of
+  // marking it 'errored' from an unreadable result path.
+  const modelRunDir = path.join(outputs, 'GPT-4o', 'run15');
   await upsertRun({
     runId: 'run15', scenario: 'smoke', models: ['GPT-4o'],
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
-    perModel: [{ model: 'GPT-4o', runId: 'run15', status: 'running' } as never],
+    perModel: [{
+      model: 'GPT-4o', runId: 'run15', status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
 
@@ -188,6 +200,114 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
     // 6. The fake adapter was consulted exactly once — the loop really ran
     //    through the send→tool→complete path and stopped.
     assert.equal(fake.calls, 1, 'fake adapter should be called exactly once');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    const active = await activeTasks.get();
+    assert.equal(active.values[0]?.value, 0, 'no task should leak after shutdown');
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner finalizes its own run when the dashboard watcher is absent', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-self-finalize-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  // Register the run with full per-model paths so the self-finalize's
+  // comparison aggregation reads the real result.json the runner writes.
+  const runId = 'run-self-finalize';
+  const modelRunDir = path.join(outputs, 'GPT-4o', runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'GPT-4o', runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  const task: Task = {
+    taskId: 'self-finalize-task',
+    sessionId: 'self-finalize-session',
+    provider: 'openai',
+    model: 'GPT-4o',
+    scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5 },
+    enqueuedAt: new Date().toISOString(),
+    attempts: 0,
+  };
+
+  try {
+    await queue.enqueue(task);
+
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+
+    // No dashboard watcher runs here — the runner itself must finalize the
+    // run (status 'completed' + comparison artifacts) once the task reaches
+    // a terminal state.
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    const comparisonMdPath = path.join(outputs, 'comparisons', `${runId}.md`);
+    const comparisonJsonPath = path.join(outputs, 'comparisons', `${runId}.json`);
+    await waitFor(async () => (await getRunRecord(runId))?.status === 'completed',
+      10000, 'run self-finalized to completed');
+
+    const rec = await getRunRecord(runId);
+    assert.ok(rec, 'run record should exist');
+    assert.equal(rec.status, 'completed', 'run must be finalized by the runner itself');
+    assert.equal(rec.comparisonMdPath, comparisonMdPath, 'comparison md path recorded');
+    assert.equal(rec.comparisonJsonPath, comparisonJsonPath, 'comparison json path recorded');
+    assert.ok(fs.existsSync(comparisonMdPath), 'comparison markdown must exist after self-finalize');
+    assert.ok(fs.existsSync(comparisonJsonPath), 'comparison json must exist after self-finalize');
+    const md = fs.readFileSync(comparisonMdPath, 'utf8');
+    assert.match(md, /PASS/, 'comparison must aggregate the completed run as a pass');
   } finally {
     ac.abort();
     await runnerDone;
