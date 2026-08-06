@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { runAgentLoop } from '../../src/agent-loop/index.js';
+import { runAgentLoop } from '../../src/agent-loop/loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from '../../src/tools/index.js';
 import { ConversationLogger } from '../../src/logger/conversation-logger.js';
 import { Sandbox, safeResolve } from '../../src/sandbox/sandbox.js';
