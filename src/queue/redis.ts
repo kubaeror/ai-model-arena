@@ -268,12 +268,12 @@ export class RedisStreamQueue implements TaskQueue {
 
       if (task.dueAt !== undefined && task.dueAt > Date.now()) {
         if (rotations >= MAX_RETRY_ROTATIONS) {
-          // Throttle the poll loop while the head of the stream is backed off;
-          // without this the runner's immediate re-poll spins on rotations.
-          // The '>' read just delivered this entry to the PEL — ack it so the
-          // task is not left in-flight (parked until reclaim redelivers it);
-          // it stays on the stream and is re-read on the next poll.
-          await this.redis.xack(stream, this.config.consumerGroup, id);
+          // Cap reached: rotate once more so the entry gets a fresh ID
+          // ahead of the group's delivery cursor, then throttle the poll
+          // loop. XACK alone would strand the entry — '>' reads never
+          // revisit IDs at or behind the cursor and reclaim only sees the
+          // PEL. One rotation + one sleep per cycle bounds the spin.
+          await this.rotateNotDue(stream, this.config.consumerGroup, id, fields);
           await new Promise((r) => setTimeout(r, RETRY_ROTATION_SLEEP_MS));
           return null;
         }
