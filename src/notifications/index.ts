@@ -1,7 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
-import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
+import { loadYamlConfigSync } from '../config-loader.js';
 import type { NotificationConfig, NotificationResult, DispatchEvent } from './types.js';
 import { NotificationConfigSchema, DispatchEventType } from './types.js';
 import { sendSlackNotification } from './slack.js';
@@ -9,27 +8,19 @@ import { sendDiscordNotification } from './discord.js';
 
 let notificationConfig: NotificationConfig | null = null;
 
-function expandEnvVars(str: string): string {
-  return str.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] || '');
-}
-
 export function loadNotificationConfig(configPath: string, logger?: Logger): NotificationConfig {
   if (notificationConfig) return notificationConfig;
-  
-  const resolvedPath = path.resolve(configPath);
-  if (!fs.existsSync(resolvedPath)) {
-    const fallback = NotificationConfigSchema.parse({ channels: {} });
-    logger?.warn(`Notification config not found at ${resolvedPath}, notifications disabled`);
-    notificationConfig = fallback;
-    return fallback;
-  }
-  
-  const content = fs.readFileSync(resolvedPath, 'utf8');
-  const expanded = expandEnvVars(content);
-  const parsed = load(expanded);
-  const validated = NotificationConfigSchema.parse(parsed);
-  notificationConfig = validated;
-  return validated;
+
+  notificationConfig = loadYamlConfigSync({
+    filePath: configPath,
+    schema: NotificationConfigSchema,
+    fallback: NotificationConfigSchema.parse({ channels: {} }),
+    expandEnv: true,
+    cache: true,
+    logger,
+    missingMessage: `Notification config not found at ${path.resolve(configPath)}, notifications disabled`,
+  });
+  return notificationConfig;
 }
 
 function getChannel(name: string): { type: string; webhookUrl: string } | null {

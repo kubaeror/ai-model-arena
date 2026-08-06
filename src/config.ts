@@ -1,8 +1,7 @@
 import 'dotenv/config';
-import fs from 'node:fs';
 import path from 'node:path';
-import { load } from 'js-yaml';
 import { z } from 'zod';
+import { loadYamlConfigSync } from './config-loader.js';
 import type { SendOpts } from './providers/adapters/base.js';
 
 // ── Schemas ────────────────────────────────────────────────────────────────
@@ -61,16 +60,12 @@ export type ScenarioConfig = z.output<typeof ScenarioConfigSchema>;
 
 // ── Loaders ─────────────────────────────────────────────────────────────────
 
-function readYaml(filePath: string): unknown {
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`Config file not found: ${filePath}`);
-  }
-  const raw = fs.readFileSync(filePath, 'utf8');
-  return load(raw);
-}
-
 export function loadScenario(filePath: string): ScenarioConfig {
-  return ScenarioConfigSchema.parse(readYaml(filePath));
+  return loadYamlConfigSync({
+    filePath,
+    schema: ScenarioConfigSchema,
+    throwOnMissing: true,
+  });
 }
 
 /** Resolve a scenario by bare name ("express-rest") or explicit yaml path. */
