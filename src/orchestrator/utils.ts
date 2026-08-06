@@ -1,7 +1,5 @@
 import { findProjectRoot } from '../paths.js';
 
-export const ARENA_PREFIX = 'arena-';
-
 export function projectRoot(): string {
   return process.env.AI_ARENA_ROOT ?? findProjectRoot();
 }
