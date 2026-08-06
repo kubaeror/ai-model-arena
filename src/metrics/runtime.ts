@@ -1,3 +1,5 @@
+import { percentile } from './percentile.js';
+
 // Span schema matches observability/trace-meta.ts (what the runner writes).
 interface Span {
   spanId?: string;
@@ -11,9 +13,10 @@ export function aggregateLatency(spans: Span[], filterName?: string): { p50: num
   const filtered = (filterName ? spans.filter(s => s.name === filterName) : spans);
   const durations = filtered.map(s => s.endedAt - s.startedAt).sort((a, b) => a - b);
   if (durations.length === 0) return { p50: null, p95: null };
-  const p50 = durations[Math.floor(durations.length * 0.5)] ?? null;
-  const p95 = durations[Math.floor(durations.length * 0.95)] ?? null;
-  return { p50, p95 };
+  return {
+    p50: percentile(durations, 50) ?? null,
+    p95: percentile(durations, 95) ?? null,
+  };
 }
 
 export function computeTps(spans: Span[], completionTokens: number): number | null {

@@ -2,6 +2,7 @@ import { loadRunIndex } from '../orchestrator/run-index.js';
 import { readTraceMeta, type TraceMeta, type SpanMeta } from './trace-meta.js';
 import { readResult } from '../anomaly-detection/baselines.js';
 import { anomalyCountsByModel } from '../anomaly-detection/db.js';
+import { percentile } from '../metrics/percentile.js';
 
 /**
  * Aggregated observability statistics computed by scanning stored run data +
@@ -41,13 +42,6 @@ export interface ObservabilityStats {
   latency: LatencyStat[];
   models: ModelStat[];
   baselines: ScenarioBaseline[];
-}
-
-function percentile(sorted: number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  if (sorted.length === 1) return sorted[0]!;
-  const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
-  return sorted[Math.max(0, idx)]!;
 }
 
 export async function computeObservabilityStats(modelFilter?: string): Promise<ObservabilityStats> {
@@ -98,8 +92,8 @@ export async function computeObservabilityStats(modelFilter?: string): Promise<O
       model: model ?? '', tool: tool ?? '',
       count: arr.length,
       avgMs: arr.reduce((a, b) => a + b, 0) / arr.length,
-      p95Ms: percentile(sorted, 95),
-      p99Ms: percentile(sorted, 99),
+      p95Ms: percentile(sorted, 95) ?? 0,
+      p99Ms: percentile(sorted, 99) ?? 0,
     });
   }
   latency.sort((a, b) => b.count - a.count);
