@@ -13,7 +13,8 @@
  *   xrange(stream, start, end, 'COUNT', n)              → [[id, fields]]  (start/end: '-'/'+' or exact id)
  *   xautoclaim(stream, group, consumer, minIdleMs,
  *              start, 'COUNT', 5)                       → [nextStart, [[id, fields]], [deletedIds]]
- *   eval(script, numKeys, ...keyOrArg)                  → 0|1 for SETNX dedup script; {ok,attempts} for nack script
+ *   eval(script, numKeys, ...keyOrArg)                  → 0|1 for SETNX dedup script; {ok,attempts} for nack script;
+ *                                                       1 for the rotation script (XACK+XDEL+XADD, fake counts these)
  *   quit()                                              → 'OK'
  *   disconnect()                                        → void
  * ─────────────────────────────────────────────────────────────────────────
@@ -286,4 +287,60 @@ test('nack applies backoff: task is not re-delivered before dueAt', async () => 
   const after = await queue.dequeue(0);
   assert.ok(after);
   assert.equal(after.attempts, 1);
+});
+
+test('rotation re-entry serves ready tasks behind not-due ones', async () => {
+  const fake = createFakeRedis();
+  const queue = makeQueue(fake, { retryBackoffMs: 10_000 });
+  // t1 is not due; t2/t3 are ready and sit behind it in the stream
+  await queue.enqueue({ ...mkTask('t1'), dueAt: Date.now() + 60_000 });
+  await queue.enqueue(mkTask('t2'));
+  await queue.enqueue(mkTask('t3'));
+
+  const next = await queue.dequeue(0);
+  assert.ok(next, 'a ready task behind a not-due head must be served (no null fall-through)');
+  assert.notEqual(next!.taskId, 't1', 'the not-due head is never served');
+  assert.ok(['t2', 't3'].includes(next!.taskId), 'the returned task is one of the ready ones');
+  assert.equal(await queue.size(), 3, 'rotation re-adds the not-due task — nothing is lost');
+
+  const ids = fake.getStreamIds(MAIN_STREAM);
+  const tailFields = fake.getStreamEntry(MAIN_STREAM, ids[ids.length - 1]!);
+  const tailData: Record<string, string> = {};
+  for (let i = 0; i < (tailFields ?? []).length; i += 2) tailData[tailFields![i]!] = tailFields![i + 1]!;
+  assert.equal(JSON.parse(tailData.task ?? '{}').taskId, 't1', 'the not-due task is rotated to the tail of the stream');
+  await queue.close();
+});
+
+test('rotation preserves the task on the stream across any number of rotations', async () => {
+  const fake = createFakeRedis();
+  const queue = makeQueue(fake, { retryBackoffMs: 10_000 });
+  const t1 = mkTask('t1');
+  (t1 as unknown as { _traceparent?: string })._traceparent = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
+  await queue.enqueue(t1);
+
+  const first = await queue.dequeue(0);
+  assert.ok(first);
+  await queue.nack(first!._redisId!, 'backoff'); // dueAt = now + 10s → not due
+
+  const assertSurvives = () => {
+    const ids = fake.getStreamIds(MAIN_STREAM);
+    assert.equal(ids.length, 1, 'stream must always hold the nacked task');
+    const fields = fake.getStreamEntry(MAIN_STREAM, ids[0]!);
+    const data: Record<string, string> = {};
+    for (let i = 0; i < (fields ?? []).length; i += 2) data[fields![i]!] = fields![i + 1]!;
+    const task = JSON.parse(data.task ?? '{}');
+    assert.equal(task.taskId, 't1', 'rotated entry still carries the original task');
+    assert.equal(task.attempts, 1, 'rotation preserves the bumped attempts');
+    assert.equal(data.traceparent, '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01', 'rotation preserves traceparent');
+  };
+
+  await queue.dequeue(0); // rotates the not-due head up to MAX_RETRY_ROTATIONS times
+  assertSurvives();
+  assert.ok(fake.rotationEvalCount >= 1, 'rotation went through the atomic Lua script');
+
+  const idBefore = fake.getStreamIds(MAIN_STREAM)[0];
+  await queue.dequeue(0); // second rotation pass
+  assertSurvives();
+  assert.notEqual(fake.getStreamIds(MAIN_STREAM)[0], idBefore, 'each rotation re-adds the entry under a fresh id');
+  await queue.close();
 });

@@ -175,6 +175,29 @@ export class RedisStreamQueue implements TaskQueue {
     }
   }
 
+  /**
+   * Atomically rotates a not-yet-due entry to the tail of the stream.
+   * XACK + XDEL + XADD run in a single Lua eval (mirroring the nack script) so
+   * a crash between the delete and the re-add can never lose the task.
+   */
+  private async rotateNotDue(stream: string, group: string, id: string, fields: string[]): Promise<void> {
+    const script = `
+      local stream = KEYS[1]
+      local group = ARGV[1]
+      local id = ARGV[2]
+      local newArgs = {}
+      local n = #ARGV
+      for i = 3, n do
+        newArgs[#newArgs + 1] = ARGV[i]
+      end
+      redis.call('XACK', stream, group, id)
+      redis.call('XDEL', stream, id)
+      redis.call('XADD', stream, '*', unpack(newArgs))
+      return 1
+    `;
+    await this.redis.eval(script, 1, stream, group, id, ...fields);
+  }
+
   async enqueue(task: Task): Promise<void> {
     const carrier: Record<string, string> = {};
     propagation.inject(context.active(), carrier);
@@ -215,6 +238,7 @@ export class RedisStreamQueue implements TaskQueue {
     await this.ensureGroup(stream);
 
     const MAX_RETRY_ROTATIONS = 8;
+    const RETRY_ROTATION_SLEEP_MS = 1_000;
     let rotations = 0;
 
     while (true) {
@@ -227,33 +251,37 @@ export class RedisStreamQueue implements TaskQueue {
 
       if (!results || results.length === 0) return null;
 
-      for (const [, messages] of results) {
-        for (const [id, fields] of messages) {
-          const taskData: Record<string, string> = {};
-          for (let i = 0; i < fields.length; i += 2) {
-            taskData[fields[i]!] = fields[i + 1]!;
-          }
-          const task = parseTask(JSON.parse(taskData.task ?? '{}'));
-          task._redisId = id;
-          if (taskData.traceparent) task._traceparent = taskData.traceparent;
-          if (task._traceparent) {
-            propagation.extract(context.active(), { traceparent: task._traceparent });
-          }
+      const messages = results[0]?.[1] ?? [];
+      if (messages.length === 0) return null;
 
-          if (task.dueAt !== undefined && task.dueAt > Date.now()) {
-            // Not ready yet — rotate to the end of the stream, then re-read.
-            if (rotations >= MAX_RETRY_ROTATIONS) return null;
-            const newFields: (string | number)[] = [...fields];
-            await this.redis.xack(stream, this.config.consumerGroup, id);
-            await this.redis.xdel(stream, id);
-            await this.redis.xadd(stream, '*', ...newFields);
-            rotations++;
-            break; // re-enter the outer loop (BLOCK 0)
-          }
-          return task;
-        }
+      const [id, fields] = messages[0]!;
+      const taskData: Record<string, string> = {};
+      for (let i = 0; i < fields.length; i += 2) {
+        taskData[fields[i]!] = fields[i + 1]!;
       }
-      return null;
+      const task = parseTask(JSON.parse(taskData.task ?? '{}'));
+      task._redisId = id;
+      if (taskData.traceparent) task._traceparent = taskData.traceparent;
+      if (task._traceparent) {
+        propagation.extract(context.active(), { traceparent: task._traceparent });
+      }
+
+      if (task.dueAt !== undefined && task.dueAt > Date.now()) {
+        if (rotations >= MAX_RETRY_ROTATIONS) {
+          // Throttle the poll loop while the head of the stream is backed off;
+          // without this the runner's immediate re-poll spins on rotations.
+          // The '>' read just delivered this entry to the PEL — ack it so the
+          // task is not left in-flight (parked until reclaim redelivers it);
+          // it stays on the stream and is re-read on the next poll.
+          await this.redis.xack(stream, this.config.consumerGroup, id);
+          await new Promise((r) => setTimeout(r, RETRY_ROTATION_SLEEP_MS));
+          return null;
+        }
+        await this.rotateNotDue(stream, this.config.consumerGroup, id, fields);
+        rotations++;
+        continue; // re-read with BLOCK 0 — the next entry may be ready
+      }
+      return task;
     }
   }
 
