@@ -328,16 +328,16 @@ async function start(): Promise<void> {
   // ── Queue & DLQ routes (admin only) ───────────────────────────────────────
   registerQueueRoutes(app, requireAuth(auth));
   const { activateKillSwitch, deactivateKillSwitch, isKillSwitchActive } = await import('../orchestrator/run-lifecycle.js');
-  app.post('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), (_req, res) => {
-    activateKillSwitch();
+  app.post('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), async (_req, res) => {
+    await activateKillSwitch();
     res.json({ active: true });
   });
-  app.delete('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), (_req, res) => {
-    deactivateKillSwitch();
+  app.delete('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), async (_req, res) => {
+    await deactivateKillSwitch();
     res.json({ active: false });
   });
-  app.get('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), (_req, res) => {
-    res.json({ active: isKillSwitchActive() });
+  app.get('/api/ops/killswitch', requireAuth(auth), requireRole('admin'), async (_req, res) => {
+    res.json({ active: await isKillSwitchActive() });
   });
 
   // ── Public API (API key auth + rate limiting), versioned under /api/v1 ────────

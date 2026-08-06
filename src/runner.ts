@@ -254,7 +254,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   cleanupInterval.unref();
 
   while (!signal.aborted) {
-    if (isKillSwitchActive()) {
+    if (await isKillSwitchActive()) {
       if (!runningTask) {
         logger.info('Kill switch active — stopping dequeue loop');
         break;
@@ -283,9 +283,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       // Check per-run cancellation before starting execution
       const runId = task.config.modelRunId as string ?? task.sessionId;
-      if (isRunCancelled(runId)) {
+      if (await isRunCancelled(runId)) {
         logger.info('Run cancelled before execution', { runId, taskId: task.taskId });
-        clearRunCancelled(runId);
+        await clearRunCancelled(runId);
         await queue.ack(task._redisId ?? task.taskId);
         continue;
       }
@@ -535,7 +535,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             },
             onBudgetCheck: async (_turn: number, _tokenUsage: TokenUsage) => {
               const cancelledRunId = task!.config.modelRunId as string ?? task!.sessionId;
-              if (isRunCancelled(cancelledRunId)) {
+              if (await isRunCancelled(cancelledRunId)) {
                 logger.info('Run cancelled during execution', { runId: cancelledRunId });
                 return false;
               }
