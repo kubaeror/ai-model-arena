@@ -5,7 +5,7 @@ import { writeComparison, type ComparisonEntry } from '../../logger/comparison-l
 import { updateRun, type RunIndexRecord, type RunIndexModelEntry } from '../run-index.js';
 import { outputRoot } from '../../paths.js';
 
-export interface AggregateInput {
+interface AggregateInput {
   runId: string;
   scenario: string;
   startedAt: string;

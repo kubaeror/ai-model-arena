@@ -14,7 +14,7 @@ import type { ModelAdapter, SendOpts } from '../providers/adapters/base.js';
  * Per-caller error-text formatters. Defaults match the agent loop's historical
  * wording; the subagent overrides them with its own phrasing.
  */
-export interface TurnLoopErrorFormatters {
+interface TurnLoopErrorFormatters {
   apiError: (turn: number, message: string) => string;
   unknownTool: (turn: number, name: string) => string;
   toolError: (turn: number, name: string, content: string) => string;
@@ -22,7 +22,7 @@ export interface TurnLoopErrorFormatters {
 }
 
 /** Per-turn hooks. Returning false aborts the loop. */
-export interface TurnLoopHooks {
+interface TurnLoopHooks {
   /** Called before each model send; return false to abort the loop ('budget_exceeded'). */
   onTurnStart?: (turn: number, usage: TokenUsage) => Promise<boolean>;
   /**
@@ -46,7 +46,7 @@ export interface TurnLoopHooks {
  * side effects (spans, transcripts, injection scanning) without the primitive
  * knowing about them.
  */
-export interface TurnLoopEvents {
+interface TurnLoopEvents {
   /** After the assistant message is appended to `messages`. */
   onAssistantMessage?: (
     turn: number,
@@ -71,7 +71,7 @@ export interface TurnLoopEvents {
   onTaskComplete?: (turn: number) => void;
 }
 
-export interface TurnLoopOptions {
+interface TurnLoopOptions {
   adapter: ModelAdapter;
   tools: ToolDefinition[];
   executors: ToolExecutorMap;
@@ -98,7 +98,7 @@ export interface TurnLoopOptions {
   events?: TurnLoopEvents;
 }
 
-export interface TurnLoopResult {
+interface TurnLoopResult {
   turnsUsed: number;
   totalToolCalls: number;
   toolsCalled: { name: string; count: number }[];

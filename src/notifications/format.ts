@@ -12,7 +12,7 @@ import { postWithRetry } from './retry.js';
  * Every other key (including `regressions`, consumed via regressionSummary)
  * is preserved in `extra`, a full shallow copy of the event data.
  */
-export interface NormalizedEvent {
+interface NormalizedEvent {
   type: string;
   status?: unknown;
   model?: unknown;

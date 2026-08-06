@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import * as schema from './schema-pg.js';
 
-export type PgClient = ReturnType<typeof drizzle<typeof schema>>;
+type PgClient = ReturnType<typeof drizzle<typeof schema>>;
 
 let pgPool: pg.Pool | null = null;
 let pgClient: PgClient | null = null;

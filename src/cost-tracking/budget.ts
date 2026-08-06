@@ -15,7 +15,7 @@ const DAY_KEY = () => new Date().toISOString().slice(0, 10);
 const MONTH_KEY = () => new Date().toISOString().slice(0, 7);
 
 /** Reservations older than this are considered leaked (crashed runs) and pruned. */
-export const RESERVATION_TTL_MS = 4 * 60 * 60 * 1000;
+const RESERVATION_TTL_MS = 4 * 60 * 60 * 1000;
 
 /** Object.prototype keys that a model name must never write through. */
 const LEDGER_RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);

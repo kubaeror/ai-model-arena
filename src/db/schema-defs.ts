@@ -28,7 +28,7 @@ export type ColumnDef = {
   references?: { table: string; column: string };
 };
 
-export interface IndexDef {
+interface IndexDef {
   name: string;
   unique?: boolean;
   on: string[];

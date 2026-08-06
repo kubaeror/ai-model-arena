@@ -43,10 +43,6 @@ export function getScheduleState(id: string): ScheduleState | undefined {
   return scheduleStates.get(id);
 }
 
-export function getAllScheduleStates(): ScheduleState[] {
-  return Array.from(scheduleStates.values());
-}
-
 export function updateScheduleState(id: string, update: Partial<ScheduleState>): void {
   const current = scheduleStates.get(id) ?? { id, status: 'idle' as const, consecutiveFailures: 0, totalRuns: 0, totalFailures: 0 };
   scheduleStates.set(id, { ...current, ...update });

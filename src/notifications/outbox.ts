@@ -6,7 +6,7 @@ import { notifications } from '../db/schema.js';
 import type { DispatchEvent, NotificationResult } from './types.js';
 import { sendNotification } from './index.js';
 
-export interface OutboxRow {
+interface OutboxRow {
   id: string;
   eventType: string;
   channel: string;
