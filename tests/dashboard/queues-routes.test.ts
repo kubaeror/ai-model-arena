@@ -5,12 +5,7 @@ import type http from 'node:http';
 import express from 'express';
 import type { RequestHandler } from 'express';
 import { registerQueueRoutes } from '../../src/dashboard-server/routes/queues.js';
-
-const KNOWN_PROVIDERS = [
-  'openai', 'groq', 'cerebras', 'nvidia', 'mistral', 'sambanova', 'scaleway',
-  'cloudflare', 'github-copilot', 'xai', 'openrouter', 'ollama',
-  'anthropic', 'google',
-];
+import { knownProviders } from '../../src/queue/router.js';
 
 let server: http.Server;
 let base: string;
@@ -55,7 +50,7 @@ test('GET /api/queues reports per-provider depth, dlqDepth, consumerLag and maxR
   assert.equal(res.status, 200);
   const body = (await res.json()) as { queues: Array<Record<string, unknown>> };
   assert.ok(Array.isArray(body.queues));
-  assert.deepEqual(body.queues.map((q) => q.provider), KNOWN_PROVIDERS);
+  assert.deepEqual(body.queues.map((q) => q.provider), knownProviders);
   for (const q of body.queues) {
     assert.ok('depth' in q, 'entry has depth');
     assert.ok('dlqDepth' in q, 'entry has dlqDepth');
