@@ -1,20 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../lib/api';
-
-async function apiFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await api.get(path, init);
-  if (!res.ok) throw new Error(`GET ${path}: ${res.status}`);
-  return res.json();
-}
-
-async function apiPostJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await api.post(path, {
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`POST ${path}: ${res.status}`);
-  return res.json();
-}
+import { apiFetch } from '../lib/api';
 
 interface CacheStateRow {
   source: string;
@@ -29,7 +14,7 @@ export function useCacheStats() {
   return useQuery({
     queryKey: ['cache', 'stats'],
     queryFn: async () => {
-      const res = await apiFetchJson<{ data: CacheStateRow[] }>('/api/cache/stats');
+      const res = await apiFetch<{ data: CacheStateRow[] }>('/api/cache/stats');
       return res.data;
     },
     refetchInterval: 30_000,
@@ -56,7 +41,7 @@ export function useCacheLeaderboard() {
   return useQuery({
     queryKey: ['cache', 'leaderboard'],
     queryFn: async () => {
-      const res = await apiFetchJson<{ data: LeaderboardEntry[] }>('/api/cache/leaderboard');
+      const res = await apiFetch<{ data: LeaderboardEntry[] }>('/api/cache/leaderboard');
       return res.data;
     },
     refetchInterval: 15_000,
@@ -67,7 +52,10 @@ export function useRefreshCache() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (source: string) => {
-      return apiPostJson<{ ok: boolean; count: number; error?: string }>('/api/cache/refresh', { source });
+      return apiFetch<{ ok: boolean; count: number; error?: string }>('/api/cache/refresh', {
+        method: 'POST',
+        body: JSON.stringify({ source }),
+      });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['cache'] });

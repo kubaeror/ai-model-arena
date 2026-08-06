@@ -17,6 +17,17 @@ const API_BASE = import.meta.env.VITE_API_URL ?? '';
 const TOKEN_KEY = 'ai-arena-token';
 const USER_KEY = 'ai-arena-user';
 
+/** Build a query string from a params object, skipping null/undefined values. */
+export function qs(params?: Record<string, unknown>): string {
+  if (!params) return '';
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) sp.set(k, String(v));
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : '';
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -200,13 +211,7 @@ export async function listAnomalies(params?: {
   model?: string; type?: string; severity?: string; resolved?: boolean;
   from?: string; to?: string; limit?: number; offset?: number;
 }): Promise<AnomalyRecord[]> {
-  const sp = new URLSearchParams();
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) sp.set(k, String(v));
-    }
-  }
-  const r = await apiFetch<{ anomalies: AnomalyRecord[] }>(`/api/anomalies?${sp.toString()}`);
+  const r = await apiFetch<{ anomalies: AnomalyRecord[] }>(`/api/anomalies${qs(params)}`);
   return r.anomalies;
 }
 
@@ -337,13 +342,7 @@ export async function deactivateKillswitch(): Promise<{ active: boolean }> {
 
 // ── Export ───────────────────────────────────────────────────────────────────
 export function getExportCsvUrl(params?: { model?: string; scenario?: string; from?: string; to?: string }): string {
-  const sp = new URLSearchParams();
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v) sp.set(k, v);
-    }
-  }
-  return `${API_BASE}/api/export/csv?${sp.toString()}`;
+  return `${API_BASE}/api/export/csv${qs(params)}`;
 }
 
 // ── Analytics (cost leaderboard) ─────────────────────────────────────────────
@@ -373,13 +372,7 @@ export interface SessionRow {
 export async function listSessions(params?: {
   status?: string; model?: string; limit?: number; offset?: number;
 }): Promise<{ sessions: SessionRow[]; total: number }> {
-  const sp = new URLSearchParams();
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) sp.set(k, String(v));
-    }
-  }
-  return apiFetch<{ sessions: SessionRow[]; total: number }>(`/api/sessions?${sp.toString()}`);
+  return apiFetch<{ sessions: SessionRow[]; total: number }>(`/api/sessions${qs(params)}`);
 }
 
 export async function getSession(sessionId: string): Promise<SessionRow | null> {
@@ -414,13 +407,7 @@ export interface FileRow {
 export async function listFiles(params?: {
   model?: string; runId?: string; tool?: string; limit?: number; offset?: number;
 }): Promise<{ files: FileRow[]; total: number }> {
-  const sp = new URLSearchParams();
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) sp.set(k, String(v));
-    }
-  }
-  return apiFetch<{ files: FileRow[]; total: number }>(`/api/files?${sp.toString()}`);
+  return apiFetch<{ files: FileRow[]; total: number }>(`/api/files${qs(params)}`);
 }
 
 // ── Prompts ─────────────────────────────────────────────────────────────────
@@ -579,13 +566,7 @@ export async function listAudit(params?: {
   actor?: string; action?: string; entity_type?: string; entity_id?: string;
   from?: string; to?: string; limit?: number; offset?: number;
 }): Promise<{ entries: AuditEntry[]; total: number }> {
-  const sp = new URLSearchParams();
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) sp.set(k, String(v));
-    }
-  }
-  return apiFetch<{ entries: AuditEntry[]; total: number }>(`/api/audit?${sp.toString()}`);
+  return apiFetch<{ entries: AuditEntry[]; total: number }>(`/api/audit${qs(params)}`);
 }
 
 // ── Notifications (admin only) ───────────────────────────────────────────────

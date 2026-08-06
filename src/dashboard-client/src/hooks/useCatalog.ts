@@ -1,11 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../lib/api';
-
-async function apiFetchJson<T>(path: string): Promise<T> {
-  const res = await api.get(path);
-  if (!res.ok) throw new Error(`GET ${path}: ${res.status}`);
-  return res.json();
-}
+import { apiFetch } from '../lib/api';
 
 export interface CatalogModel {
   id: string;
@@ -47,14 +41,14 @@ export function useCatalogModels(filters: CatalogModelFilters = {}) {
       if (filters.min_context) params.set('min_context', String(filters.min_context));
       if (filters.sort) params.set('sort', filters.sort);
       if (filters.q) params.set('q', filters.q);
-      const res = await apiFetchJson<{ data: CatalogModel[] }>(`/api/catalog/models?${params.toString()}`);
+      const res = await apiFetch<{ data: CatalogModel[] }>(`/api/catalog/models?${params.toString()}`);
       return res.data;
     },
     refetchInterval: 60_000,
   });
 }
 
-interface ModelDetail extends CatalogModel {
+export interface ModelDetail extends CatalogModel {
   modalities: string | null;
   input_limit: number | null;
   tier_size: number | null;
@@ -86,7 +80,7 @@ export interface RuntimeStatRow {
   measured_at: string;
 }
 
-interface ModelDetailResponse {
+export interface ModelDetailResponse {
   model: ModelDetail;
   benchmarks: BenchmarkRow[];
   runtime: RuntimeStatRow[];
@@ -96,7 +90,7 @@ export function useCatalogModel(id: string) {
   return useQuery({
     queryKey: ['catalog', 'model', id],
     queryFn: async () => {
-      const res = await apiFetchJson<ModelDetailResponse>(`/api/catalog/models/${encodeURIComponent(id)}`);
+      const res = await apiFetch<ModelDetailResponse>(`/api/catalog/models/${encodeURIComponent(id)}`);
       return res;
     },
     enabled: !!id,
@@ -104,7 +98,7 @@ export function useCatalogModel(id: string) {
   });
 }
 
-interface BenchmarkFilters {
+export interface BenchmarkFilters {
   name?: string;
   source?: string;
   model?: string;
@@ -118,9 +112,10 @@ export function useBenchmarks(filters: BenchmarkFilters = {}) {
       if (filters.name) params.set('name', filters.name);
       if (filters.source) params.set('source', filters.source);
       if (filters.model) params.set('model', filters.model);
-      const res = await apiFetchJson<{ data: BenchmarkRow[] }>(`/api/catalog/benchmarks?${params.toString()}`);
+      const res = await apiFetch<{ data: BenchmarkRow[] }>(`/api/catalog/benchmarks?${params.toString()}`);
       return res.data;
     },
     refetchInterval: 300_000,
   });
 }
+

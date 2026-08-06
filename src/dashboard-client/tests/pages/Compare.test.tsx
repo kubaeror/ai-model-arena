@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { Compare } from '../../src/pages/Compare';
 
-const { models, benchmarks, apiGetMock } = vi.hoisted(() => {
+const { models, benchmarks, apiFetchMock } = vi.hoisted(() => {
   const models = [
     { id: 'gpt-4o', name: 'GPT-4o', family: 'gpt', provider_id: 'openai', attachment: 1, reasoning: 1, temperature: 0, tool_call: 1, context_limit: 128000, output_limit: 16384, status: null, reasoning_options: null, input: 2.5, output: 10, cache_read: 1.25, cache_write: 5 },
     { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet', family: 'claude', provider_id: 'anthropic', attachment: 1, reasoning: 1, temperature: 0, tool_call: 1, context_limit: 200000, output_limit: 64000, status: null, reasoning_options: null, input: 3, output: 15, cache_read: 1.5, cache_write: 7.5 },
@@ -17,9 +17,9 @@ const { models, benchmarks, apiGetMock } = vi.hoisted(() => {
   return {
     models,
     benchmarks,
-    apiGetMock: vi.fn().mockImplementation(async (path: string) => {
-      if (path.startsWith('/api/catalog/models')) return { ok: true, json: async () => ({ data: models }) };
-      if (path.startsWith('/api/catalog/benchmarks')) return { ok: true, json: async () => ({ data: benchmarks }) };
+    apiFetchMock: vi.fn().mockImplementation(async (path: string) => {
+      if (path.startsWith('/api/catalog/models')) return { data: models };
+      if (path.startsWith('/api/catalog/benchmarks')) return { data: benchmarks };
       throw new Error(`unexpected GET ${path}`);
     }),
   };
@@ -27,7 +27,7 @@ const { models, benchmarks, apiGetMock } = vi.hoisted(() => {
 
 vi.mock('../../src/lib/api', async () => {
   const actual = await vi.importActual('../../src/lib/api');
-  return { ...actual, api: { ...actual.api, get: apiGetMock } };
+  return { ...actual, apiFetch: apiFetchMock };
 });
 
 function renderWithProviders(ui: React.ReactElement) {
