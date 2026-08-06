@@ -129,5 +129,3 @@ export async function anomaliesForRun(runId: string): Promise<AnomalyRecord[]> {
     return [];
   }
 }
-
-export type { NewAnomaly, AnomalyRecord, AnomalyType, AnomalySeverity } from './db.js';

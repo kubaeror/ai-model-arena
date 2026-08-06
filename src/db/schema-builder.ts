@@ -63,7 +63,7 @@ type SqliteBaseBuilder<D extends ColumnDef, TName extends string> =
       ? SQLiteIntegerBuilderInitial<TName>
       : SQLiteRealBuilderInitial<TName>;
 
-export type SqliteBuilderFor<D extends ColumnDef, TName extends string> =
+type SqliteBuilderFor<D extends ColumnDef, TName extends string> =
   D extends { primaryKey: true }
     ? D extends { type: 'int' }
       ? SqliteBaseBuilder<D, TName> & { _: { isPrimaryKey: true; hasDefault: true; notNull: true } }
@@ -81,7 +81,7 @@ type PgBaseBuilder<D extends ColumnDef, TName extends string> =
         : PgIntegerBuilderInitial<TName>
       : PgRealBuilderInitial<TName>;
 
-export type PgBuilderFor<D extends ColumnDef, TName extends string> =
+type PgBuilderFor<D extends ColumnDef, TName extends string> =
   D extends { primaryKey: true }
     ? PgBaseBuilder<D, TName> & { _: { isPrimaryKey: true; notNull: true } }
     : D extends { notNull: true }
@@ -116,11 +116,11 @@ type PgTableConfigFor<TName extends string, C extends Record<string, ColumnDef>>
   dialect: 'pg';
 };
 
-export type BuiltSqliteTable<TName extends string, C extends Record<string, ColumnDef>> = SqliteTableConfigFor<TName, C> extends infer Config extends TableConfig
+type BuiltSqliteTable<TName extends string, C extends Record<string, ColumnDef>> = SqliteTableConfigFor<TName, C> extends infer Config extends TableConfig
   ? SQLiteTableWithColumns<Config>
   : never;
 
-export type BuiltPgTable<TName extends string, C extends Record<string, ColumnDef>> = PgTableConfigFor<TName, C> extends infer Config extends TableConfig
+type BuiltPgTable<TName extends string, C extends Record<string, ColumnDef>> = PgTableConfigFor<TName, C> extends infer Config extends TableConfig
   ? PgTableWithColumns<Config>
   : never;
 
@@ -187,7 +187,7 @@ function pgIndexColumns(t: unknown, on: string[]): [PgColumn, ...PgColumn[]] {
   return on.map((cn) => (t as Record<string, PgColumn>)[cn]) as [PgColumn, ...PgColumn[]];
 }
 
-export function buildSqliteTable<TName extends string, C extends Record<string, ColumnDef>>(
+function buildSqliteTable<TName extends string, C extends Record<string, ColumnDef>>(
   def: TableDef & { name: TName; columns: C },
   resolveRef: (ref: NonNullable<ColumnDef['references']>) => unknown,
 ): BuiltSqliteTable<TName, C> {
@@ -206,7 +206,7 @@ export function buildSqliteTable<TName extends string, C extends Record<string, 
   return table as unknown as BuiltSqliteTable<TName, C>;
 }
 
-export function buildPgTable<TName extends string, C extends Record<string, ColumnDef>>(
+function buildPgTable<TName extends string, C extends Record<string, ColumnDef>>(
   def: TableDef & { name: TName; columns: C },
   resolveRef: (ref: NonNullable<ColumnDef['references']>) => unknown,
 ): BuiltPgTable<TName, C> {

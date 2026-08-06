@@ -37,7 +37,7 @@ interface ScenarioBaseline {
   avgCostUsd: number;
 }
 
-export interface ObservabilityStats {
+interface ObservabilityStats {
   generatedAt: string;
   latency: LatencyStat[];
   models: ModelStat[];

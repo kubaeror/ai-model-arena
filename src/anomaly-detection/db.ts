@@ -136,7 +136,7 @@ export async function resolveAnomaly(id: number, resolvedAs: 'resolved' | 'false
 
 // ── Webhooks ────────────────────────────────────────────────────────────────
 
-export interface WebhookRecord {
+interface WebhookRecord {
   id: number;
   url: string;
   events: string;
