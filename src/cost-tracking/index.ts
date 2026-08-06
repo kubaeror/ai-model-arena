@@ -8,5 +8,6 @@ export {
   getBudgetStatus,
   reserveBudget,
   releaseReservation,
-  resetBudgetCache 
+  resetBudgetCache,
+  budgetStateRoot 
 } from './budget.js';

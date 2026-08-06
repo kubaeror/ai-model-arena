@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
+import { outputRoot } from '../paths.js';
 import { BudgetConfigSchema, type BudgetConfig, type BudgetState, type BudgetCheckResult } from './types.js';
 import { budgetPercent } from '../observability/metrics.js';
 
@@ -49,6 +50,15 @@ export function loadBudgetConfig(configPath: string, logger?: Logger): BudgetCon
 
 function getStatePath(config: BudgetConfig, rootDir: string): string {
   return path.join(rootDir, config.stateFile);
+}
+
+/**
+ * Base directory for the budget state file. Follows OUTPUT_ROOT when set so
+ * runners, the dashboard and the orchestrator all read/write the same ledger
+ * in containerized deployments; otherwise stays under the base root.
+ */
+export function budgetStateRoot(baseRoot: string): string {
+  return process.env.OUTPUT_ROOT ? outputRoot() : baseRoot;
 }
 
 function loadBudgetState(config: BudgetConfig, rootDir: string, logger?: Logger): BudgetState {
