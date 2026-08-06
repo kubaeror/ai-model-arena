@@ -9,7 +9,12 @@
  *  - XAUTOCLAIM reassigns PEL entries idle longer than minIdleMs and drops stale PEL
  *    entries for messages deleted from the stream (returned as deleted ids)
  *  - XRANGE returns entries by id range
- *  - eval() runs the two Lua scripts redis.ts uses, dispatched on script signature
+ *  - eval() runs the three Lua scripts redis.ts uses, dispatched on script signature:
+ *      * dedup (SETNX, 1 key, returns 0|1)  — dispatched on its script marker
+ *      * nack (2 keys, returns {ok, attempts}) — dispatched on its script marker
+ *      * rotation (1 key, returns 1) — any remaining 1-key eval; performs XACK +
+ *        XDEL + XADD against the same data structures, so a rotated entry keeps
+ *        its fields but gets a fresh id (mirrors redis.ts rotateNotDue)
  *    (the nack script consumes ARGV[5] = retryBackoffMs and stamps task.dueAt via
  *    Date.now(), standing in for the real script's redis.call('TIME'))
  *
@@ -34,6 +39,9 @@ export class FakeRedis {
   private dedup = new Map<string, string>();
   private kv = new Map<string, string>();
   private seq = 0;
+
+  /** Number of rotation-script evals executed (0 = rotations went the non-atomic path). */
+  rotationEvalCount = 0;
 
   // ---- test-side read helpers (not part of the ioredis surface) ----
 
@@ -217,7 +225,7 @@ export class FakeRedis {
     return [pel.size, ids[0]!, ids[ids.length - 1]!, [...perConsumer.entries()]];
   }
 
-  async eval(script: string, _numKeys: number, ...args: (string | number)[]): Promise<number | Record<string, unknown>> {
+  async eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<number | Record<string, unknown>> {
     if (script.includes(DEDUP_SCRIPT_MARKER)) {
       const key = args[0] as string;
       const value = args[1] as string;
@@ -228,7 +236,27 @@ export class FakeRedis {
     if (script.includes(NACK_SCRIPT_MARKER)) {
       return this.nackScript(args as [string, string, string, string, string, string, string]);
     }
+    if (numKeys === 1) {
+      // Rotation script (redis.ts rotateNotDue): KEYS[1] = stream,
+      // ARGV[1] = group, ARGV[2] = entry id, ARGV[3..] = alternating fields.
+      const [stream, group, id, ...fields] = args as (string | number)[];
+      return this.rotationScript(String(stream), String(group), String(id), fields);
+    }
     throw new Error('FakeRedis: eval called with an unsupported Lua script');
+  }
+
+  private rotationScript(stream: string, group: string, id: string, fields: (string | number)[]): number {
+    const streamEntries = this.streamMap(stream);
+    const entry = streamEntries.get(id);
+    if (!entry) throw new Error('message_not_found');
+    // Mirrors the real Lua script: XACK + XDEL + XADD in one atomic step.
+    // Fields (task, traceparent, ...) are preserved verbatim; the entry gets a
+    // fresh, monotonically increasing id like XADD '*' would produce.
+    this.pelFor(stream, group).delete(id);
+    streamEntries.delete(id);
+    streamEntries.set(this.nextId(), fields.map(String));
+    this.rotationEvalCount += 1;
+    return 1;
   }
 
   private nackScript(args: [string, string, string, string, string, string, string]): Record<string, unknown> {
