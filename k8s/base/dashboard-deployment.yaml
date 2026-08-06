@@ -88,6 +88,9 @@ spec:
           volumeMounts:
             - name: outputs
               mountPath: /var/arena/outputs
+            - name: provider-keys
+              mountPath: /etc/arena/secrets
+              readOnly: true
 
           securityContext:
             readOnlyRootFilesystem: true
@@ -123,3 +126,6 @@ spec:
         - name: outputs
           persistentVolumeClaim:
             claimName: outputs
+        - name: provider-keys
+          secret:
+            secretName: provider-keys

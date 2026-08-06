@@ -3,6 +3,7 @@ import path from 'node:path';
 import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
+import { secretStore } from '../secrets/store.js';
 import type { ModelAdapter } from '../providers/adapters/base.js';
 import type { EvaluationConfig, JudgeResult, JudgeScore, Rubric } from './types.js';
 import { EvaluationConfigSchema } from './types.js';
@@ -21,6 +22,11 @@ export function loadEvaluationConfig(configPath: string, logger?: Logger): Evalu
 
 export function clampScore(n: number): number {
   return Math.min(100, Math.max(0, n));
+}
+
+/** Resolve a judge model's API key via the secret store (k8s file mounts or .env). */
+export function resolveJudgeApiKey(envVar: string): string | undefined {
+  return secretStore.get(envVar);
 }
 
 /**
@@ -121,7 +127,7 @@ export async function runJudgeScoring(
       logger?.warn('Judge model not found in catalog', { model: judgeConfig.model });
       return null;
     }
-    const apiKey = resolved.envVar ? process.env[resolved.envVar] : undefined;
+    const apiKey = resolved.envVar ? resolveJudgeApiKey(resolved.envVar) : undefined;
     const { ProviderRegistry, loadBuiltins } = await import('../providers/index.js');
     const registry = new ProviderRegistry();
     loadBuiltins(registry);

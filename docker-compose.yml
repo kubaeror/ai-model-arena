@@ -70,6 +70,7 @@ services:
     build: .
     restart: unless-stopped
     mem_limit: 1g
+    env_file: .env
     environment:
       DB_DRIVER: postgres
       DATABASE_URL: postgres://arena:arena@postgres:5432/arena
