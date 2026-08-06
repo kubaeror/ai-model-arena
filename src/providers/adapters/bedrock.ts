@@ -1,8 +1,9 @@
 import type { ChatMessage, ModelResponse, ToolDefinition } from '../../types.js';
 import type { ModelAdapter, SendOpts } from './base.js';
-import { BaseAdapter, HttpError } from './base.js';
+import { BaseAdapter, DEFAULT_RETRY, throwForStatus } from './base.js';
 import type { ProviderDescriptor } from '../types.js';
 import type { CreateAdapterOpts } from '../registry.js';
+import { buildOpenAIBody, parseOpenAIResponse, type OpenAIResponse } from './openai-shared.js';
 
 let BedrockRuntimeClient: typeof import('@aws-sdk/client-bedrock-runtime').BedrockRuntimeClient;
 let ConverseCommand: typeof import('@aws-sdk/client-bedrock-runtime').ConverseCommand;
@@ -189,61 +190,21 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
         stopReason: response.stopReason,
         raw: response,
       };
-    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), DEFAULT_RETRY);
   }
 
   /** Gateway proxy fallback (backward compatible) */
   private async sendViaGateway(messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     return this.withRetry(() => this.timed(async () => {
-      const body: Record<string, unknown> = {
-        model: this.modelId,
-        messages: messages.map(m => ({
-          role: m.role,
-          content: m.content,
-          ...(m.toolCalls ? { tool_calls: m.toolCalls } : {}),
-        })),
-      };
-      if (tools.length > 0) body.tools = tools;
-      if (opts?.temperature !== undefined) body.temperature = opts.temperature;
-      if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+      const body = buildOpenAIBody(this.modelId, messages, tools, opts);
 
       const headers: Record<string, string> = {};
       if (this.gatewayKey) headers.authorization = `Bearer ${this.gatewayKey}`;
 
       const res = await this.post(`${this.gatewayUrl}/chat/completions`, body, headers);
-      if (!res.ok) {
-        const text = await res.text();
-        throw new HttpError(res.status, text, `Bedrock ${res.status}: ${text.slice(0, 200)}`);
-      }
-      const json = (await res.json()) as {
-        choices: Array<{
-          message: {
-            content: string | null;
-            tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
-          };
-          finish_reason: string;
-        }>;
-        usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-      };
-      const choice = json.choices[0];
-      if (!choice) {
-        return { text: null, toolCalls: [], usage: {}, stopReason: undefined, raw: json };
-      }
-      return {
-        text: choice.message.content ?? null,
-        toolCalls: (choice.message.tool_calls ?? []).map(tc => {
-          let args: Record<string, unknown> = {};
-          try { args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { args = {}; }
-          return { id: tc.id, name: tc.function.name, arguments: args };
-        }),
-        usage: {
-          prompt: json.usage.prompt_tokens,
-          completion: json.usage.completion_tokens,
-          total: json.usage.total_tokens,
-        },
-        stopReason: choice.finish_reason,
-        raw: json,
-      };
-    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+      await throwForStatus(res, 'Bedrock');
+      const json = (await res.json()) as OpenAIResponse;
+      return parseOpenAIResponse(json);
+    }), DEFAULT_RETRY);
   }
 }

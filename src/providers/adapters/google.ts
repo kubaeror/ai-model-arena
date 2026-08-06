@@ -1,6 +1,6 @@
 import type { ChatMessage, ModelResponse, ToolCall, TokenUsage, ToolDefinition } from '../../types.js';
 import type { ModelAdapter, SendOpts } from './base.js';
-import { BaseAdapter, HttpError } from './base.js';
+import { BaseAdapter, DEFAULT_RETRY, throwForStatus } from './base.js';
 import type { ProviderDescriptor } from '../types.js';
 import type { CreateAdapterOpts } from '../registry.js';
 
@@ -44,13 +44,10 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
       // ids (publishers/.../models/...) survive.
       const url = `${this.baseUrl}/v1beta/models/${encodeURIComponent(this.modelId)}:generateContent`;
       const res = await this.post(url, body, { 'x-goog-api-key': this.apiKey ?? '' });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new HttpError(res.status, text, `Google ${res.status}: ${text.slice(0, 200)}`);
-      }
+      await throwForStatus(res, 'Google');
       const json = (await res.json()) as GeminiResponse;
       return this.parseResponse(json);
-    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), DEFAULT_RETRY);
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
