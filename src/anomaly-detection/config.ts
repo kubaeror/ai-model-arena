@@ -77,7 +77,3 @@ export function loadAnomalyConfig(): AnomalyDetectionConfig {
   cached = AnomalyDetectionConfigSchema.parse(parsed);
   return cached;
 }
-
-export function resetAnomalyConfigCache(): void {
-  cached = null;
-}

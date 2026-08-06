@@ -98,19 +98,6 @@ export async function listModels(): Promise<ModelConfig[]> {
   const r = await apiFetch<{ models: ModelConfig[] }>('/api/models');
   return r.models;
 }
-export async function upsertModel(model: Partial<ModelConfig> & { name: string }): Promise<ModelConfig[]> {
-  const r = await apiFetch<{ models: ModelConfig[] }>('/api/models', {
-    method: 'POST',
-    body: JSON.stringify(model),
-  });
-  return r.models;
-}
-export async function deleteModel(name: string): Promise<ModelConfig[]> {
-  const r = await apiFetch<{ models: ModelConfig[] }>(`/api/models/${encodeURIComponent(name)}`, {
-    method: 'DELETE',
-  });
-  return r.models;
-}
 
 // ── Scenarios ───────────────────────────────────────────────────────────────
 export async function listScenarios(): Promise<ScenarioConfig[]> {
@@ -172,9 +159,6 @@ export async function getRun(
 }> {
   return apiFetch(`/api/runs/${encodeURIComponent(runId)}`);
 }
-export async function triggerRun(scenario: string, models: string[]): Promise<{ runId: string }> {
-  return apiFetch('/api/runs', { method: 'POST', body: JSON.stringify({ scenario, models }) });
-}
 export async function stopRun(runId: string): Promise<void> {
   await apiFetch(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' });
 }
@@ -186,11 +170,6 @@ export async function getConversation(runId: string, model: string): Promise<Con
     `/api/runs/${encodeURIComponent(runId)}/models/${encodeURIComponent(model)}/conversation`,
   );
   return r.conversation;
-}
-export async function getReport(runId: string, model: string): Promise<string> {
-  return apiFetch<string>(
-    `/api/runs/${encodeURIComponent(runId)}/models/${encodeURIComponent(model)}/report`,
-  );
 }
 export async function getRunFiles(runId: string, model: string): Promise<string[]> {
   const r = await apiFetch<{ files: string[] }>(

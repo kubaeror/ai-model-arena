@@ -20,8 +20,6 @@ export const SchedulesConfigSchema = z.object({
 export type Schedule = z.output<typeof ScheduleSchema>;
 export type SchedulesConfig = z.output<typeof SchedulesConfigSchema>;
 
-export type ScheduleId = string;
-
 export interface ScheduleState {
   id: string;
   lastRun?: string;

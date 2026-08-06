@@ -31,7 +31,6 @@ export const BudgetConfigSchema = z.object({
   stateFile: z.string().default('outputs/.budget-state.json'),
 });
 
-export type PricingConfig = z.output<typeof PricingConfigSchema>;
 export type BudgetConfig = z.output<typeof BudgetConfigSchema>;
 export type ModelPricing = z.output<typeof PricingSchema>[string];
 

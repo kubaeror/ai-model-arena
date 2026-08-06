@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 export const EXECUTION_PROFILES = [
   'read-only-analysis',
   'code-generation',
@@ -10,8 +8,6 @@ export const EXECUTION_PROFILES = [
 ] as const;
 
 export type ExecutionProfile = (typeof EXECUTION_PROFILES)[number];
-
-export const ExecutionProfileSchema = z.enum(EXECUTION_PROFILES);
 
 export interface ProfileDefinition {
   name: ExecutionProfile;
@@ -121,15 +117,6 @@ export function getProfile(name: string): ProfileDefinition {
   return PROFILES[name as ExecutionProfile] ?? PROFILES['read-only-analysis'];
 }
 
-export function isToolAllowed(profile: ProfileDefinition, toolName: string): boolean {
-  return profile.allowedTools.includes(toolName);
-}
-
 export function getAllowedTools(profile: ProfileDefinition): string[] {
   return profile.allowedTools;
-}
-
-/** Return the default profile for scenarios that don't specify one. */
-export function getDefaultProfile(): ProfileDefinition {
-  return PROFILES['read-only-analysis'];
 }

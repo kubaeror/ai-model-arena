@@ -279,11 +279,6 @@ export async function updateScheduleRun(id: string, lastRun: string, nextRun: st
   await db.update(schedules).set({ last_run: lastRun, next_run: nextRun }).where(eq(schedules.id, id));
 }
 
-export async function updateScheduleEnabled(id: string, enabled: boolean): Promise<void> {
-  const db = getDrizzleDb();
-  await db.update(schedules).set({ enabled: enabled ? 1 : 0 }).where(eq(schedules.id, id));
-}
-
 export async function updateScheduleStatus(
   id: string,
   s: { lastStatus: string | null; lastError?: string | null; consecutiveFailures?: number; totalRuns?: number; totalFailures?: number },
@@ -304,7 +299,7 @@ export async function getScheduleRow(id: string): Promise<DbSchedule | null> {
   return rows[0] ?? null;
 }
 
-export interface ScheduleInput {
+interface ScheduleInput {
   id: string;
   scenario: string;
   models: string[];

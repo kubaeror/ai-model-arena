@@ -75,5 +75,5 @@ export function loadBuiltins(reg: ProviderRegistry): void {
 }
 
 export { ProviderRegistry } from './registry.js';
-export type { ProviderDescriptor, AdapterKind, AuthScheme } from './types.js';
+export type { ProviderDescriptor } from './types.js';
 export type { CreateAdapterOpts } from './registry.js';

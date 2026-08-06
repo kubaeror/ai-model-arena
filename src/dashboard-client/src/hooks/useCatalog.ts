@@ -124,15 +124,3 @@ export function useBenchmarks(filters: BenchmarkFilters = {}) {
     refetchInterval: 300_000,
   });
 }
-
-export function usePricing(model?: string) {
-  return useQuery({
-    queryKey: ['catalog', 'pricing', model],
-    queryFn: async () => {
-      const url = model ? `/api/catalog/pricing?model=${encodeURIComponent(model)}` : '/api/catalog/pricing';
-      const res = await apiFetchJson<{ data: Array<Record<string, unknown>> }>(url);
-      return res.data;
-    },
-    refetchInterval: 300_000,
-  });
-}

@@ -1,7 +1,5 @@
 import { z } from 'zod';
 
-export type NotificationChannelType = 'slack' | 'discord';
-
 export const NotificationChannelSchema = z.object({
   type: z.enum(['slack', 'discord']),
   webhookUrl: z.string(),
@@ -12,7 +10,6 @@ export const NotificationConfigSchema = z.object({
   routing: z.record(z.string(), z.array(z.string())).optional(),
 });
 
-export type NotificationChannel = z.output<typeof NotificationChannelSchema>;
 export type NotificationConfig = z.output<typeof NotificationConfigSchema>;
 
 export enum DispatchEventType {

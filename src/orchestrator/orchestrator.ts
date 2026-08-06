@@ -42,7 +42,6 @@ export {
   type PerModelStatus,
 };
 export type { RunIndexRecord, RunIndexModelEntry } from './run-index.js';
-export { ARENA_PREFIX } from './utils.js';
 
 export interface CliRunOptions extends RunStartOptions {
   timeoutMs?: number;
