@@ -1,18 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { load } from 'js-yaml';
 import type { Response, NextFunction, Request } from 'express';
 import type { Logger } from '../types.js';
 import type { ApiKeysConfig, ApiKeyPermission, RequestContext, RateLimitState } from './auth-api-types.js';
 import { ApiKeysConfigSchema } from './auth-api-types.js';
-
-function timingSafeEqualStr(a: string, b: string): boolean {
-  const key = Buffer.alloc(32, 0);
-  const ha = crypto.createHmac('sha256', key).update(a).digest();
-  const hb = crypto.createHmac('sha256', key).update(b).digest();
-  return crypto.timingSafeEqual(ha, hb);
-}
+import { timingSafeEqual } from '../auth/timing-safe.js';
 
 const rateLimitStore = new Map<string, RateLimitState>();
 let apiKeysConfig: ApiKeysConfig | null = null;
@@ -76,7 +69,7 @@ function findApiKey(key: string): RequestContext | null {
   let found: RequestContext | null = null;
   // Always iterate all entries for timing-safety (no early-exit on match).
   for (const [storedKey, ctx] of apiKeyMap) {
-    if (timingSafeEqualStr(key, storedKey)) found = ctx;
+    if (timingSafeEqual(key, storedKey)) found = ctx;
   }
   return found;
 }

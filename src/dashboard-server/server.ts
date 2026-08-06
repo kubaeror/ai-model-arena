@@ -16,6 +16,7 @@ import { ensureFresh } from '../catalog/cache.js';
 import { startCatalogCron, stopCatalogCron } from '../catalog/cron.js';
 import { loadAuthConfig, requireAuth, verifyCredentials, signToken, revokeToken, extractBearerToken, setTokenCookie, clearTokenCookie, type AuthedRequest } from './auth.js';
 import { requireRole } from '../auth/rbac.js';
+import { verifyPassword } from '../auth/password.js';
 import { maskSecrets } from './secrets.js';
 import { loadApiKeysConfig, requireApiKey } from './auth-api.js';
 import { LiveHub } from './live.js';
@@ -241,8 +242,7 @@ async function start(): Promise<void> {
       const { getUserByUsername, getUserRolesByUserId } = await import('../db/query.js');
       const user = await getUserByUsername(username);
       if (user) {
-        const argon2 = await import('argon2');
-        if (await argon2.verify(user.password_hash, password)) {
+        if (await verifyPassword(user.password_hash, password)) {
           const roleRows = await getUserRolesByUserId(user.id) as Array<{ id: string }>;
           const roles = roleRows.map((r) => r.id);
           const role = roles.includes('admin') ? 'admin' : roles.includes('editor') ? 'editor' : 'viewer';
