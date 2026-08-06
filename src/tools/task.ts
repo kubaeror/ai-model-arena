@@ -1,6 +1,8 @@
 import { z } from 'zod/v4';
 import { validateArgs } from './util.js';
 import type { ToolExecutor, ChatMessage, TokenUsage, SubagentConfig } from '../types.js';
+import type { ModelAdapter } from '../providers/adapters/base.js';
+import { runTurnLoop } from '../agent-loop/turn-loop.js';
 import { TASK_COMPLETE_TOOL } from './schema.js';
 
 const TaskArgs = z.object({
@@ -10,14 +12,14 @@ const TaskArgs = z.object({
 }).strict();
 
 const MAX_SUBAGENT_TOOL_RESULT_CHARS = 30_000;
-
-function truncate(s: string, max = MAX_SUBAGENT_TOOL_RESULT_CHARS): string {
-  return s.length <= max ? s : s.slice(0, max) + '\n…[truncated]';
-}
+const SUBAGENT_TRUNCATE_SUFFIX = '\n…[truncated]';
 
 /**
- * Inlined subagent loop. Avoids circular import from agent-loop/loop.ts
- * by accepting the adapter as a function on the SubagentConfig.
+ * Subagent loop. Delegates the send->tool->loop skeleton to runTurnLoop
+ * (src/agent-loop/turn-loop.ts) — the shared primitive that the agent loop
+ * uses too. The adapter stays a function on the SubagentConfig so the tool
+ * layer never imports the agent-loop module's dependencies, keeping the
+ * dependency graph acyclic.
  */
 async function runSubagent(
   sub: SubagentConfig,
@@ -36,88 +38,51 @@ async function runSubagent(
     { role: 'user', content: taskPrompt },
   ];
 
-  const usage: TokenUsage = {};
-  const errors: string[] = [];
-  let totalToolCalls = 0;
-  let stopReason = 'unknown';
-  const maxTurns = sub.maxTurns;
-  let turnsUsed = 0;
+  // Minimal ModelAdapter shim over the function-style subagent adapter.
+  const adapter: ModelAdapter = {
+    sendMessage: (msgs, tools) => sub.sendMessage(msgs, tools),
+    supportsReasoning: () => false,
+    supportsPromptCaching: () => false,
+  };
 
-  for (let turn = 1; turn <= maxTurns; turn++) {
-    turnsUsed = turn;
-    let response;
-    try {
-      response = await sub.sendMessage(messages, sub.tools);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`Subagent turn ${turn}: ${msg}`);
-      stopReason = 'api_error';
-      break;
-    }
+  const result = await runTurnLoop({
+    adapter,
+    tools: sub.tools,
+    executors: sub.executors,
+    toolCtx: {
+      sandboxDir,
+      logger: sub.logger,
+      shellTimeoutMs: sub.shellTimeoutMs,
+      maxShellOutputBytes: sub.maxShellOutputBytes,
+      shellPolicy: sub.shellPolicy,
+      webAccess: sub.webAccess,
+      executionProfile: sub.executionProfile,
+      allowedTools: sub.allowedTools,
+    },
+    logger: sub.logger,
+    messages,
+    maxTurns: sub.maxTurns,
+    taskCompleteToolName: TASK_COMPLETE_TOOL,
+    maxToolResultChars: MAX_SUBAGENT_TOOL_RESULT_CHARS,
+    truncateSuffix: SUBAGENT_TRUNCATE_SUFFIX,
+    unknownToolContent: (name) => `Error: unknown tool "${name}"`,
+    errorFormatters: {
+      apiError: (turn, message) => `Subagent turn ${turn}: ${message}`,
+      unknownTool: (_turn, name) => `Subagent: unknown tool "${name}"`,
+      toolError: (_turn, name, content) => `Subagent tool "${name}" error: ${content}`,
+      toolThrew: (_turn, name, content) => `Subagent tool "${name}" threw: ${content}`,
+    },
+  });
 
-    messages.push({ role: 'assistant', content: response.text, toolCalls: response.toolCalls });
-
-    if (response.usage) {
-      usage.prompt = (usage.prompt ?? 0) + (response.usage.prompt ?? 0);
-      usage.completion = (usage.completion ?? 0) + (response.usage.completion ?? 0);
-      usage.total = (usage.total ?? 0) + (response.usage.total ?? 0);
-    }
-
-    if (!response.toolCalls || response.toolCalls.length === 0) {
-      stopReason = 'no_tool_calls';
-      break;
-    }
-
-    const wantsComplete = response.toolCalls.some(tc => tc.name === TASK_COMPLETE_TOOL);
-
-    for (const tc of response.toolCalls) {
-      totalToolCalls++;
-      const executor = sub.executors[tc.name];
-      let content: string;
-      let isError = false;
-      if (!executor) {
-        content = `Error: unknown tool "${tc.name}"`;
-        isError = true;
-        errors.push(`Subagent: unknown tool "${tc.name}"`);
-      } else {
-        try {
-          const res = await executor(tc.arguments, {
-            sandboxDir,
-            logger: sub.logger,
-            shellTimeoutMs: sub.shellTimeoutMs,
-            maxShellOutputBytes: sub.maxShellOutputBytes,
-            shellPolicy: sub.shellPolicy,
-            webAccess: sub.webAccess,
-            executionProfile: sub.executionProfile,
-            allowedTools: sub.allowedTools,
-          });
-          content = res.content;
-          isError = res.isError;
-          if (isError) errors.push(`Subagent tool "${tc.name}" error: ${content}`);
-        } catch (err) {
-          content = `Error executing "${tc.name}": ${err instanceof Error ? err.message : String(err)}`;
-          isError = true;
-          errors.push(`Subagent tool "${tc.name}" threw: ${content}`);
-        }
-      }
-      content = truncate(content);
-      messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content });
-    }
-
-    if (wantsComplete) {
-      stopReason = 'task_complete';
-      break;
-    }
-  }
-
-  if (turnsUsed >= maxTurns && stopReason === 'unknown') {
+  let stopReason = result.stopReason;
+  if (result.turnsUsed >= sub.maxTurns && stopReason === 'unknown') {
     stopReason = 'max_turns';
   }
 
   const finalAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
   const finalOutput = finalAssistantMsg?.content ?? '';
 
-  return { turnsUsed, totalToolCalls, tokenUsage: usage, stopReason, finalOutput, errors };
+  return { turnsUsed: result.turnsUsed, totalToolCalls: result.totalToolCalls, tokenUsage: result.tokenUsage, stopReason, finalOutput, errors: result.errors };
 }
 
 // ── task executor ────────────────────────────────────────────────────────────
