@@ -1,6 +1,8 @@
 import { getDrizzleDb } from '../index.js';
 import { anomalies } from '../schema.js';
+import type { DbAnomaly } from '../schema.js';
 import { eq, and, desc, sql, count, sum } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 
 export type AnomalyType =
   | 'latency'
@@ -96,7 +98,7 @@ function rowToRecord(row: Record<string, unknown>): AnomalyRecord {
 
 export async function listAnomalies(q: AnomalyQuery = {}): Promise<AnomalyRecord[]> {
   const db = getDrizzleDb();
-  const conditions: any[] = [];
+  const conditions: SQL[] = [];
   if (q.model) conditions.push(eq(anomalies.model, q.model));
   if (q.type) conditions.push(eq(anomalies.type, q.type));
   if (q.severity) conditions.push(eq(anomalies.severity, q.severity));
@@ -108,7 +110,7 @@ export async function listAnomalies(q: AnomalyQuery = {}): Promise<AnomalyRecord
     .orderBy(desc(anomalies.detected_at))
     .limit(q.limit ?? 100)
     .offset(q.offset ?? 0);
-  return rows.map((r: any) => rowToRecord(r));
+  return rows.map((r: DbAnomaly) => rowToRecord(r));
 }
 
 export async function getAnomaly(id: number): Promise<AnomalyRecord | null> {
@@ -122,7 +124,7 @@ export async function listAnomaliesForRun(runId: string): Promise<AnomalyRecord[
   const rows = await db.select().from(anomalies)
     .where(eq(anomalies.run_id, runId))
     .orderBy(desc(anomalies.detected_at));
-  return rows.map((r: any) => rowToRecord(r));
+  return rows.map((r: DbAnomaly) => rowToRecord(r));
 }
 
 export async function resolveAnomaly(id: number, resolvedAs: 'resolved' | 'false_positive'): Promise<AnomalyRecord | null> {
@@ -140,5 +142,6 @@ export async function anomalyCountsByModel(): Promise<Array<{ model: string; tot
     total: count(),
     unresolved: sum(sql<number>`CASE WHEN ${anomalies.resolved} = 0 THEN 1 ELSE 0 END`),
   }).from(anomalies).groupBy(anomalies.model).orderBy(desc(count()));
-  return rows.map((r: any) => ({ model: String(r.model), total: Number(r.total), unresolved: Number(r.unresolved) }));
+  return rows.map((r: { model: string; total: number | null; unresolved: number | null }) =>
+    ({ model: String(r.model), total: Number(r.total), unresolved: Number(r.unresolved) }));
 }

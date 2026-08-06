@@ -15,7 +15,7 @@ export async function listPromptVersions(promptId: string): Promise<DbPromptVers
   const db = getDrizzleDb();
   return db.select().from(prompt_versions)
     .where(eq(prompt_versions.prompt_id, promptId))
-    .orderBy(desc(prompt_versions.version)) as any;
+    .orderBy(desc(prompt_versions.version));
 }
 
 export async function getLatestPromptVersion(promptId: string): Promise<number> {
@@ -28,7 +28,11 @@ export async function getLatestPromptVersion(promptId: string): Promise<number> 
 
 // ── Dashboard: prompts helpers ────────────────────────────────────────────
 
-export async function listPromptsWithLatestVersion(): Promise<any[]> {
+export async function listPromptsWithLatestVersion(): Promise<Array<{
+  id: string; name: string; description: string | null;
+  created_at: string; updated_at: string;
+  latest_version: number | null; latest_tag: string | null;
+}>> {
   const db = getDrizzleDb();
   const promptRows = await db.select().from(prompts).orderBy(asc(prompts.name));
   if (promptRows.length === 0) return [];
@@ -66,7 +70,7 @@ export async function updatePromptMetadata(id: string, data: {
   name?: string; description?: string | null; updatedAt: string;
 }): Promise<void> {
   const db = getDrizzleDb();
-  const set: Record<string, any> = { updated_at: data.updatedAt };
+  const set: Record<string, string | null | undefined> = { updated_at: data.updatedAt };
   if (data.name !== undefined) set.name = data.name;
   if (data.description !== undefined) set.description = data.description;
   await db.update(prompts).set(set).where(eq(prompts.id, id));

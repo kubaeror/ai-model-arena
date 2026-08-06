@@ -4,7 +4,22 @@ import { models, pricing, model_runtime_stats } from '../schema.js';
 
 // ── Dashboard: cache leaderboard ──────────────────────────────────────────
 
-export async function queryCacheLeaderboard(): Promise<any[]> {
+export interface CacheLeaderboardRow {
+  id: string;
+  name: string;
+  provider_id: string;
+  context_limit: number | null;
+  input: number | null;
+  output: number | null;
+  cache_read: number | null;
+  intelligence: number | null;
+  coding: number | null;
+  arena_tps: number | null;
+  arena_latency: number | null;
+  arena_runs: number | null;
+}
+
+export async function queryCacheLeaderboard(): Promise<CacheLeaderboardRow[]> {
   const db = getDrizzleDb();
   const r = model_runtime_stats;
   return db.select({
@@ -23,5 +38,5 @@ export async function queryCacheLeaderboard(): Promise<any[]> {
   })
     .from(models)
     .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
-    .orderBy(desc(sql`(SELECT score FROM benchmarks b WHERE b.model_id = ${models.id} AND b.is_preferred = 1 AND b.benchmark = 'Intelligence Index')`)) as any;
+    .orderBy(desc(sql`(SELECT score FROM benchmarks b WHERE b.model_id = ${models.id} AND b.is_preferred = 1 AND b.benchmark = 'Intelligence Index')`)) as CacheLeaderboardRow[];
 }

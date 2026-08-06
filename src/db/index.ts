@@ -61,6 +61,7 @@ export function getDb(): DbClient {
  * but the same runtime API. Consumers should cast to `any` or use the typed
  * query helpers in `db/query.ts` (single barrel).
  */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dialect-union escape hatch: SQLite and PG drizzle clients have incompatible TS generics; consumers cast results to concrete row types.
 export function getDrizzleDb(): any {
   if (_driver === 'postgres') {
     return getPgClient();

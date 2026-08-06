@@ -20,7 +20,7 @@ export async function getUserById(id: string): Promise<DbUser | null> {
 
 export async function listRoles(): Promise<DbRole[]> {
   const db = getDrizzleDb();
-  return db.select().from(roles).orderBy(roles.id) as any;
+  return db.select().from(roles).orderBy(roles.id);
 }
 
 export async function countRoles(): Promise<number> {
@@ -31,7 +31,7 @@ export async function countRoles(): Promise<number> {
 
 // ── Dashboard: users helpers ──────────────────────────────────────────────
 
-export async function listUsersWithRoles(): Promise<any[]> {
+export async function listUsersWithRoles(): Promise<Array<{ id: string; username: string; created_at: string; roles: string }>> {
   const db = getDrizzleDb();
   const userRows = await db.select().from(users).orderBy(asc(users.created_at));
   if (userRows.length === 0) return [];
@@ -66,7 +66,7 @@ export async function updateUser(id: string, data: {
   username?: string; passwordHash?: string;
 }): Promise<void> {
   const db = getDrizzleDb();
-  const set: Record<string, any> = {};
+  const set: Record<string, string> = {};
   if (data.username !== undefined) set.username = data.username;
   if (data.passwordHash !== undefined) set.password_hash = data.passwordHash;
   if (Object.keys(set).length === 0) return;
@@ -79,12 +79,12 @@ export async function deleteUserById(id: string): Promise<void> {
   await db.delete(users).where(eq(users.id, id));
 }
 
-export async function getUserRolesByUserId(userId: string): Promise<any[]> {
+export async function getUserRolesByUserId(userId: string): Promise<Array<{ id: string; description: string | null }>> {
   const db = getDrizzleDb();
   return db.select({ id: roles.id, description: roles.description })
     .from(roles)
     .innerJoin(user_roles, eq(user_roles.role_id, roles.id))
-    .where(eq(user_roles.user_id, userId)) as any;
+    .where(eq(user_roles.user_id, userId)) as Array<{ id: string; description: string | null }>;
 }
 
 export async function assignUserRole(userId: string, roleId: string): Promise<void> {

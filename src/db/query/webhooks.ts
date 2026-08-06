@@ -1,5 +1,6 @@
 import { getDrizzleDb } from '../index.js';
 import { webhooks } from '../schema.js';
+import type { DbWebhook } from '../schema.js';
 import { eq, desc } from 'drizzle-orm';
 import { encryptWebhookSecret, decryptWebhookSecret } from '../../security/webhook-secret-crypto.js';
 
@@ -57,12 +58,12 @@ export async function listWebhooks(activeOnly = false): Promise<WebhookRecord[]>
   const rows = activeOnly
     ? await db.select().from(webhooks).where(eq(webhooks.active, 1))
     : await db.select().from(webhooks).orderBy(desc(webhooks.created_at));
-  return rows.map((r: any) => webhookRowToRecord(r));
+  return rows.map((r: DbWebhook) => webhookRowToRecord(r));
 }
 
 export async function deleteWebhook(id: number): Promise<boolean> {
   const db = getDrizzleDb();
-  const result = (await db.delete(webhooks).where(eq(webhooks.id, id))) as any;
+  const result = (await db.delete(webhooks).where(eq(webhooks.id, id))) as { rowCount?: number; changes?: number };
   // better-sqlite3 returns { changes, lastInsertRowid }, pg returns { rowCount }.
   const changes = typeof result.rowCount === 'number' ? result.rowCount : (result.changes ?? 0);
   return changes > 0;
