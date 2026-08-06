@@ -20,6 +20,21 @@ export class HttpError extends Error {
   }
 }
 
+/** Shared retry policy for provider sends (matches the historical per-adapter literals). */
+export const DEFAULT_RETRY = { maxRetries: 3, initialDelayMs: 1_000, maxDelayMs: 30_000 };
+
+/**
+ * Throw an HttpError for a non-OK response, mirroring the per-adapter copies.
+ * Label text becomes the error prefix, e.g. `OpenAI-compat 500: ...`.
+ */
+export function throwForStatus(res: Response, label: string): Promise<void> | void {
+  if (!res.ok) {
+    return res.text().then((text) => {
+      throw new HttpError(res.status, text, `${label} ${res.status}: ${text.slice(0, 200)}`);
+    });
+  }
+}
+
 const RETRYABLE_MESSAGES = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|other side closed/;
 
 export abstract class BaseAdapter {

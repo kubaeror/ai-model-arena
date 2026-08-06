@@ -1,6 +1,6 @@
 import type { ChatMessage, ModelResponse, ToolCall, TokenUsage, ToolDefinition } from '../../types.js';
 import type { ModelAdapter, SendOpts } from './base.js';
-import { BaseAdapter, HttpError } from './base.js';
+import { BaseAdapter, DEFAULT_RETRY, throwForStatus } from './base.js';
 import type { ProviderDescriptor } from '../types.js';
 import type { CreateAdapterOpts } from '../registry.js';
 
@@ -32,13 +32,10 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
     return this.withRetry(() => this.timed(async () => {
       const body = this.buildBody(messages, tools, opts);
       const res = await this.fetchEndpoint('/v1/messages', body);
-      if (!res.ok) {
-        const text = await res.text();
-        throw new HttpError(res.status, text, `Anthropic ${res.status}: ${text.slice(0, 200)}`);
-      }
+      await throwForStatus(res, 'Anthropic');
       const json = (await res.json()) as AnthropicResponse;
       return this.parseResponse(json);
-    }), { maxRetries: 3, initialDelayMs: 1000, maxDelayMs: 30000 });
+    }), DEFAULT_RETRY);
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
