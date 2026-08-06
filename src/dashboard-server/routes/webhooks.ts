@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { insertWebhook, listWebhooks, deleteWebhook, type NewWebhook } from '../../anomaly-detection/db.js';
+import { insertWebhook, listWebhooks, deleteWebhook, type NewWebhook } from '../../db/query.js';
 import { auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { asyncHandler, notFound } from '../helpers.js';
