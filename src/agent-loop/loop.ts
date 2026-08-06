@@ -24,6 +24,8 @@ export interface AgentLoopOptions {
   logger: Logger;
   /** Pre-existing messages to replay (checkpoint resume). Skips system+task injection. */
   initialMessages?: ChatMessage[];
+  /** First turn number for this execution (checkpoint resume continuation). Defaults to 1. */
+  initialTurn?: number;
   /** Called after each turn with ONLY the messages appended this turn. */
   onTurnComplete?: (turn: number, newMessages: ChatMessage[], tokenUsage: TokenUsage, durationMs?: number) => Promise<void>;
   /** If provided, called after each turn to check budget. Return false to abort the run. */
@@ -150,7 +152,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     return { turnsUsed: 0, maxTurns, totalToolCalls: 0, toolsCalled: [], toolSuccessRates: {}, tokenUsage: usage, stopReason, errors: [] };
   }
 
-  for (let turn = 1; turn <= maxTurns; turn++) {
+  const startTurn = opts.initialTurn ?? 1;
+  for (let turn = startTurn; turn <= maxTurns; turn++) {
     if (onBudgetCheck) {
       try {
         const ok = await onBudgetCheck(turn, usage);
