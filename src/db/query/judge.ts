@@ -33,3 +33,7 @@ export async function listJudgeScores(runId?: string): Promise<DbJudgeScore[]> {
     : await db.select().from(judge_scores);
   return rows as DbJudgeScore[];
 }
+
+export async function listJudgeScoresForRun(runId: string): Promise<DbJudgeScore[]> {
+  return listJudgeScores(runId);
+}

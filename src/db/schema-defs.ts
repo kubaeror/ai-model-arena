@@ -365,7 +365,25 @@ const schedulesColumns = {
   enabled: { type: 'int' as const, notNull: true, default: 1 },
   last_run: { type: 'text' as const },
   next_run: { type: 'text' as const },
+  last_status: { type: 'text' as const },
+  last_error: { type: 'text' as const },
+  consecutive_failures: { type: 'int' as const, notNull: true, default: 0 },
+  total_runs: { type: 'int' as const, notNull: true, default: 0 },
+  total_failures: { type: 'int' as const, notNull: true, default: 0 },
   created_at: { type: 'text' as const, notNull: true },
+} satisfies Record<string, ColumnDef>;
+
+const notificationsColumns = {
+  id: { type: 'text' as const, primaryKey: true },
+  event_type: { type: 'text' as const, notNull: true },
+  channel: { type: 'text' as const, notNull: true },
+  payload_json: { type: 'text' as const, notNull: true },
+  status: { type: 'text' as const, notNull: true, default: 'pending' },
+  attempts: { type: 'int' as const, notNull: true, default: 0 },
+  last_error: { type: 'text' as const },
+  created_at: { type: 'text' as const, notNull: true },
+  next_attempt_at: { type: 'text' as const },
+  delivered_at: { type: 'text' as const },
 } satisfies Record<string, ColumnDef>;
 
 const judgeScoresColumns = {
@@ -465,6 +483,14 @@ export const tables = [
   { name: 'prompt_versions', columns: promptVersionsColumns },
   { name: 'output_mappings', columns: outputMappingsColumns },
   { name: 'schedules', columns: schedulesColumns },
+  {
+    name: 'notifications',
+    columns: notificationsColumns,
+    indexes: [
+      { name: 'idx_notifications_due', on: ['status', 'next_attempt_at'] },
+      { name: 'idx_notifications_created', on: ['created_at'] },
+    ],
+  },
   {
     name: 'judge_scores',
     columns: judgeScoresColumns,

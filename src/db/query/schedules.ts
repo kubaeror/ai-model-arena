@@ -17,12 +17,27 @@ export async function updateScheduleRun(id: string, lastRun: string, nextRun: st
   await db.update(schedules).set({ last_run: lastRun, next_run: nextRun }).where(eq(schedules.id, id));
 }
 
-export async function updateScheduleEnabled(id: string, enabled: boolean): Promise<void> {
+export async function updateScheduleStatus(
+  id: string,
+  s: { lastStatus: string | null; lastError?: string | null; consecutiveFailures?: number; totalRuns?: number; totalFailures?: number },
+): Promise<void> {
   const db = getDrizzleDb();
-  await db.update(schedules).set({ enabled: enabled ? 1 : 0 }).where(eq(schedules.id, id));
+  await db.update(schedules).set({
+    last_status: s.lastStatus,
+    ...(s.lastError !== undefined ? { last_error: s.lastError } : {}),
+    ...(s.consecutiveFailures !== undefined ? { consecutive_failures: s.consecutiveFailures } : {}),
+    ...(s.totalRuns !== undefined ? { total_runs: s.totalRuns } : {}),
+    ...(s.totalFailures !== undefined ? { total_failures: s.totalFailures } : {}),
+  }).where(eq(schedules.id, id));
 }
 
-export interface ScheduleInput {
+export async function getScheduleRow(id: string): Promise<DbSchedule | null> {
+  const db = getDrizzleDb();
+  const rows = await db.select().from(schedules).where(eq(schedules.id, id));
+  return rows[0] ?? null;
+}
+
+interface ScheduleInput {
   id: string;
   scenario: string;
   models: string[];
