@@ -464,7 +464,15 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
   await upsertRun({
     runId: 'run-fb0', scenario: 'smoke', models: ['GPT-4o'],
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
-    perModel: [{ model: 'GPT-4o', runId: 'run-fb0', status: 'running' } as never],
+    perModel: [{
+      model: 'GPT-4o', runId: 'run-fb0', status: 'running',
+      outputDir: path.join(outputs, 'GPT-4o', 'run-fb0'),
+      sandboxDir: path.join(outputs, 'GPT-4o', 'run-fb0', 'files'),
+      resultPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'result.json'),
+      conversationPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'conversation.json'),
+      reportPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'report.md'),
+      logFile: path.join(outputs, 'GPT-4o', 'run-fb0', 'runner.log'),
+    }],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
 
@@ -491,9 +499,20 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
     await waitFor(async () => (await queue.deadLetterSize()) === 1, 10000, 'task in DLQ');
     assert.equal(await queue.deadLetterSize(), 1, 'hops=0 must fail the task, not requeue');
     assert.equal(fake.calls, 0, 'hops=0 must not consult any fallback adapter');
-    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
-      .get('run-fb0', 'GPT-4o') as { status: string } | undefined;
-    assert.equal(row?.status, 'failed', 'run should be marked failed');
+    // The runner self-finalizes the terminal-failed run (no dashboard watcher
+    // here): the index run record becomes 'completed', and finalizeRunByRunId
+    // writes back per-model entries from its aggregation. A dead-lettered task
+    // produced no result.json, so the per-model row is indexed 'errored'
+    // (established finalize semantics — see orchestrator/finalize-merge),
+    // replacing the transient 'failed' transition.
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    await waitFor(async () => {
+      const rec = await getRunRecord('run-fb0');
+      return rec?.status === 'completed' && rec.perModel[0]?.status === 'errored';
+    }, 5000, 'terminal-failed run self-finalized');
+    const rec = await getRunRecord('run-fb0');
+    assert.equal(rec?.status, 'completed', 'terminal-failed run must be finalized by the runner');
+    assert.equal(rec?.perModel[0]?.status, 'errored', 'dead-lettered model (no result.json) indexed errored');
   } finally {
     ac.abort();
     await runnerDone;
@@ -541,7 +560,15 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
   await upsertRun({
     runId: 'run-fb3', scenario: 'smoke', models: ['GPT-4o'],
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
-    perModel: [{ model: 'GPT-4o', runId: 'run-fb3', status: 'running' } as never],
+    perModel: [{
+      model: 'GPT-4o', runId: 'run-fb3', status: 'running',
+      outputDir: path.join(outputs, 'GPT-4o', 'run-fb3'),
+      sandboxDir: path.join(outputs, 'GPT-4o', 'run-fb3', 'files'),
+      resultPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'result.json'),
+      conversationPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'conversation.json'),
+      reportPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'report.md'),
+      logFile: path.join(outputs, 'GPT-4o', 'run-fb3', 'runner.log'),
+    }],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
 

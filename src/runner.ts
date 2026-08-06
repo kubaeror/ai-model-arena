@@ -27,7 +27,7 @@ import { resolveFallback, resolveMaxFallbackHops, type FallbackConfig } from './
 import { loadBudgetConfig, checkBudget, computeCost, budgetStateRoot } from './cost-tracking/index.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled, dispatchBudgetExceeded } from './orchestrator/run-lifecycle.js';
 import { activeTasks, taskCounter, taskDuration, tasksClaimed, tasksFailed, startMetricsServer } from './observability/metrics.js';
-import type { ToolExecutionContext, TokenUsage, ChatMessage } from './types.js';
+import type { ToolExecutionContext, TokenUsage, ChatMessage, Logger } from './types.js';
 import type { StoredMessage } from './session/store.js';
 import { closeDb } from './db/index.js';
 import { secretStore } from './secrets/store.js';
@@ -139,6 +139,23 @@ export async function runSuccessCriteria(
   }
   outcome.passed = ok;
   return outcome;
+}
+
+/**
+ * Self-finalize the run once all of its model tasks reach a terminal state.
+ * Queue-driven runs previously depended on the dashboard watcher polling
+ * every 3s; if the dashboard was down they never finalized. finalizeRunByRunId
+ * is idempotent (skips already-completed runs), so racing the watcher or a
+ * CLI finalize is safe.
+ */
+async function maybeFinalizeRun(runId: string, log: Logger): Promise<void> {
+  try {
+    const { isRunCompleteByRunId, finalizeRunByRunId } = await import('./orchestrator/run-lifecycle.js');
+    if (!(await isRunCompleteByRunId(runId))) return;
+    await finalizeRunByRunId(runId, log);
+  } catch (err) {
+    log.warn('Self-finalize failed (non-fatal)', { runId, error: String(err) });
+  }
 }
 
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
@@ -639,6 +656,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed, success });
       await store.updateSessionStatus(session.id, result.errors.length > 0 ? 'errored' : 'completed');
       await queue.ack(task!._redisId ?? task!.taskId);
+      void maybeFinalizeRun(runId, logger).catch(() => undefined);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Task failed', { taskId: task?.taskId, error: msg });
@@ -661,6 +679,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
           if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
           taskCounted = true;
+          // The nack below dead-letters this attempt, so the run's model task
+          // just reached a terminal state — finalize the run if all models are
+          // done, without waiting for the dashboard watcher.
+          void maybeFinalizeRun(failedTask.config.modelRunId as string ?? failedTask.sessionId, logger).catch(() => undefined);
         }
         // nack requeues below the DLQ threshold — count only when it dead-letters.
         if (isTerminalFailure(failedTask.attempts)) tasksFailed.inc();
