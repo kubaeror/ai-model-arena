@@ -10,6 +10,7 @@ import {
   reserveBudget,
   releaseReservation,
   resetBudgetCache,
+  budgetStateRoot,
 } from '../../src/cost-tracking/budget.js';
 
 const CONFIG = `
@@ -186,5 +187,37 @@ test('reserveBudget ignores prototype-polluting model names', () => {
   } finally {
     resetBudgetCache();
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('budgetStateRoot follows OUTPUT_ROOT when set, else the base root', () => {
+  const prev = process.env.OUTPUT_ROOT;
+  try {
+    delete process.env.OUTPUT_ROOT;
+    assert.equal(budgetStateRoot('/repo'), '/repo');
+    process.env.OUTPUT_ROOT = '/var/arena/outputs';
+    assert.equal(budgetStateRoot('/repo'), '/var/arena/outputs');
+  } finally {
+    if (prev === undefined) delete process.env.OUTPUT_ROOT;
+    else process.env.OUTPUT_ROOT = prev;
+  }
+});
+
+test('checkBudget reads the ledger under OUTPUT_ROOT (containerized deployments)', () => {
+  resetBudgetCache();
+  const { tmp, configPath } = setup();
+  const prev = process.env.OUTPUT_ROOT;
+  process.env.OUTPUT_ROOT = tmp; // ledger must live at <OUTPUT_ROOT>/outputs/.budget-state.json
+  try {
+    fs.mkdirSync(path.join(tmp, 'outputs'), { recursive: true });
+    writeState(path.join(tmp, 'outputs', '.budget-state.json')); // gpt-4o daily spent = 15, limit 10
+    loadBudgetConfig(configPath);
+    const result = checkBudget('gpt-4o', budgetStateRoot('/whatever/else'), false);
+    assert.equal(result.allowed, false);
+    assert.match(result.reason ?? '', /daily/i);
+  } finally {
+    if (prev === undefined) delete process.env.OUTPUT_ROOT;
+    else process.env.OUTPUT_ROOT = prev;
+    resetBudgetCache();
   }
 });

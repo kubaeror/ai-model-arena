@@ -24,7 +24,7 @@ import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
 import { resolveFallback, resolveMaxFallbackHops, type FallbackConfig } from './providers/fallback.js';
-import { loadBudgetConfig, checkBudget, computeCost } from './cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, computeCost, budgetStateRoot } from './cost-tracking/index.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled, dispatchBudgetExceeded } from './orchestrator/run-lifecycle.js';
 import { activeTasks, taskCounter, taskDuration, tasksClaimed, tasksFailed, startMetricsServer } from './observability/metrics.js';
 import type { ToolExecutionContext, TokenUsage, ChatMessage } from './types.js';
@@ -519,7 +519,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                 logger.info('Run cancelled during execution', { runId: cancelledRunId });
                 return false;
               }
-              const budgetCheck = checkBudget(modelName, root, false, logger, prevRunCost);
+              const budgetCheck = checkBudget(modelName, budgetStateRoot(root), false, logger, prevRunCost);
               if (!budgetCheck.allowed) {
                 logger.warn('Budget exceeded during run', { model: modelName, spent: budgetCheck.spentUsd, limit: budgetCheck.limitUsd });
                 void dispatchBudgetExceeded(modelName, budgetCheck, logger).catch(() => undefined);

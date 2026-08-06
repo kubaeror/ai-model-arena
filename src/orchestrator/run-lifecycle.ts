@@ -5,7 +5,7 @@ import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
 import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
-import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing } from '../cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing, budgetStateRoot } from '../cost-tracking/index.js';
 import { projectRoot, timestamp } from './utils.js';
 import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
@@ -170,7 +170,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   // when OUTPUT_ROOT is set, so test/dev runs never pollute the repo's
   // shared state file; otherwise it stays under projectRoot (AI_ARENA_ROOT
   // honored) exactly as before.
-  const budgetStateRoot = process.env.OUTPUT_ROOT ? outputRoot() : root;
+  const budgetRoot = budgetStateRoot(root);
   const logger = opts.logger ?? createLogger('ai-arena:orchestrator');
   
   // Load budget config for enforcement (pricing now comes from the SQLite catalog)
@@ -180,7 +180,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   const reservations: Array<{ model: string; estimated: number }> = [];
   try {
     for (const modelName of opts.models) {
-    const budgetCheck = checkBudget(modelName, budgetStateRoot, opts.forceBudget ?? false, logger);
+    const budgetCheck = checkBudget(modelName, budgetRoot, opts.forceBudget ?? false, logger);
     if (!budgetCheck.allowed) {
       const reason = budgetCheck.reason ?? `Budget exceeded for ${modelName}`;
       // Dispatch budget_exceeded webhook first (non-blocking), then throw.
@@ -197,7 +197,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     const outputPrice = pricingData?.output ?? 0;
     const estimatedCost = maxTurns * estTokensPerTurn * (inputPrice + outputPrice) / 1_000_000;
 
-    const reservation = reserveBudget(modelName, estimatedCost, budgetStateRoot, logger);
+    const reservation = reserveBudget(modelName, estimatedCost, budgetRoot, logger);
     if (!reservation.ok) {
       throw new Error(reservation.reason ?? `Budget reservation failed for ${modelName}`);
     }
@@ -264,7 +264,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
     // Never leak reservations: release everything reserved for this run,
     // whether a later model failed budget, createRunSpec, or enqueue did.
     for (const r of reservations) {
-      releaseReservation(r.model, r.estimated, 0, budgetStateRoot, logger);
+      releaseReservation(r.model, r.estimated, 0, budgetRoot, logger);
     }
     throw err;
   }
@@ -404,7 +404,7 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
   const root = projectRoot();
   // Release budget reservations against the same state root they were
   // reserved under in startRun, so estimates always match.
-  const budgetStateRoot = process.env.OUTPUT_ROOT ? outputRoot() : root;
+  const budgetRoot = budgetStateRoot(root);
   const { mdPath, jsonPath } = aggregate(root, {
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
@@ -421,7 +421,7 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
   for (const entry of entries) {
     const actualCost = entry.result?.costUsd ?? 0;
     const reserved = reservations.get(entry.model) ?? 0;
-    releaseReservation(entry.model, reserved, actualCost, budgetStateRoot, logger);
+    releaseReservation(entry.model, reserved, actualCost, budgetRoot, logger);
   }
   runReservations.delete(runId);
 
