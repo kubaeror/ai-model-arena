@@ -24,6 +24,14 @@ test('isValidEnvVarName rejects keys that break .env parsing', () => {
   assert.equal(isValidEnvVarName('A\rB'), false);
   assert.equal(isValidEnvVarName('A\tB'), false);
   assert.equal(isValidEnvVarName('A=B'), false);
+  assert.equal(isValidEnvVarName('A/B'), false);   // not k8s-secret-key compatible
+  assert.equal(isValidEnvVarName('A:B'), false);   // not k8s-secret-key compatible
+});
+
+test('isValidEnvVarName rejects Object.prototype key names (prototype-pollution guard)', () => {
+  assert.equal(isValidEnvVarName('__proto__'), false);
+  assert.equal(isValidEnvVarName('constructor'), false);
+  assert.equal(isValidEnvVarName('prototype'), false);
 });
 
 test('hasControlChars rejects newline-containing values', () => {
