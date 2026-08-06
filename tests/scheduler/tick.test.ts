@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
-import { insertSchedule, listSchedules } from '../../src/db/query.js';
+import { insertSchedule, listSchedules, getScheduleRow } from '../../src/db/query.js';
 import { tickScheduler } from '../../src/scheduler/tick.js';
 import { getScheduleState, loadSchedulesConfig, syncSchedulesToDb, resetSchedulesCache } from '../../src/scheduler/manager.js';
 import type { RunStartOptions } from '../../src/orchestrator/run-lifecycle.js';
@@ -19,6 +19,47 @@ function freshDb(): string {
   initDb(process.env.ARENA_DB_PATH);
   return tmp;
 }
+
+test('tick persists schedule status to the DB', async () => {
+  const tmp = freshDb();
+  try {
+    await insertSchedule({
+      id: 's-persist', scenario: 'express-rest',
+      models: ['gpt-4o'], cron: '* * * * *', enabled: true,
+      createdAt: new Date().toISOString(),
+    });
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-persist');
+
+    const failing = async (): Promise<unknown> => { throw new Error('boom'); };
+    const failResult = await tickScheduler({ startRunFn: failing });
+    assert.deepEqual(failResult.ticked, []);
+    assert.deepEqual(failResult.failures, ['s-persist']);
+
+    const row = await getScheduleRow('s-persist');
+    assert.equal(row?.last_status, 'error');
+    assert.equal(row?.consecutive_failures, 1);
+    assert.equal(row?.total_runs, 1);
+    assert.equal(row?.total_failures, 1);
+    assert.ok(row?.last_error, 'last_error should be set on failure');
+
+    // Force due again, then succeed: consecutive failures reset, counters advance.
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-persist');
+    const ok = async (): Promise<unknown> => ({ runId: 'x', scenario: 'express-rest', ts: 't', startedAt: 'now', models: [] });
+    const okResult = await tickScheduler({ startRunFn: ok });
+    assert.deepEqual(okResult.ticked, ['s-persist']);
+    assert.deepEqual(okResult.failures, []);
+
+    const row2 = await getScheduleRow('s-persist');
+    assert.equal(row2?.last_status, 'idle');
+    assert.equal(row2?.consecutive_failures, 0);
+    assert.equal(row2?.total_runs, 2);
+    assert.equal(row2?.total_failures, 1);
+  } finally {
+    delete process.env.AI_ARENA_ROOT;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 test('tickScheduler marks a failed startRun as failure and backs off 1h', async () => {
   const tmp = freshDb();
