@@ -7,6 +7,7 @@ import { auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import type { ApiKeyRequest } from '../auth-api-types.js';
 import { z } from 'zod';
+import { parseBody } from '../helpers.js';
 
 const CustomProviderInputSchema = z.object({
   id: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/, 'id must be lowercase kebab-case'),
@@ -34,28 +35,25 @@ export function createProvidersRouter(): Router {
       res.status(403).json({ error: 'Missing permission: providers:write' });
       return;
     }
-    const parsed = CustomProviderInputSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid provider input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(CustomProviderInputSchema, req, res, 'Invalid provider input');
+    if (!parsed) return;
 
     // Runtime reachability probe, dispatched per adapter kind (openai-compat
     // GET /models, anthropic count_tokens, google models.list, bedrock gateway
     // /health). Probes run only when an apiBase is configured (native-SigV4
     // bedrock and keyless providers skip probing).
     let health: { reachable?: boolean; error?: string } | null = null;
-    if (parsed.data.apiBase) {
-      const apiKey = parsed.data.envVar ? process.env[parsed.data.envVar] : undefined;
+    if (parsed.apiBase) {
+      const apiKey = parsed.envVar ? process.env[parsed.envVar] : undefined;
       try {
         const result = await probeProvider({
-          id: parsed.data.id,
-          name: parsed.data.name,
-          apiBase: parsed.data.apiBase,
-          authScheme: parsed.data.authScheme,
-          envVar: parsed.data.envVar,
-          headerName: parsed.data.headerName,
-          adapter: parsed.data.adapter,
+          id: parsed.id,
+          name: parsed.name,
+          apiBase: parsed.apiBase,
+          authScheme: parsed.authScheme,
+          envVar: parsed.envVar,
+          headerName: parsed.headerName,
+          adapter: parsed.adapter,
           isBuiltin: false,
         }, { apiKey, timeoutMs: 5_000 });
         health = { reachable: result.reachable, error: result.error };
@@ -65,19 +63,19 @@ export function createProvidersRouter(): Router {
     }
 
     // Persist before responding. Previously this was a floating promise
-    // (`upsertCustomProvider(parsed.data);` without await), so the API
+    // (`upsertCustomProvider(parsed);` without await), so the API
     // returned 201 before the DB write completed — a client would get a
     // success status even if the write later failed. Await and surface 500.
     try {
-      await upsertCustomProvider(parsed.data);
+      await upsertCustomProvider(parsed);
     } catch (e) {
       res.status(500).json({ error: 'Failed to persist provider', detail: e instanceof Error ? e.message : String(e) });
       return;
     }
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.data.id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'provider.create', { type: 'provider', id: parsed.id }, undefined, { name: parsed.name, adapter: parsed.adapter });
     res.status(201).json({
       ok: true,
-      id: parsed.data.id,
+      id: parsed.id,
       health: health ? health : undefined,
     });
   });

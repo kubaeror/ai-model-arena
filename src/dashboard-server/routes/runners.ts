@@ -2,7 +2,7 @@ import type { Router, Request, Response } from 'express';
 import { KubeConfig, AppsV1Api, CoreV1Api } from '@kubernetes/client-node';
 import type { RequestHandler } from 'express';
 import { requireRole } from '../../auth/rbac.js';
-import { INTERNAL_ERROR } from '../error-sanitizer.js';
+import { asyncHandler } from '../helpers.js';
 
 const NAMESPACE = process.env.KUBE_NAMESPACE ?? 'ai-arena';
 
@@ -22,7 +22,7 @@ function getKube(): KubeConfig | null {
 
 export function registerRunnerRoutes(router: Router, auth: RequestHandler): void {
   // GET /api/runners — list runner deployments + their pods
-  router.get('/api/runners', auth, requireRole('admin'), async (_req: Request, res: Response) => {
+  router.get('/api/runners', auth, requireRole('admin'), asyncHandler(async (_req: Request, res: Response) => {
     const kube = getKube();
     if (!kube) {
       res.status(503).json({ error: 'k8s API unavailable' });
@@ -30,7 +30,6 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
     }
     const appsApi = kube.makeApiClient(AppsV1Api);
     const coreApi = kube.makeApiClient(CoreV1Api);
-    try {
       const deploys = await appsApi.listNamespacedDeployment({ namespace: NAMESPACE, labelSelector: 'app=runner' });
       const pods = await coreApi.listNamespacedPod({ namespace: NAMESPACE, labelSelector: 'app=runner' });
 
@@ -58,13 +57,10 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
       });
 
       res.json({ runners });
-    } catch (err) {
-      res.status(500).json({ error: INTERNAL_ERROR });
-    }
-  });
+  }));
 
   // POST /api/runners/:name/scale — patch deployment replicas
-  router.post('/api/runners/:name/scale', auth, requireRole('admin'), async (req: Request, res: Response) => {
+  router.post('/api/runners/:name/scale', auth, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
     const { replicas } = req.body ?? {};
     if (typeof replicas !== 'number' || replicas < 0) {
       res.status(400).json({ error: 'replicas must be a non-negative number' });
@@ -76,67 +72,55 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
       return;
     }
     const appsApi = kube.makeApiClient(AppsV1Api);
-    try {
-      const name = String(req.params.name);
-      await appsApi.patchNamespacedDeployment({
-        name,
-        namespace: NAMESPACE,
-        body: { spec: { replicas } },
-      });
-      res.json({ name, replicas });
-    } catch (err) {
-      res.status(500).json({ error: INTERNAL_ERROR });
-    }
-  });
+    const name = String(req.params.name);
+    await appsApi.patchNamespacedDeployment({
+      name,
+      namespace: NAMESPACE,
+      body: { spec: { replicas } },
+    });
+    res.json({ name, replicas });
+  }));
 
   // POST /api/runners/:name/drain — scale to 0
-  router.post('/api/runners/:name/drain', auth, requireRole('admin'), async (req: Request, res: Response) => {
+  router.post('/api/runners/:name/drain', auth, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
     const kube = getKube();
     if (!kube) {
       res.status(503).json({ error: 'k8s API unavailable' });
       return;
     }
     const appsApi = kube.makeApiClient(AppsV1Api);
-    try {
-      const name = String(req.params.name);
-      await appsApi.patchNamespacedDeployment({
-        name,
-        namespace: NAMESPACE,
-        body: { spec: { replicas: 0 } },
-      });
-      res.json({ name, drained: true });
-    } catch (err) {
-      res.status(500).json({ error: INTERNAL_ERROR });
-    }
-  });
+    const name = String(req.params.name);
+    await appsApi.patchNamespacedDeployment({
+      name,
+      namespace: NAMESPACE,
+      body: { spec: { replicas: 0 } },
+    });
+    res.json({ name, drained: true });
+  }));
 
   // GET /api/runners/:name/logs — stream pod logs
-  router.get('/api/runners/:name/logs', auth, requireRole('admin'), async (req: Request, res: Response) => {
+  router.get('/api/runners/:name/logs', auth, requireRole('admin'), asyncHandler(async (req: Request, res: Response) => {
     const kube = getKube();
     if (!kube) {
       res.status(503).json({ error: 'k8s API unavailable' });
       return;
     }
     const coreApi = kube.makeApiClient(CoreV1Api);
-    try {
-      const provider = String(req.params.name).replace('runner-', '');
-      const pods = await coreApi.listNamespacedPod({
-        namespace: NAMESPACE,
-        labelSelector: `app=runner,provider=${provider}`,
-      });
-      const pod = pods.items[0];
-      if (!pod?.metadata?.name) {
-        res.status(404).json({ error: 'No pods found' });
-        return;
-      }
-      const logs = await coreApi.readNamespacedPodLog({
-        name: pod.metadata.name,
-        namespace: NAMESPACE,
-        tailLines: 100,
-      });
-      res.type('text/plain').send(logs);
-    } catch (err) {
-      res.status(500).json({ error: INTERNAL_ERROR });
+    const provider = String(req.params.name).replace('runner-', '');
+    const pods = await coreApi.listNamespacedPod({
+      namespace: NAMESPACE,
+      labelSelector: `app=runner,provider=${provider}`,
+    });
+    const pod = pods.items[0];
+    if (!pod?.metadata?.name) {
+      res.status(404).json({ error: 'No pods found' });
+      return;
     }
-  });
+    const logs = await coreApi.readNamespacedPodLog({
+      name: pod.metadata.name,
+      namespace: NAMESPACE,
+      tailLines: 100,
+    });
+    res.type('text/plain').send(logs);
+  }));
 }

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { listRuns, getRunRecord } from '../../orchestrator/orchestrator.js';
 import { allowIfRunOwner } from '../run-ownership.js';
 import type { AuthedRequest } from '../auth.js';
+import { notFound } from '../helpers.js';
 
 async function readResultFile(resultPath: string): Promise<Record<string, unknown> | null> {
   try { return JSON.parse(await fsp.readFile(resultPath, 'utf8')); } catch { return null; }
@@ -96,7 +97,7 @@ export function createExportRouter(): Router {
     if (!(await allowIfRunOwner(req as AuthedRequest, res, runId))) return;
     const run = await getRunRecord(runId);
     if (!run) {
-      res.status(404).json({ error: 'Run not found' });
+      notFound(res, 'Run', runId);
       return;
     }
     

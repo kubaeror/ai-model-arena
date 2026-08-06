@@ -5,6 +5,7 @@ import { load } from 'js-yaml';
 import { requireRole } from '../../auth/rbac.js';
 import { findProjectRoot, dbPath } from '../../paths.js';
 import { createLogger } from '../../logger/pino-logger.js';
+import { notFound } from '../helpers.js';
 import { listRuns } from '../../orchestrator/orchestrator.js';
 import { RegressionSuiteConfigSchema, type RegressionSuiteConfig } from '../../evaluation/regression-config.js';
 import { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath, saveSuiteResult, listSavedSuiteResults } from '../../evaluation/regression.js';
@@ -69,7 +70,7 @@ export function createRegressionRouter(): Router {
   router.get('/suites/:name', (req, res) => {
     const cfg = loadSuiteConfig(req.params.name as string);
     if (!cfg) {
-      res.status(404).json({ error: 'Suite not found' });
+      notFound(res, 'Suite', req.params.name as string);
       return;
     }
     res.json(cfg);
@@ -91,7 +92,7 @@ export function createRegressionRouter(): Router {
 
     const config = loadSuiteConfig(suiteName);
     if (!config) {
-      res.status(404).json({ error: `Suite "${suiteName}" not found` });
+      notFound(res, `Suite "${suiteName}"`, suiteName);
       return;
     }
 

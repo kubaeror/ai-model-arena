@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm';
 import { listRuns } from '../../orchestrator/run-index.js';
 import { readTraceIndex } from '../../observability/trace-meta.js';
 import { INTERNAL_ERROR } from '../error-sanitizer.js';
+import { asyncHandler } from '../helpers.js';
 
 /**
  * Observability API:
@@ -16,51 +17,43 @@ export function createObservabilityRouter(): Router {
   const router = Router();
 
   // GET /stats — avg/p95/p99 latency per model/tool, error rates, baselines.
-  router.get('/stats', async (req, res) => {
+  router.get('/stats', asyncHandler(async (req, res) => {
     const model = typeof req.query.model === 'string' ? String(req.query.model) : undefined;
-    try {
-      res.json(await computeObservabilityStats(model));
-    } catch {
-      res.status(500).json({ error: INTERNAL_ERROR });
-    }
-  });
+    res.json(await computeObservabilityStats(model));
+  }));
 
   // GET /recent-traces — latest N traces across all runs.
-  router.get('/recent-traces', async (req, res) => {
+  router.get('/recent-traces', asyncHandler(async (req, res) => {
     const limit = Math.min(
       Number(req.query.limit) || 50,
       200,
     );
-    try {
-      const runs = await listRuns();
-      const entries: Array<{
-        runId: string;
-        model: string;
-        scenario: string;
-        spanCount: number;
-        totalDurationMs: number;
-        errorCount: number;
-      }> = [];
-      for (const run of runs) {
+    const runs = await listRuns();
+    const entries: Array<{
+      runId: string;
+      model: string;
+      scenario: string;
+      spanCount: number;
+      totalDurationMs: number;
+      errorCount: number;
+    }> = [];
+    for (const run of runs) {
+      if (entries.length >= limit) break;
+      for (const pm of run.perModel) {
         if (entries.length >= limit) break;
-        for (const pm of run.perModel) {
-          if (entries.length >= limit) break;
-          const idx = readTraceIndex(pm.outputDir);
-          entries.push({
-            runId: run.runId,
-            model: pm.model,
-            scenario: run.scenario,
-            spanCount: idx?.span_count ?? 0,
-            totalDurationMs: idx?.total_duration_ms ?? 0,
-            errorCount: idx?.error_count ?? 0,
-          });
-        }
+        const idx = readTraceIndex(pm.outputDir);
+        entries.push({
+          runId: run.runId,
+          model: pm.model,
+          scenario: run.scenario,
+          spanCount: idx?.span_count ?? 0,
+          totalDurationMs: idx?.total_duration_ms ?? 0,
+          errorCount: idx?.error_count ?? 0,
+        });
       }
-      res.json({ traces: entries });
-    } catch {
-      res.status(500).json({ error: INTERNAL_ERROR });
     }
-  });
+    res.json({ traces: entries });
+  }));
 
   // GET /health — healthcheck for database.
   router.get('/health', async (_req, res) => {

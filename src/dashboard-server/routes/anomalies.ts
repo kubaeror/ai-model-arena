@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
-import { INTERNAL_ERROR } from '../error-sanitizer.js';
+import { asyncHandler, notFound } from '../helpers.js';
 import {
   listAnomalies,
   getAnomaly,
@@ -23,7 +23,7 @@ function parseBool(v: unknown): boolean | undefined {
 export function createAnomaliesRouter(): Router {
   const router = Router();
 
-  router.get('/', async (req, res) => {
+  router.get('/', asyncHandler(async (req, res) => {
     const q: AnomalyQuery = {
       model: typeof req.query.model === 'string' ? String(req.query.model) : undefined,
       type: typeof req.query.type === 'string' ? (String(req.query.type) as AnomalyType) : undefined,
@@ -34,12 +34,8 @@ export function createAnomaliesRouter(): Router {
       limit: req.query.limit ? Math.min(500, Number(req.query.limit)) : undefined,
       offset: req.query.offset ? Number(req.query.offset) : undefined,
     };
-    try {
-      res.json({ anomalies: await listAnomalies(q) });
-    } catch {
-      res.status(500).json({ error: INTERNAL_ERROR });
-    }
-  });
+    res.json({ anomalies: await listAnomalies(q) });
+  }));
 
   router.get('/:id', async (req, res) => {
     const id = Number(req.params.id);
@@ -49,7 +45,7 @@ export function createAnomaliesRouter(): Router {
     }
     const anomaly = await getAnomaly(id);
     if (!anomaly) {
-      res.status(404).json({ error: `Anomaly ${id} not found` });
+      notFound(res, `Anomaly ${id}`, String(id));
       return;
     }
     let run = null;
@@ -93,7 +89,7 @@ export function createAnomaliesRouter(): Router {
     }
     const updated = await resolveAnomaly(id, resolvedAs as 'resolved' | 'false_positive');
     if (!updated) {
-      res.status(404).json({ error: `Anomaly ${id} not found` });
+      notFound(res, `Anomaly ${id}`, String(id));
       return;
     }
     auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'anomaly.resolve', { type: 'anomaly', id: String(id) }, undefined, { resolvedAs });

@@ -4,6 +4,7 @@ import { upsertCustomProvider, deleteCustomProvider } from '../../providers/cust
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { z } from 'zod';
 import type { AuthedRequest } from '../auth.js';
+import { parseBody } from '../helpers.js';
 
 export function createModelsRouter(): Router {
   const router = Router();
@@ -23,14 +24,11 @@ export function createModelsRouter(): Router {
       envVar: z.string().optional(),
       adapter: z.enum(['openai-compat', 'anthropic', 'google', 'bedrock']).default('openai-compat'),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid model input', details: parsed.error.flatten() });
-      return;
-    }
-    const id = parsed.data.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
-    await upsertCustomProvider({ id, name: parsed.data.name, apiBase: parsed.data.apiBase, authScheme: parsed.data.authScheme, envVar: parsed.data.envVar, adapter: parsed.data.adapter });
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.data.name, adapter: parsed.data.adapter });
+    const parsed = parseBody(schema, req, res, 'Invalid model input');
+    if (!parsed) return;
+    const id = parsed.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+    await upsertCustomProvider({ id, name: parsed.name, apiBase: parsed.apiBase, authScheme: parsed.authScheme, envVar: parsed.envVar, adapter: parsed.adapter });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'model.create', { type: 'model', id }, undefined, { name: parsed.name, adapter: parsed.adapter });
     res.status(201).json({ models: await listModelsWithPricing() });
   });
 

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { and, eq } from 'drizzle-orm';
 import { paginate } from '../../db/query.js';
 import { files } from '../../db/schema.js';
+import { parsePagination } from '../helpers.js';
 
 const fileColumns = {
   id: files.id,
@@ -17,8 +18,7 @@ export function createFilesRouter(): Router {
 
   // GET /api/files - paginated, filterable file listing
   router.get('/', async (req, res) => {
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
-    const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
+    const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
     const model = typeof req.query.model === 'string' ? req.query.model : undefined;
     const runId = typeof req.query.runId === 'string' ? req.query.runId : undefined;
     const promptId = typeof req.query.promptId === 'string' ? req.query.promptId : undefined;
