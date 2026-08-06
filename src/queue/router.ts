@@ -3,36 +3,37 @@
  * Tasks are routed to streams by adapter family, not individual provider,
  * so a single runner Deployment can handle 10+ OpenAI-compatible providers.
  *
- * Bedrock uses AWS IAM auth (no API key) and is excluded from
- * shared-routed streams; ollama is self-hosted and shares the openai-compat stream.
+ * The map is DERIVED from the provider descriptors (single source of truth)
+ * so new builtin providers automatically share their adapter family's stream.
+ * Custom providers (loaded from DB after module init) fall back to their own
+ * per-provider stream, matching the previous behavior.
  */
-const PROVIDER_ADAPTER_FAMILIES: Record<string, string> = {
-  openai:     'openai-compat',
-  groq:       'openai-compat',
-  cerebras:   'openai-compat',
-  nvidia:     'openai-compat',
-  mistral:    'openai-compat',
-  sambanova:  'openai-compat',
-  scaleway:   'openai-compat',
-  cloudflare: 'openai-compat',
-  'github-copilot': 'openai-compat',
-  xai:        'openai-compat',
-  openrouter: 'openai-compat',
-  ollama:     'openai-compat',
+import { BUILTIN_PROVIDERS } from '../providers/index.js';
 
-  anthropic:  'anthropic',
-  google:     'google',
+/** Explicit routing overrides on top of descriptor adapters. */
+const FAMILY_OVERRIDES: Record<string, string> = {
+  // Bedrock uses AWS IAM auth (no API key) — keep it on its own stream.
+  bedrock: 'bedrock',
+  // ollama is self-hosted but speaks the OpenAI-compatible protocol.
+  ollama: 'openai-compat',
 };
 
+const providerFamilies = new Map<string, string>();
+for (const d of BUILTIN_PROVIDERS) {
+  providerFamilies.set(d.id, FAMILY_OVERRIDES[d.id] ?? d.adapter);
+}
+
+export function familyFor(provider: string): string {
+  return providerFamilies.get(provider) ?? provider;
+}
+
 export function streamKey(prefix: string, provider: string): string {
-  const family = PROVIDER_ADAPTER_FAMILIES[provider] ?? provider;
-  return `${prefix}:${family}`;
+  return `${prefix}:${familyFor(provider)}`;
 }
 
 export function dlqStreamKey(prefix: string, provider: string): string {
-  const family = PROVIDER_ADAPTER_FAMILIES[provider] ?? provider;
-  return `${prefix}:${family}:dlq`;
+  return `${prefix}:${familyFor(provider)}:dlq`;
 }
 
-/** All known provider IDs, in declaration order — used to enumerate per-provider queues. */
-export const knownProviders = Object.keys(PROVIDER_ADAPTER_FAMILIES);
+/** All builtin provider IDs, in declaration order — used to enumerate per-provider queues. */
+export const knownProviders: string[] = [...providerFamilies.keys()];
