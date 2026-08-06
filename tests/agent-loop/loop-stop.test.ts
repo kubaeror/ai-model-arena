@@ -41,6 +41,32 @@ function baseOpts() {
   };
 }
 
+test('resumed run continues turn numbering past lastCompletedTurn', async () => {
+  // Replay of what resumeFrom() returns for a session whose turn 1 completed:
+  // assistant tool call + tool result, both persisted under turn 1.
+  const initialMessages: ChatMessage[] = [
+    { role: 'assistant', content: null, toolCalls: [{ id: 'tc1', name: 'list_files', arguments: {} }] },
+    { role: 'tool', toolCallId: 'tc1', name: 'list_files', content: '[]' },
+  ];
+
+  const adapter = stubAdapter([
+    { text: 'done', toolCalls: [], usage: { prompt: 10, completion: 5 }, stopReason: 'no_tool_calls' },
+  ]);
+  const recordedTurns: number[] = [];
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, maxTurns: 5,
+    initialMessages,
+    initialTurn: 2,
+    onTurnComplete: async (turn) => { recordedTurns.push(turn); },
+  });
+
+  assert.ok(recordedTurns.every((t) => t >= 2));
+  assert.deepStrictEqual(recordedTurns, [2]);
+  assert.ok(!recordedTurns.includes(1), 'resumed run must not reuse pre-crash turn numbers');
+  assert.equal(result.turnsUsed, 2, 'turnsUsed is the absolute turn number');
+});
+
 test('stops on task_complete', async () => {
   const adapter = stubAdapter([
     { text: '', toolCalls: [{ id: '1', name: TASK_COMPLETE_TOOL, arguments: {} }], usage: { prompt: 10, completion: 5 }, stopReason: 'tool_call' },

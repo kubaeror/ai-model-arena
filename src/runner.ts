@@ -283,6 +283,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         logger.warn('Failed to write claimed state', { error: String(e) }),
       );
 
+      let initialTurn = 1;
       let session = await store.loadSession(task.sessionId);
       let resumedMessages: ChatMessage[] | undefined;
       if (!session) {
@@ -292,7 +293,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         const resumed = await resumeFrom(session.id);
         if (resumed.messages.length > 0) {
           resumedMessages = resumed.messages;
-          logger.info('Resuming session from checkpoint', { sessionId: session.id, turns: resumed.lastCompletedTurn + 1, messages: resumed.messages.length });
+          initialTurn = resumed.lastCompletedTurn + 1;
+          logger.info('Resuming session from checkpoint', { sessionId: session.id, turns: initialTurn, messages: resumed.messages.length });
         }
       }
 
@@ -451,6 +453,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             conv,
             logger: logger.child('loop'),
             initialMessages: resumedMessages,
+            initialTurn,
             provider: currentProvider,
             model: currentModel,
             temperature: 0,
