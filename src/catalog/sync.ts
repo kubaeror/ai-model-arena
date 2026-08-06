@@ -7,6 +7,8 @@ import {
   providers, models, model_providers, pricing,
   pricing_snapshots, catalog_cache_state,
 } from '../db/schema.js';
+import type { DbPricing } from '../db/schema.js';
+import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 export interface SyncResult {
   source: string;
@@ -70,7 +72,7 @@ export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl:
   }
 }
 
-async function upsertCatalog(db: any, data: ModelsDevResponse): Promise<number> {
+async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse): Promise<number> {
   const now = new Date().toISOString();
   let modelCount = 0;
 
@@ -153,7 +155,7 @@ async function upsertCatalog(db: any, data: ModelsDevResponse): Promise<number> 
   return modelCount;
 }
 
-async function upsertPricingRow(db: any, row: {
+async function upsertPricingRow(db: BetterSQLite3Database, row: {
   model_id: string; tier_size: number;
   input: number | null; output: number | null;
   cache_read: number | null; cache_write: number | null;
@@ -173,8 +175,8 @@ async function upsertPricingRow(db: any, row: {
   });
 }
 
-async function capturePricingSnapshot(db: any, version: string): Promise<void> {
-  const rows: any[] = await db.select().from(pricing);
+async function capturePricingSnapshot(db: BetterSQLite3Database, version: string): Promise<void> {
+  const rows: DbPricing[] = await db.select().from(pricing);
   for (const r of rows) {
     await db.insert(pricing_snapshots).values({
       version,
@@ -189,7 +191,7 @@ async function capturePricingSnapshot(db: any, version: string): Promise<void> {
   }
 }
 
-async function updateCacheState(db: any, source: string, status: string, error: string | undefined, count: number): Promise<void> {
+async function updateCacheState(db: BetterSQLite3Database, source: string, status: string, error: string | undefined, count: number): Promise<void> {
   const now = new Date();
   const next = new Date(now.getTime() + refreshIntervalMs()).toISOString();
   await db.insert(catalog_cache_state).values({

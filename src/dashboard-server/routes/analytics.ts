@@ -96,8 +96,8 @@ export function createAnalyticsRouter(): Router {
     const coveredRunIds = new Set<string>();
     if (runIds.length > 0) {
       const coveredRows = await db.select({ run_id: tool_call_stats.run_id }).from(tool_call_stats)
-        .where(inArray(tool_call_stats.run_id, runIds as any));
-      for (const r of coveredRows as any[]) coveredRunIds.add(r.run_id);
+        .where(inArray(tool_call_stats.run_id, runIds));
+      for (const r of coveredRows) coveredRunIds.add(r.run_id);
     }
 
     // ── File fallback: scan runs not in DB ────────────────────────────────
@@ -159,7 +159,7 @@ export function createAnalyticsRouter(): Router {
       const coveredList = [...coveredRunIds];
       const successRows = await db.select({ run_id: run_models.run_id, model: run_models.model, success: run_models.success })
         .from(run_models)
-        .where(inArray(run_models.run_id, coveredList as any)) as any[];
+        .where(inArray(run_models.run_id, coveredList));
       for (const row of successRows) {
         if (row.success === 1) successfulRuns++;
       }

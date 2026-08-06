@@ -1,5 +1,6 @@
 import { getDrizzleDb } from '../db/index.js';
 import { benchmarks, catalog_cache_state, models } from '../db/schema.js';
+import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { ModelbenchResponseSchema, type ModelbenchResponse, ZeroEvalModelSchema } from './types.js';
 import { matchModelToCanonical, type CatalogEntry } from './match.js';
 import { refreshIntervalMs, type SyncResult } from './sync.js';
@@ -22,8 +23,7 @@ export function getRefreshIntervalMs(): number {
 export async function fetchBenchmarks(source: 'modelbench' | 'zeroeval', _opts: BenchmarkOpts = {}): Promise<SyncResult> {
   const db = getDrizzleDb();
   try {
-    const catalogRows: any[] = await db.select({ id: models.id, name: models.name, provider_id: models.provider_id }).from(models);
-    const catalog = catalogRows.map(r => ({ id: r.id, name: r.name, provider_id: r.provider_id })) as CatalogEntry[];
+    const catalog = (await db.select({ id: models.id, name: models.name, provider_id: models.provider_id }).from(models)) as CatalogEntry[];
     let count: number;
     if (source === 'modelbench') count = await fetchModelbench(db, catalog);
     else count = await fetchZeroEval(db, catalog);
@@ -36,7 +36,7 @@ export async function fetchBenchmarks(source: 'modelbench' | 'zeroeval', _opts: 
   }
 }
 
-async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number> {
+async function fetchModelbench(db: BetterSQLite3Database, catalog: CatalogEntry[]): Promise<number> {
   const now = new Date().toISOString();
   let count = 0;
   let page = 1;
@@ -83,7 +83,7 @@ async function fetchModelbench(db: any, catalog: CatalogEntry[]): Promise<number
   return count;
 }
 
-async function fetchZeroEval(db: any, catalog: CatalogEntry[]): Promise<number> {
+async function fetchZeroEval(db: BetterSQLite3Database, catalog: CatalogEntry[]): Promise<number> {
   const now = new Date().toISOString();
   let count = 0;
   const res = await fetch(ZEROEVAL_API);
@@ -114,7 +114,7 @@ async function fetchZeroEval(db: any, catalog: CatalogEntry[]): Promise<number> 
   return count;
 }
 
-async function updateCacheState(db: any, source: string, status: string, error: string | undefined, count: number): Promise<void> {
+async function updateCacheState(db: BetterSQLite3Database, source: string, status: string, error: string | undefined, count: number): Promise<void> {
   const now = new Date();
   const next = new Date(now.getTime() + getRefreshIntervalMs()).toISOString();
   await db.insert(catalog_cache_state).values({

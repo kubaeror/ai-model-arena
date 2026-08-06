@@ -62,8 +62,8 @@ export function createObservabilityRouter(): Router {
       const db = getDrizzleDb();
       await db.execute(sql`SELECT 1 AS ok`);
       dbStatus = { ok: true };
-    } catch (err: any) {
-      dbStatus = { ok: false, error: err?.message ?? INTERNAL_ERROR };
+    } catch (err) {
+      dbStatus = { ok: false, error: err instanceof Error ? err.message : INTERNAL_ERROR };
     }
 
     const healthy = dbStatus.ok;

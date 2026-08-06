@@ -1,5 +1,6 @@
 import { getDrizzleDb } from './index.js';
 import { runs, run_models } from './schema.js';
+import type { DbRun, DbRunModel } from './schema.js';
 import { eq, desc } from 'drizzle-orm';
 
 export interface RunIndexModelEntry {
@@ -56,7 +57,7 @@ function pmToDb(entry: RunIndexModelEntry): Record<string, unknown> {
   };
 }
 
-function dbToPm(row: any): RunIndexModelEntry {
+function dbToPm(row: DbRunModel): RunIndexModelEntry {
   return {
     runId: String(row.run_id ?? ''),
     model: String(row.model ?? ''),
@@ -81,16 +82,16 @@ export async function loadRunIndex(): Promise<RunIndexFile> {
 
 export async function listRuns(): Promise<RunIndexRecord[]> {
   const db = getDrizzleDb();
-  const rows: any[] = await db.select().from(runs).orderBy(desc(runs.started_at));
-  const allPm: any[] = await db.select().from(run_models).orderBy(run_models.run_id);
-  const pmByRun = new Map<string, any[]>();
+  const rows: DbRun[] = await db.select().from(runs).orderBy(desc(runs.started_at));
+  const allPm: DbRunModel[] = await db.select().from(run_models).orderBy(run_models.run_id);
+  const pmByRun = new Map<string, DbRunModel[]>();
   for (const pm of allPm) {
     const rid = String(pm.run_id);
     let lst = pmByRun.get(rid);
     if (!lst) { lst = []; pmByRun.set(rid, lst); }
     lst.push(pm);
   }
-  return rows.map((r: any) => ({
+  return rows.map((r: DbRun) => ({
     runId: String(r.run_id),
     scenario: String(r.scenario),
     models: JSON.parse(String(r.models)) as string[],
@@ -107,10 +108,10 @@ export async function listRuns(): Promise<RunIndexRecord[]> {
 
 export async function getRunRecord(runId: string): Promise<RunIndexRecord | undefined> {
   const db = getDrizzleDb();
-  const rows: any[] = await db.select().from(runs).where(eq(runs.run_id, runId)).limit(1);
+  const rows: DbRun[] = await db.select().from(runs).where(eq(runs.run_id, runId)).limit(1);
   if (rows.length === 0) return undefined;
-  const r = rows[0];
-  const perModel: any[] = await db.select().from(run_models).where(eq(run_models.run_id, runId));
+  const r = rows[0]!;
+  const perModel: DbRunModel[] = await db.select().from(run_models).where(eq(run_models.run_id, runId));
   return {
     runId: String(r.run_id),
     scenario: String(r.scenario),
@@ -155,7 +156,7 @@ export async function upsertRun(record: RunIndexRecord): Promise<void> {
   });
   if (record.perModel && record.perModel.length > 0) {
     for (const pm of record.perModel) {
-      await db.insert(run_models).values(pmToDb(pm) as any).onConflictDoUpdate({
+      await db.insert(run_models).values(pmToDb(pm)).onConflictDoUpdate({
         target: [run_models.run_id, run_models.model],
         set: {
           output_dir: pm.outputDir,
@@ -170,7 +171,7 @@ export async function upsertRun(record: RunIndexRecord): Promise<void> {
           total_tool_calls: pm.totalToolCalls ?? null,
           stop_reason: pm.stopReason ?? null,
           duration_ms: pm.durationMs ?? null,
-        } as any,
+        },
       });
     }
   }
