@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { getDrizzleDb } from '../index.js';
 import { files } from '../schema.js';
 
@@ -17,4 +18,24 @@ export async function insertFile(data: {
     task_id: data.taskId ?? null, trace_id: data.traceId ?? null,
     produced_at: data.producedAt, produced_by_tool: data.producedByTool ?? null,
   });
+}
+
+export async function replaceFilesForRun(data: {
+  runId: string;
+  entries: Array<{ path: string; producedByTool?: string | null }>;
+  model: string;
+  producedAt: string;
+}): Promise<void> {
+  const db = getDrizzleDb();
+  await db.delete(files).where(eq(files.run_id, data.runId));
+  for (const entry of data.entries) {
+    await insertFile({
+      id: crypto.randomUUID(),
+      runId: data.runId,
+      path: entry.path,
+      model: data.model,
+      producedAt: data.producedAt,
+      producedByTool: entry.producedByTool ?? null,
+    });
+  }
 }
