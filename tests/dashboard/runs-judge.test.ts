@@ -17,6 +17,8 @@ test('GET /api/runs/:runId includes judge scores', async (t) => {
     status: 'completed',
     source: 'cli',
     createdBy: TEST_ADMIN.username,
+    comparisonMdPath: null,
+    comparisonJsonPath: null,
     perModel: [{
       model: 'gpt-4o',
       runId: 'run-judge-1',
@@ -65,6 +67,8 @@ test('GET /api/runs/:runId returns empty judge array when no scores exist', asyn
     status: 'completed',
     source: 'cli',
     createdBy: TEST_ADMIN.username,
+    comparisonMdPath: null,
+    comparisonJsonPath: null,
     perModel: [{
       model: 'gpt-4o',
       runId: 'run-no-judge',
