@@ -75,12 +75,13 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
         totalRuns: (state.totalRuns ?? 0) + 1,
         totalFailures: (state.totalFailures ?? 0) + 1,
       });
+      // Seed counters from the DB row so restarts don't regress totals.
       await updateScheduleStatus(scheduleId, {
         lastStatus: 'error',
         lastError: 'Failed to enqueue one or more model tasks',
-        consecutiveFailures,
-        totalRuns: (state.totalRuns ?? 0) + 1,
-        totalFailures: (state.totalFailures ?? 0) + 1,
+        consecutiveFailures: (row.consecutive_failures ?? 0) + 1,
+        totalRuns: (row.total_runs ?? 0) + 1,
+        totalFailures: (row.total_failures ?? 0) + 1,
       });
 
       if (consecutiveFailures >= 3) {
@@ -97,10 +98,11 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
         consecutiveFailures: 0,
         totalRuns: (state.totalRuns ?? 0) + 1,
       });
+      // Seed counters from the DB row so restarts don't regress totals.
       await updateScheduleStatus(scheduleId, {
         lastStatus: 'idle',
         consecutiveFailures: 0,
-        totalRuns: (state.totalRuns ?? 0) + 1,
+        totalRuns: (row.total_runs ?? 0) + 1,
       });
     }
   }
