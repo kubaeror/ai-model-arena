@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { streamKey, dlqStreamKey } from '../../src/queue/router.js';
+import { streamKey, dlqStreamKey, knownProviders, familyFor } from '../../src/queue/router.js';
+import { BUILTIN_PROVIDERS } from '../../src/providers/index.js';
 
 test('streamKey routes openai to openai-compat family', () => {
   assert.equal(streamKey('arena:tasks', 'openai'), 'arena:tasks:openai-compat');
@@ -36,4 +37,37 @@ test('dlqStreamKey for anthropic', () => {
 
 test('dlqStreamKey falls through for unknown provider', () => {
   assert.equal(dlqStreamKey('prefix', 'unknown-provider'), 'prefix:unknown-provider:dlq');
+});
+
+test('known adapter families map to shared streams', () => {
+  assert.equal(streamKey('arena:tasks', 'deepseek'), 'arena:tasks:openai-compat');
+  assert.equal(streamKey('arena:tasks', 'together'), 'arena:tasks:openai-compat');
+  assert.equal(streamKey('arena:tasks', 'anthropic'), 'arena:tasks:anthropic');
+  assert.equal(streamKey('arena:tasks', 'google'), 'arena:tasks:google');
+});
+
+test('bedrock routes to its own stream (IAM auth, no shared family)', () => {
+  assert.equal(streamKey('arena:tasks', 'bedrock'), 'arena:tasks:bedrock');
+});
+
+test('unknown/custom providers keep per-provider streams', () => {
+  assert.equal(streamKey('arena:tasks', 'my-custom'), 'arena:tasks:my-custom');
+  assert.equal(familyFor('my-custom'), 'my-custom');
+});
+
+test('every builtin provider resolves to a family', () => {
+  for (const d of BUILTIN_PROVIDERS) {
+    const family = familyFor(d.id);
+    assert.ok(family.length > 0, `family for ${d.id}`);
+  }
+});
+
+test('knownProviders covers all builtin providers', () => {
+  const ids = new Set(BUILTIN_PROVIDERS.map((d) => d.id));
+  for (const id of knownProviders) assert.ok(ids.has(id), `known: ${id}`);
+  for (const id of ids) assert.ok(knownProviders.includes(id), `missing: ${id}`);
+});
+
+test('dlq mirrors stream key', () => {
+  assert.equal(dlqStreamKey('arena:tasks', 'deepseek'), 'arena:tasks:openai-compat:dlq');
 });
