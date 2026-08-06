@@ -4,7 +4,7 @@ import { providers, provider_versions, model_providers } from '../db/schema.js';
 import { eq, and, desc } from 'drizzle-orm';
 import crypto from 'node:crypto';
 
-export interface CustomProviderInput {
+interface CustomProviderInput {
   id: string;
   name: string;
   apiBase?: string;
@@ -12,20 +12,6 @@ export interface CustomProviderInput {
   envVar?: string;
   headerName?: string;
   adapter: 'openai-compat' | 'anthropic' | 'google' | 'bedrock';
-}
-
-export interface CustomProviderVersion {
-  id: string;
-  providerId: string;
-  version: number;
-  name: string;
-  apiBase: string | null;
-  authScheme: string;
-  envVar: string | null;
-  adapter: string;
-  headerName: string | null;
-  createdBy: string;
-  createdAt: string;
 }
 
 export async function upsertCustomProvider(

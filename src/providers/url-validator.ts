@@ -46,7 +46,7 @@ export function isBlockedProviderHost(hostname: string): boolean {
   return METADATA_HOSTNAMES.includes(h);
 }
 
-export type UrlValidationResult = { ok: true; normalized: string } | { ok: false; error: string };
+type UrlValidationResult = { ok: true; normalized: string } | { ok: false; error: string };
 
 export function validateProviderUrl(raw: string, allowHttp?: boolean): UrlValidationResult {
   let parsed: URL;

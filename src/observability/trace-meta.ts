@@ -10,7 +10,7 @@ import path from 'node:path';
 
 export type SpanType = 'root' | 'chat' | 'execute_tool' | 'other';
 
-export interface SpanEvent {
+interface SpanEvent {
   name: string;
   timeMs: number;
   attributes?: Record<string, unknown>;
@@ -45,7 +45,7 @@ export interface TraceMeta {
 }
 
 /** Lightweight summary persisted to `index.json` next to each run. */
-export interface TraceIndexSummary {
+interface TraceIndexSummary {
   trace_id: string;
   span_count: number;
   total_duration_ms: number;

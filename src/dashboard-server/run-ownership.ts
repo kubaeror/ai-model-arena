@@ -10,7 +10,7 @@ import type { AuthedRequest } from './auth.js';
  * accessible to non-admins, closing the IDOR gap where any authenticated
  * viewer could read another tenant's artifacts by runId.
  */
-export async function checkRunOwnership(
+async function checkRunOwnership(
   req: AuthedRequest,
   runId: string,
 ): Promise<{ ok: true } | { ok: false; status: 404 | 403 }> {

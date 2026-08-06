@@ -7,18 +7,18 @@ import type { SendOpts } from './providers/adapters/base.js';
 
 // ── Schemas ────────────────────────────────────────────────────────────────
 
-export const SuccessCriteriaSchema = z.object({
+const SuccessCriteriaSchema = z.object({
   command: z.string().optional(),
   expectedExitCode: z.number().int().default(0),
   expectedOutputContains: z.string().optional(),
 });
 
-export const ReasoningConfigSchema = z.object({
+const ReasoningConfigSchema = z.object({
   effort: z.enum(['low', 'medium', 'high']).optional(),
   toggle: z.boolean().optional(),
   budget_tokens: z.number().int().positive().optional(),
 });
-export type ReasoningConfig = z.infer<typeof ReasoningConfigSchema>;
+type ReasoningConfig = z.infer<typeof ReasoningConfigSchema>;
 
 /**
  * Convert the user-friendly scenario reasoning config to the adapter-level

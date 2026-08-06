@@ -2,7 +2,7 @@ import { createSessionStore } from '../session/store.js';
 import type { ChatMessage } from '../types.js';
 import type { StoredMessage } from '../session/store.js';
 
-export interface ResumeResult {
+interface ResumeResult {
   messages: ChatMessage[];
   lastCompletedTurn: number;
 }

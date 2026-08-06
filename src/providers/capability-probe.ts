@@ -8,7 +8,7 @@
 
 import type { ProviderDescriptor, ProviderHealthCheck } from './types.js';
 
-export interface ProbeOpts {
+interface ProbeOpts {
   apiKey?: string;
   timeoutMs?: number;
   /** Model id for probes that need one (anthropic count_tokens). */
@@ -69,7 +69,7 @@ export async function probeProvider(
 /**
  * Probe an OpenAI-compatible endpoint to verify reachability.
  */
-export async function probeOpenAICompatEndpoint(
+async function probeOpenAICompatEndpoint(
   apiBase: string,
   apiKey: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,

@@ -18,7 +18,7 @@ import { initPostgres, getPgClient, closePostgres } from './postgres.js';
 import { dbPath } from '../paths.js';
 import type { Database as SqliteDb } from 'better-sqlite3';
 
-export type DbClient = SqliteDb;
+type DbClient = SqliteDb;
 
 let _driver: 'sqlite' | 'postgres' = 'sqlite';
 

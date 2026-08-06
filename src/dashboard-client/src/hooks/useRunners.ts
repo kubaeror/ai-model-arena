@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 
-export interface RunnerInfo {
+interface RunnerInfo {
   name: string;
   provider: string;
   replicas: number;

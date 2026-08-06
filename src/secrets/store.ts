@@ -6,7 +6,7 @@ const SECRETS_DIR = '/etc/arena/secrets';
 const SENSITIVE_KEYS = /(api.?key|secret|password|token|auth|credential)/i;
 const K8S_SECRET_FILE_RE = /^[A-Za-z0-9_]+$/;
 
-export interface SecretStoreOptions {
+interface SecretStoreOptions {
   /** Bare-metal .env path (default: <cwd>/.env). */
   envFile?: string;
   /** k8s secrets mount dir (default: /etc/arena/secrets). */

@@ -247,11 +247,11 @@ export async function deleteWebhook(id: number): Promise<void> {
 }
 
 // ── Budget ───────────────────────────────────────────────────────────────────
-export interface BudgetModelStatus {
+interface BudgetModelStatus {
   daily: { spent: number; limit: number | null };
   monthly: { spent: number; limit: number | null };
 }
-export interface BudgetStatus {
+interface BudgetStatus {
   global: BudgetModelStatus;
   models: Record<string, BudgetModelStatus>;
 }
@@ -433,7 +433,7 @@ export interface PromptRow {
   latest_version: number | null;
   latest_tag: string | null;
 }
-export interface PromptVersion {
+interface PromptVersion {
   id: string;
   prompt_id: string;
   version: number;

@@ -12,7 +12,7 @@ import { type AuthConfig } from './auth.js';
 import { verifyWsRequest } from './ws-auth.js';
 import { createLogger } from '../logger/pino-logger.js';
 
-export interface RunStatus {
+interface RunStatus {
   runId: string;
   scenario: string;
   models: Array<{ model: string; status: string }>;

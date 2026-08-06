@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Request } from 'express';
 
-export const ApiKeyPermissionSchema = z.enum([
+const ApiKeyPermissionSchema = z.enum([
   'runs:read',
   'runs:write',
   'models:read',
@@ -46,7 +46,7 @@ export const ApiKeyPermissionSchema = z.enum([
   'output_mappings:write',
 ]);
 
-export const ApiKeySchema = z.object({
+const ApiKeySchema = z.object({
   key: z.string(),
   name: z.string(),
   description: z.string().optional(),

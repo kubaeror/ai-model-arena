@@ -33,7 +33,7 @@ import { closeDb } from './db/index.js';
 import { secretStore } from './secrets/store.js';
 import { assertRequiredEnv } from './env/required.js';
 
-export interface RunnerOptions {
+interface RunnerOptions {
   queue?: TaskQueue;
   signal?: AbortSignal;
   fallbackChain?: FallbackConfig;
@@ -68,7 +68,7 @@ export function unmarkReady(filePath: string = READINESS_FILE): void {
   try { fs.unlinkSync(filePath); } catch { /* ignore */ }
 }
 
-export interface SuccessOutcome {
+interface SuccessOutcome {
   command?: string;
   expectedExitCode: number;
   exitCode: number | null;

@@ -11,7 +11,7 @@ import { anomalyCountsByModel } from '../anomaly-detection/db.js';
  * against).
  */
 
-export interface LatencyStat {
+interface LatencyStat {
   model: string;
   tool: string;
   count: number;
@@ -20,7 +20,7 @@ export interface LatencyStat {
   p99Ms: number;
 }
 
-export interface ModelStat {
+interface ModelStat {
   model: string;
   runs: number;
   errorRate: number;
@@ -28,7 +28,7 @@ export interface ModelStat {
   unresolvedAnomalies: number;
 }
 
-export interface ScenarioBaseline {
+interface ScenarioBaseline {
   model: string;
   scenario: string;
   sampleCount: number;

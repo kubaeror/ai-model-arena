@@ -1,7 +1,7 @@
 import ReactECharts from 'echarts-for-react';
 import { getEchartsTheme, commonGrid, commonAxis, commonTooltip } from '../../lib/echarts-theme';
 
-export interface LineSeries {
+interface LineSeries {
   name: string;
   data: number[];
   color?: string;

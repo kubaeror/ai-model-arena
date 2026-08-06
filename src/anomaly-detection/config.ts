@@ -61,7 +61,7 @@ export type AnomalyDetectionConfig = z.output<typeof AnomalyDetectionConfigSchem
 
 let cached: AnomalyDetectionConfig | null = null;
 
-export function configPath(): string {
+function configPath(): string {
   return process.env.AI_ARENA_ANOMALY_CONFIG ?? path.join(findProjectRoot(), 'configs', 'anomaly-detection.yaml');
 }
 

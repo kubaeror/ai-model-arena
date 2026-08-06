@@ -17,7 +17,7 @@
  * Set ARENA_SKIP_ENV_CHECK=1 to bypass the check entirely (tests/CI).
  */
 
-export type EnvScope = 'runner' | 'dashboard';
+type EnvScope = 'runner' | 'dashboard';
 
 const REQUIRED_BY_SCOPE: Record<EnvScope, readonly string[]> = {
   runner: ['DB_DRIVER', 'QUEUE_DRIVER', 'OUTPUT_ROOT'],

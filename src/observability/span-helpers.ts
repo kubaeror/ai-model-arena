@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { getCurrentSpan, runInSpan } from './span-context.js';
 import type { TraceRecorder, SpanType } from './trace-meta.js';
 
-export const MAX_ARG_CHARS = 2000;
+const MAX_ARG_CHARS = 2000;
 
 /** Truncate a string to `max` chars with an ellipsis marker. */
 export function truncate(s: string, max = MAX_ARG_CHARS): string {

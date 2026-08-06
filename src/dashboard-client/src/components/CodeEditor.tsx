@@ -11,15 +11,6 @@ interface CodeEditorProps {
   height?: string;
 }
 
-function detectLanguage(path: string): 'js' | 'json' | 'md' | 'text' {
-  if (path.endsWith('.json')) return 'json';
-  if (path.endsWith('.md')) return 'md';
-  if (/\.[mc]?[jt]sx?$/.test(path)) return 'js';
-  return 'text';
-}
-
-export { detectLanguage };
-
 export function CodeEditor({ value, onChange, readOnly = false, language = 'js', height = '300px' }: CodeEditorProps) {
   const extensions = useMemo(() => {
     if (language === 'js' || language === 'json') return [javascript({ jsx: false, typescript: false })];

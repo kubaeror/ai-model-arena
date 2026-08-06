@@ -7,9 +7,9 @@ export class CircuitOpenError extends Error {
   }
 }
 
-export type CircuitState = 'closed' | 'open' | 'halfOpen';
+type CircuitState = 'closed' | 'open' | 'halfOpen';
 
-export interface CircuitBreakerConfig {
+interface CircuitBreakerConfig {
   failureThreshold?: number;
   resetTimeoutMs?: number;
 }

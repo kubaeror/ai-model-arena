@@ -6,7 +6,7 @@ import { getModelByNameOrId } from './query.js';
  * Extracted from runner.ts so that orchestrator and evaluation layers do not
  * need to import the runner entry-point script (which has top-level side-effects).
  */
-export interface ResolvedModel {
+interface ResolvedModel {
   canonicalId: string;
   providerId: string;
   apiModelId: string;
@@ -19,10 +19,10 @@ export interface ResolvedModel {
 }
 
 /** Default number of agent loop turns when the model config does not override. */
-export const DEFAULT_MAX_TURNS = 20;
+const DEFAULT_MAX_TURNS = 20;
 
 /** Default sampling temperature when the model config does not override. */
-export const DEFAULT_TEMPERATURE = 0.2;
+const DEFAULT_TEMPERATURE = 0.2;
 
 /**
  * Look up a model by friendly name or canonical ID and return all runtime

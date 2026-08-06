@@ -6,7 +6,7 @@ import { createLogger } from './pino-logger.js';
 
 const logger = createLogger('ai-arena:conversation-logger');
 
-export type ConversationEntryType =
+type ConversationEntryType =
   | 'system'
   | 'user'
   | 'assistant'
@@ -40,7 +40,7 @@ export interface ConversationFile {
   entries: ConversationEntry[];
 }
 
-export interface ConversationDbSink {
+interface ConversationDbSink {
   appendMessage(sessionId: string, msg: {
     id: string;
     sessionId: string;
