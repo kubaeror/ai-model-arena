@@ -5,7 +5,7 @@ import { auditSafe } from '../../auth/rbac.js';
 import { secretStore, type SecretEntry } from '../../secrets/store.js';
 import { isKubernetes, getKubeNamespace, getKubeSecretName } from '../../env/detect.js';
 import type { Request, Response } from 'express';
-import { INTERNAL_ERROR } from '../error-sanitizer.js';
+import { asyncHandler } from '../helpers.js';
 
 let k8sApi: CoreV1Api | null = null;
 let k8sReady = false;
@@ -62,7 +62,7 @@ export function createSecretsRouter(): Router {
   initK8s();
 
   // GET /api/secrets — list all provider secrets with masked values
-  router.get('/', (async (_req: Request, res: Response) => {
+  router.get('/', asyncHandler(async (_req: Request, res: Response) => {
     if (isKubernetes() && k8sApi) {
       try {
         const ns = getKubeNamespace();
@@ -83,16 +83,15 @@ export function createSecretsRouter(): Router {
           res.json({ platform: 'kubernetes', secrets: entries, note: 'Secret listing uses env-based fallback (dashboard SA lacks read access)' });
           return;
         }
-        res.status(500).json({ error: INTERNAL_ERROR });
-        return;
+        throw err;
       }
     }
     const entries = secretStore.list();
     res.json({ platform: 'bare-metal', secrets: entries });
-  }) as unknown as Router);
+  }));
 
   // PUT /api/secrets/:envVar — set a secret value
-  router.put('/:envVar', (async (req: Request, res: Response) => {
+  router.put('/:envVar', asyncHandler(async (req: Request, res: Response) => {
     const envVar = req.params.envVar as string;
     const { value } = req.body as { value?: string };
 
@@ -110,46 +109,42 @@ export function createSecretsRouter(): Router {
       return;
     }
 
-    try {
-      if (isKubernetes() && k8sApi) {
-        const ns = getKubeNamespace();
-        const name = getKubeSecretName();
+    if (isKubernetes() && k8sApi) {
+      const ns = getKubeNamespace();
+      const name = getKubeSecretName();
 
-        try {
-          await k8sApi.patchNamespacedSecret({
-            name,
+      try {
+        await k8sApi.patchNamespacedSecret({
+          name,
+          namespace: ns,
+          body: { stringData: { [envVar]: value } },
+        });
+      } catch (patchErr: unknown) {
+        const e = patchErr as { response?: { statusCode?: number }; statusCode?: number };
+        if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
+          await k8sApi.createNamespacedSecret({
             namespace: ns,
-            body: { stringData: { [envVar]: value } },
+            body: {
+              metadata: { name, namespace: ns },
+              stringData: { [envVar]: value },
+            },
           });
-        } catch (patchErr: unknown) {
-          const e = patchErr as { response?: { statusCode?: number }; statusCode?: number };
-          if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
-            await k8sApi.createNamespacedSecret({
-              namespace: ns,
-              body: {
-                metadata: { name, namespace: ns },
-                stringData: { [envVar]: value },
-              },
-            });
-          } else {
-            throw patchErr;
-          }
+        } else {
+          throw patchErr;
         }
-
-        auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar });
-        res.json({ ok: true, envVar, message: 'Secret updated — kubelet will refresh mounts within ~60s' });
-      } else {
-        await secretStore.set(envVar, value);
-        auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar });
-        res.json({ ok: true, envVar });
       }
-    } catch {
-      res.status(500).json({ error: INTERNAL_ERROR });
+
+      auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar });
+      res.json({ ok: true, envVar, message: 'Secret updated — kubelet will refresh mounts within ~60s' });
+    } else {
+      await secretStore.set(envVar, value);
+      auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.set', { type: 'secret', id: envVar });
+      res.json({ ok: true, envVar });
     }
-  }) as unknown as Router);
+  }));
 
   // DELETE /api/secrets/:envVar — remove a secret
-  router.delete('/:envVar', (async (req: Request, res: Response) => {
+  router.delete('/:envVar', asyncHandler(async (req: Request, res: Response) => {
     const envVar = req.params.envVar as string;
 
     if (!envVar) {
@@ -157,37 +152,33 @@ export function createSecretsRouter(): Router {
       return;
     }
 
-    try {
-      if (isKubernetes() && k8sApi) {
-        const ns = getKubeNamespace();
-        const name = getKubeSecretName();
+    if (isKubernetes() && k8sApi) {
+      const ns = getKubeNamespace();
+      const name = getKubeSecretName();
 
-        try {
-          await k8sApi.patchNamespacedSecret({
-            name,
-            namespace: ns,
-            body: { stringData: { [envVar]: null } },
-          });
-        } catch (err: unknown) {
-          const e = err as { response?: { statusCode?: number }; statusCode?: number };
-          if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
-            res.json({ ok: true, envVar, message: 'Secret already removed' });
-            return;
-          }
-          throw err;
+      try {
+        await k8sApi.patchNamespacedSecret({
+          name,
+          namespace: ns,
+          body: { stringData: { [envVar]: null } },
+        });
+      } catch (err: unknown) {
+        const e = err as { response?: { statusCode?: number }; statusCode?: number };
+        if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
+          res.json({ ok: true, envVar, message: 'Secret already removed' });
+          return;
         }
-
-        auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar });
-        res.json({ ok: true, envVar, message: 'Secret removed — kubelet will refresh mounts within ~60s' });
-      } else {
-        await secretStore.delete(envVar);
-        auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar });
-        res.json({ ok: true, envVar });
+        throw err;
       }
-    } catch {
-      res.status(500).json({ error: INTERNAL_ERROR });
+
+      auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar });
+      res.json({ ok: true, envVar, message: 'Secret removed — kubelet will refresh mounts within ~60s' });
+    } else {
+      await secretStore.delete(envVar);
+      auditSafe((req as unknown as AuthedRequest).user?.sub ?? 'system', 'secret.delete', { type: 'secret', id: envVar });
+      res.json({ ok: true, envVar });
     }
-  }) as unknown as Router);
+  }));
 
   return router;
 }

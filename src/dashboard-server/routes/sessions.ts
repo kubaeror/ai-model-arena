@@ -6,14 +6,14 @@ import {
 import { createSessionStore } from '../../session/store.js';
 import { requireRole, auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
+import { notFound, parsePagination } from '../helpers.js';
 
 export function createSessionsRouter(): Router {
   const router = Router();
 
   // GET /api/sessions - list sessions, paginated + filterable
   router.get('/', async (req, res) => {
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
-    const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
+    const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
     const model = typeof req.query.model === 'string' ? req.query.model : undefined;
 
@@ -26,7 +26,7 @@ export function createSessionsRouter(): Router {
   router.get('/:id', async (req, res) => {
     const session = await getSessionWithCounts(req.params.id);
     if (!session) {
-      res.status(404).json({ error: 'Session not found' });
+      notFound(res, 'Session', req.params.id);
       return;
     }
     res.json(session);
@@ -36,7 +36,7 @@ export function createSessionsRouter(): Router {
   router.get('/:id/messages', async (req, res) => {
     const session = await getSessionWithCounts(req.params.id);
     if (!session) {
-      res.status(404).json({ error: 'Session not found' });
+      notFound(res, 'Session', req.params.id);
       return;
     }
     const messages = await listMessagesBySession(req.params.id);
@@ -47,7 +47,7 @@ export function createSessionsRouter(): Router {
   router.get('/:id/calls', async (req, res) => {
     const session = await getSessionWithCounts(req.params.id);
     if (!session) {
-      res.status(404).json({ error: 'Session not found' });
+      notFound(res, 'Session', req.params.id);
       return;
     }
     const calls = await listModelCallsForSession(req.params.id);
@@ -58,7 +58,7 @@ export function createSessionsRouter(): Router {
   router.delete('/:id', requireRole('admin'), async (req, res) => {
     const existing = await getSessionWithCounts(String(req.params.id));
     if (!existing) {
-      res.status(404).json({ error: 'Session not found' });
+      notFound(res, 'Session', String(req.params.id));
       return;
     }
 

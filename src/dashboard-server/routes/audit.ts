@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { and, eq, gte, lte } from 'drizzle-orm';
 import { paginate } from '../../db/query.js';
 import { audit_log } from '../../db/schema.js';
+import { parsePagination } from '../helpers.js';
 
 const auditColumns = {
   id: audit_log.id,
@@ -19,8 +20,7 @@ export function createAuditRouter(): Router {
 
   // GET /api/audit - paginated, filterable audit log
   router.get('/', async (req, res) => {
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
-    const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
+    const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
     const actor = typeof req.query.actor === 'string' ? req.query.actor : undefined;
     const action = typeof req.query.action === 'string' ? req.query.action : undefined;
     const entityType = typeof req.query.entity_type === 'string' ? req.query.entity_type : undefined;

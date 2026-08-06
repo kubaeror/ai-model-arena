@@ -10,6 +10,7 @@ import {
   countUserRoles, listRoles, insertRole, countRoles,
 } from '../../db/query.js';
 import { hashPassword } from '../../auth/password.js';
+import { notFound, parseBody } from '../helpers.js';
 
 function now(): string {
   return new Date().toISOString();
@@ -65,26 +66,23 @@ export function createUsersRouter(): Router {
       username: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/, 'username must be alphanumeric'),
       password: z.string().min(8).max(128),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid user input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'Invalid user input');
+    if (!parsed) return;
 
-    const dup = await getUserByUsername(parsed.data.username);
+    const dup = await getUserByUsername(parsed.username);
     if (dup) {
       res.status(409).json({ error: 'Username already exists' });
       return;
     }
 
     const id = crypto.randomUUID();
-    const hash = await hashPassword(parsed.data.password);
+    const hash = await hashPassword(parsed.password);
     const timestamp = now();
 
-    await insertUser({ id, username: parsed.data.username, passwordHash: hash, createdAt: timestamp });
+    await insertUser({ id, username: parsed.username, passwordHash: hash, createdAt: timestamp });
 
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.create', { type: 'user', id }, undefined, { username: parsed.data.username });
-    res.status(201).json({ id, username: parsed.data.username, created_at: timestamp, roles: [] });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.create', { type: 'user', id }, undefined, { username: parsed.username });
+    res.status(201).json({ id, username: parsed.username, created_at: timestamp, roles: [] });
   });
 
   // PUT /api/users/:id - update username or password
@@ -93,33 +91,30 @@ export function createUsersRouter(): Router {
       username: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/).optional(),
       password: z.string().min(8).max(128).optional(),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'Invalid input');
+    if (!parsed) return;
 
     const existing = await getUserById(req.params.id);
     if (!existing) {
-      res.status(404).json({ error: 'User not found' });
+      notFound(res, 'User', req.params.id);
       return;
     }
 
-    if (parsed.data.username !== undefined) {
-      const dup = await getUserByUsername(parsed.data.username);
+    if (parsed.username !== undefined) {
+      const dup = await getUserByUsername(parsed.username);
       if (dup && dup.id !== req.params.id) {
         res.status(409).json({ error: 'Username already exists' });
         return;
       }
-      await updateUser(req.params.id, { username: parsed.data.username });
+      await updateUser(req.params.id, { username: parsed.username });
     }
 
-    if (parsed.data.password !== undefined) {
-      const hash = await hashPassword(parsed.data.password);
+    if (parsed.password !== undefined) {
+      const hash = await hashPassword(parsed.password);
       await updateUser(req.params.id, { passwordHash: hash });
     }
 
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.update', { type: 'user', id: req.params.id }, { username: existing.username }, parsed.data);
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.update', { type: 'user', id: req.params.id }, { username: existing.username }, parsed);
     res.json({ ok: true });
   });
 
@@ -127,7 +122,7 @@ export function createUsersRouter(): Router {
   router.delete('/:id', async (req, res) => {
     const existing = await getUserById(req.params.id);
     if (!existing) {
-      res.status(404).json({ error: 'User not found' });
+      notFound(res, 'User', req.params.id);
       return;
     }
 
@@ -157,7 +152,7 @@ export function createUsersRouter(): Router {
   router.get('/:id/roles', async (req, res) => {
     const user = await getUserById(req.params.id);
     if (!user) {
-      res.status(404).json({ error: 'User not found' });
+      notFound(res, 'User', req.params.id);
       return;
     }
     const roles = await getUserRolesByUserId(req.params.id);
@@ -167,27 +162,24 @@ export function createUsersRouter(): Router {
   // POST /api/users/:id/roles - assign a role
   router.post('/:id/roles', async (req, res) => {
     const schema = z.object({ roleId: z.string().min(1).max(64) });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid role input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'Invalid role input');
+    if (!parsed) return;
 
     const user = await getUserById(req.params.id);
     if (!user) {
-      res.status(404).json({ error: 'User not found' });
+      notFound(res, 'User', req.params.id);
       return;
     }
     const rolesList = await listRoles();
-    const role = rolesList.find(r => r.id === parsed.data.roleId);
+    const role = rolesList.find(r => r.id === parsed.roleId);
     if (!role) {
-      res.status(404).json({ error: 'Role not found' });
+      notFound(res, 'Role', parsed.roleId);
       return;
     }
 
-    await assignUserRole(req.params.id, parsed.data.roleId);
+    await assignUserRole(req.params.id, parsed.roleId);
 
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.role.assign', { type: 'user', id: req.params.id }, undefined, { roleId: parsed.data.roleId });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.role.assign', { type: 'user', id: req.params.id }, undefined, { roleId: parsed.roleId });
     res.status(201).json({ ok: true });
   });
 
@@ -195,7 +187,7 @@ export function createUsersRouter(): Router {
   router.delete('/:id/roles/:roleId', async (req, res) => {
     const user = await getUserById(req.params.id);
     if (!user) {
-      res.status(404).json({ error: 'User not found' });
+      notFound(res, 'User', req.params.id);
       return;
     }
 

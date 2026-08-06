@@ -14,6 +14,7 @@ import {
 import { listSchedules, getScheduleRow } from '../../db/query.js';
 import type { DbSchedule } from '../../db/schema.js';
 import { createLogger } from '../../logger/pino-logger.js';
+import { notFound } from '../helpers.js';
 
 function configPath(): string {
   return path.join(findProjectRoot(), 'configs', 'schedules.yaml');
@@ -51,7 +52,7 @@ export function createSchedulesRouter(): Router {
   router.get('/:id', async (req, res) => {
     const schedule = getSchedule(req.params.id as string);
     if (!schedule) {
-      res.status(404).json({ error: 'Schedule not found' });
+      notFound(res, 'Schedule', req.params.id as string);
       return;
     }
     const row = await getScheduleRow(req.params.id as string);
@@ -88,12 +89,12 @@ export function createSchedulesRouter(): Router {
     }
     const schedule = getSchedule(req.params.id as string);
     if (!schedule) {
-      res.status(404).json({ error: 'Schedule not found' });
+      notFound(res, 'Schedule', req.params.id as string);
       return;
     }
     const ok = await setScheduleEnabled(configPath(), req.params.id as string, enabled, logger);
     if (!ok) {
-      res.status(404).json({ error: 'Schedule not found' });
+      notFound(res, 'Schedule', req.params.id as string);
       return;
     }
     const updated = getSchedule(req.params.id as string)!;
@@ -103,7 +104,7 @@ export function createSchedulesRouter(): Router {
   router.delete('/:id', requireRole('admin'), async (req, res) => {
     const ok = await removeSchedule(configPath(), req.params.id as string, logger);
     if (!ok) {
-      res.status(404).json({ error: 'Schedule not found' });
+      notFound(res, 'Schedule', req.params.id as string);
       return;
     }
     res.json({ deleted: req.params.id as string });

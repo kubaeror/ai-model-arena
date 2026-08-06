@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { z } from 'zod';
+import { notFound, parseBody } from '../helpers.js';
 import {
   getPromptById, listPromptsWithLatestVersion, listPromptVersions,
   insertPrompt, updatePromptMetadata, deletePromptById,
@@ -31,7 +32,7 @@ export function createPromptsRouter(): Router {
   router.get('/:id', async (req, res) => {
     const prompt = await getPromptById(sid(req.params.id));
     if (!prompt) {
-      res.status(404).json({ error: 'Prompt not found' });
+      notFound(res, 'Prompt', sid(req.params.id));
       return;
     }
     const versions = await listPromptVersions(sid(req.params.id));
@@ -48,31 +49,28 @@ export function createPromptsRouter(): Router {
       config: z.record(z.string(), z.unknown()).optional(),
       tag: z.string().optional(),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid prompt input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'Invalid prompt input');
+    if (!parsed) return;
 
     const promptId = crypto.randomUUID();
     const timestamp = now();
     const actor = (req as AuthedRequest).user?.sub ?? 'system';
 
     await insertPrompt({
-      id: promptId, name: parsed.data.name,
-      description: parsed.data.description ?? null,
+      id: promptId, name: parsed.name,
+      description: parsed.description ?? null,
       createdAt: timestamp, updatedAt: timestamp,
     });
 
     const versionId = crypto.randomUUID();
     await insertPromptVersion({
       id: versionId, promptId, version: 1,
-      systemPrompt: parsed.data.systemPrompt, task: parsed.data.task,
-      config: parsed.data.config ? JSON.stringify(parsed.data.config) : null,
-      tag: parsed.data.tag ?? null, createdAt: timestamp, createdBy: actor,
+      systemPrompt: parsed.systemPrompt, task: parsed.task,
+      config: parsed.config ? JSON.stringify(parsed.config) : null,
+      tag: parsed.tag ?? null, createdAt: timestamp, createdBy: actor,
     });
 
-    auditSafe(actor, 'prompt.create', { type: 'prompt', id: promptId }, undefined, { name: parsed.data.name });
+    auditSafe(actor, 'prompt.create', { type: 'prompt', id: promptId }, undefined, { name: parsed.name });
     res.status(201).json({ id: promptId, version: 1 });
   });
 
@@ -83,26 +81,23 @@ export function createPromptsRouter(): Router {
       name: z.string().min(1).max(128).optional(),
       description: z.string().optional(),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'Invalid input');
+    if (!parsed) return;
 
     const existing = await getPromptById(promptId);
     if (!existing) {
-      res.status(404).json({ error: 'Prompt not found' });
+      notFound(res, 'Prompt', promptId);
       return;
     }
 
     const timestamp = now();
     await updatePromptMetadata(promptId, {
-      name: parsed.data.name,
-      description: parsed.data.description ?? null,
+      name: parsed.name,
+      description: parsed.description ?? null,
       updatedAt: timestamp,
     });
 
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'prompt.update', { type: 'prompt', id: promptId }, existing, parsed.data);
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'prompt.update', { type: 'prompt', id: promptId }, existing, parsed);
     res.json({ ok: true });
   });
 
@@ -111,7 +106,7 @@ export function createPromptsRouter(): Router {
     const deleteId = sid(req.params.id);
     const existing = await getPromptById(deleteId);
     if (!existing) {
-      res.status(404).json({ error: 'Prompt not found' });
+      notFound(res, 'Prompt', deleteId);
       return;
     }
 
@@ -130,15 +125,12 @@ export function createPromptsRouter(): Router {
       config: z.record(z.string(), z.unknown()).optional(),
       tag: z.string().optional(),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid version input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'Invalid version input');
+    if (!parsed) return;
 
     const prompt = await getPromptById(promptId);
     if (!prompt) {
-      res.status(404).json({ error: 'Prompt not found' });
+      notFound(res, 'Prompt', promptId);
       return;
     }
 
@@ -149,14 +141,14 @@ export function createPromptsRouter(): Router {
 
     await insertPromptVersion({
       id: versionId, promptId, version: nextVersion,
-      systemPrompt: parsed.data.systemPrompt, task: parsed.data.task,
-      config: parsed.data.config ? JSON.stringify(parsed.data.config) : null,
-      tag: parsed.data.tag ?? null, createdAt: timestamp, createdBy: actor,
+      systemPrompt: parsed.systemPrompt, task: parsed.task,
+      config: parsed.config ? JSON.stringify(parsed.config) : null,
+      tag: parsed.tag ?? null, createdAt: timestamp, createdBy: actor,
     });
 
     await updatePromptMetadata(promptId, { updatedAt: timestamp });
 
-    auditSafe(actor, 'prompt_version.create', { type: 'prompt', id: promptId }, undefined, { version: nextVersion, tag: parsed.data.tag });
+    auditSafe(actor, 'prompt_version.create', { type: 'prompt', id: promptId }, undefined, { version: nextVersion, tag: parsed.tag });
     res.status(201).json({ id: versionId, version: nextVersion });
   });
 
@@ -168,34 +160,31 @@ export function createPromptsRouter(): Router {
       models: z.array(z.string().min(1)).min(1),
       scenario: z.string().min(1),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'promptId, models, and scenario are required', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'promptId, models, and scenario are required');
+    if (!parsed) return;
 
-    const promptRow = await getPromptById(parsed.data.promptId);
+    const promptRow = await getPromptById(parsed.promptId);
     if (!promptRow) {
-      res.status(404).json({ error: 'Prompt not found' });
+      notFound(res, 'Prompt', parsed.promptId);
       return;
     }
 
-    const version = parsed.data.promptVersion ?? await getLatestPromptVersion(parsed.data.promptId);
+    const version = parsed.promptVersion ?? await getLatestPromptVersion(parsed.promptId);
 
     const { createQueue } = await import('../../queue/index.js');
 
     const queue = createQueue();
     const tasks: { taskId: string; model: string; provider: string }[] = [];
 
-    for (const model of parsed.data.models) {
+    for (const model of parsed.models) {
       const resolved = await getModelByNameOrId(model);
       const task = {
         taskId: crypto.randomUUID(),
         sessionId: crypto.randomUUID(),
         provider: resolved?.provider_id ?? 'unknown',
         model,
-        scenario: parsed.data.scenario,
-        promptId: parsed.data.promptId,
+        scenario: parsed.scenario,
+        promptId: parsed.promptId,
         promptVersion: version,
         config: {},
         enqueuedAt: now(),
@@ -206,7 +195,7 @@ export function createPromptsRouter(): Router {
       tasks.push({ taskId: task.taskId, model, provider: task.provider });
     }
 
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'prompt.enqueue', { type: 'prompt', id: parsed.data.promptId }, undefined, { count: tasks.length, models: parsed.data.models });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'prompt.enqueue', { type: 'prompt', id: parsed.promptId }, undefined, { count: tasks.length, models: parsed.models });
 
     res.json({ tasks, count: tasks.length });
   });

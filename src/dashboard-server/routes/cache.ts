@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { queryCacheLeaderboard } from '../../db/query.js';
 import { getCacheStates } from '../../catalog/cache.js';
 import type { ApiKeyRequest } from '../auth-api-types.js';
-import { INTERNAL_ERROR } from '../error-sanitizer.js';
 import { requireRole } from '../../auth/rbac.js';
+import { asyncHandler } from '../helpers.js';
 
 export function createCacheRouter(): Router {
   const router = Router();
@@ -18,7 +18,7 @@ export function createCacheRouter(): Router {
   });
 
   // Write operation: a viewer must not be able to force catalog re-syncs.
-  router.post('/refresh', requireRole('editor'), async (req, res) => {
+  router.post('/refresh', requireRole('editor'), asyncHandler(async (req, res) => {
     const apiKeyCtx = (req as ApiKeyRequest).apiKey;
     if (apiKeyCtx && !apiKeyCtx.permissions.includes('cache:write')) {
       res.status(403).json({ error: 'Missing permission: cache:write' });
@@ -29,20 +29,16 @@ export function createCacheRouter(): Router {
       res.status(400).json({ error: 'source must be one of: models.dev, modelbench, zeroeval' });
       return;
     }
-    try {
-      if (source === 'models.dev') {
-        const { fetchSync } = await import('../../catalog/sync.js');
-        const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
-        res.json(result);
-      } else {
-        const { fetchBenchmarks } = await import('../../catalog/benchmarks.js');
-        const result = await fetchBenchmarks(source as 'modelbench' | 'zeroeval', { force: true });
-        res.json(result);
-      }
-    } catch {
-      res.status(500).json({ error: INTERNAL_ERROR });
+    if (source === 'models.dev') {
+      const { fetchSync } = await import('../../catalog/sync.js');
+      const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+      res.json(result);
+    } else {
+      const { fetchBenchmarks } = await import('../../catalog/benchmarks.js');
+      const result = await fetchBenchmarks(source as 'modelbench' | 'zeroeval', { force: true });
+      res.json(result);
     }
-  });
+  }));
 
   return router;
 }

@@ -13,6 +13,7 @@ import {
 import { findProjectRoot } from '../../paths.js';
 import { isWithin } from '../../sandbox/sandbox.js';
 import { walkFiles } from '../../fs/walk.js';
+import { notFound } from '../helpers.js';
 
 function scenariosDir(): string {
   return path.join(findProjectRoot(), 'configs', 'scenarios');
@@ -108,7 +109,7 @@ export function createScenariosRouter(): Router {
     const p = resolveAndValidate(req.params.name as string);
     if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
-      res.status(404).json({ error: 'Scenario not found' });
+      notFound(res, 'Scenario', req.params.name as string);
       return;
     }
     const scenario = loadScenario(p);
@@ -162,7 +163,7 @@ export function createScenariosRouter(): Router {
     const p = resolveAndValidate(req.params.name as string);
     if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
-      res.status(404).json({ error: 'Scenario not found' });
+      notFound(res, 'Scenario', req.params.name as string);
       return;
     }
     const existing = loadScenario(p);
@@ -197,7 +198,7 @@ export function createScenariosRouter(): Router {
     const p = resolveAndValidate(req.params.name as string);
     if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
-      res.status(404).json({ error: 'Scenario not found' });
+      notFound(res, 'Scenario', req.params.name as string);
       return;
     }
     const scenario = loadScenario(p);

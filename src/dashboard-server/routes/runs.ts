@@ -19,6 +19,7 @@ import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { listJudgeScoresForRun } from '../../db/query.js';
 import type { AuthedRequest } from '../auth.js';
 import { allowIfRunOwner } from '../run-ownership.js';
+import { notFound } from '../helpers.js';
 
 async function findEntry(runId: string, model: string): Promise<RunIndexModelEntry | undefined> {
   return (await getRunRecord(runId))?.perModel.find((m) => m.model === model);
@@ -97,7 +98,7 @@ export function createRunsRouter(): Router {
     if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const rec = await getRunRecord(req.params.runId as string);
     if (!rec) {
-      res.status(404).json({ error: 'Run not found' });
+      notFound(res, 'Run', req.params.runId as string);
       return;
     }
     const spec = {
@@ -128,7 +129,7 @@ export function createRunsRouter(): Router {
     if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
-      res.status(404).json({ error: 'Run or model not found' });
+      notFound(res, 'Run or model', req.params.runId as string);
       return;
     }
     try {
@@ -144,7 +145,7 @@ export function createRunsRouter(): Router {
     if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
-      res.status(404).json({ error: 'Run or model not found' });
+      notFound(res, 'Run or model', req.params.runId as string);
       return;
     }
     res.type('text/markdown').send(await readTail(entry.reportPath, 100000) || '(report not available yet)');
@@ -155,7 +156,7 @@ export function createRunsRouter(): Router {
     if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
-      res.status(404).json({ error: 'Run or model not found' });
+      notFound(res, 'Run or model', req.params.runId as string);
       return;
     }
     if (!fs.existsSync(entry.sandboxDir)) {
@@ -176,7 +177,7 @@ export function createRunsRouter(): Router {
     if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
-      res.status(404).json({ error: 'Run or model not found' });
+      notFound(res, 'Run or model', req.params.runId as string);
       return;
     }
     const prefix = `/api/runs/${req.params.runId as string}/models/${req.params.model}/files/`;
@@ -192,7 +193,7 @@ export function createRunsRouter(): Router {
       const content = await fsp.readFile(abs, 'utf8');
       res.type('text/plain').send(content);
     } catch {
-      res.status(404).json({ error: 'File not found' });
+      notFound(res, 'File', req.params.runId as string);
     }
   });
 
@@ -204,7 +205,7 @@ export function createRunsRouter(): Router {
     if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
-      res.status(404).json({ error: 'Run or model not found' });
+      notFound(res, 'Run or model', req.params.runId as string);
       return;
     }
     res.type('text/plain').send(await readTail(entry.logFile, 400));
@@ -242,7 +243,7 @@ export function createRunsRouter(): Router {
     if (!(await allowIfRunOwner(req as AuthedRequest, res, req.params.runId as string))) return;
     const entry = await findEntry(req.params.runId as string, req.params.model);
     if (!entry) {
-      res.status(404).json({ error: 'Run or model not found' });
+      notFound(res, 'Run or model', req.params.runId as string);
       return;
     }
     const diff = await readDiffPatch(entry.outputDir);

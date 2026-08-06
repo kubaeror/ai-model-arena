@@ -4,6 +4,7 @@ import {
   listCatalogModels, getModelDetail, paginate,
 } from '../../db/query.js';
 import { benchmarks, model_runtime_stats, pricing } from '../../db/schema.js';
+import { notFound } from '../helpers.js';
 
 const benchmarkColumns = {
   id: benchmarks.id,
@@ -58,7 +59,7 @@ export function createCatalogRouter(): Router {
 
   router.get('/models/:id', async (req, res) => {
     const model = (await getModelDetail(req.params.id))[0] ?? null;
-    if (!model) { res.status(404).json({ error: 'Model not found' }); return; }
+    if (!model) { notFound(res, 'Model', req.params.id); return; }
     const [{ rows: benchmarkRows }, { rows: runtimeRows }] = await Promise.all([
       paginate(benchmarks, benchmarkColumns, {
         where: eq(benchmarks.model_id, req.params.id),

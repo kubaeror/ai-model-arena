@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { z } from 'zod';
+import { notFound, parseBody } from '../helpers.js';
 import {
   listOutputMappings, getOutputMappingById, insertOutputMapping,
   updateOutputMapping, deleteOutputMapping,
@@ -33,23 +34,20 @@ export function createOutputMappingsRouter(): Router {
       parentFolder: z.string().min(1),
       perModelPattern: z.string().min(1),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid mapping input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'Invalid mapping input');
+    if (!parsed) return;
 
     const id = crypto.randomUUID();
     const timestamp = now();
 
     await insertOutputMapping({
-      id, scope: parsed.data.scope, scopeId: parsed.data.scopeId,
-      parentFolder: parsed.data.parentFolder, perModelPattern: parsed.data.perModelPattern,
+      id, scope: parsed.scope, scopeId: parsed.scopeId,
+      parentFolder: parsed.parentFolder, perModelPattern: parsed.perModelPattern,
       createdAt: timestamp, updatedAt: timestamp,
     });
 
     auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.create', { type: 'output_mapping', id });
-    res.status(201).json({ id, ...parsed.data, created_at: timestamp, updated_at: timestamp });
+    res.status(201).json({ id, ...parsed, created_at: timestamp, updated_at: timestamp });
   });
 
   // PUT /api/output-mappings/:id - update existing mapping
@@ -61,29 +59,26 @@ export function createOutputMappingsRouter(): Router {
       parentFolder: z.string().min(1).optional(),
       perModelPattern: z.string().min(1).optional(),
     });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid mapping input', details: parsed.error.flatten() });
-      return;
-    }
+    const parsed = parseBody(schema, req, res, 'Invalid mapping input');
+    if (!parsed) return;
 
     const existing = await getOutputMappingById(mappingId);
     if (!existing) {
-      res.status(404).json({ error: 'Output mapping not found' });
+      notFound(res, 'Output mapping', mappingId);
       return;
     }
 
     const timestamp = now();
     await updateOutputMapping(mappingId, {
-      scope: parsed.data.scope,
-      scopeId: parsed.data.scopeId,
-      parentFolder: parsed.data.parentFolder,
-      perModelPattern: parsed.data.perModelPattern,
+      scope: parsed.scope,
+      scopeId: parsed.scopeId,
+      parentFolder: parsed.parentFolder,
+      perModelPattern: parsed.perModelPattern,
       updatedAt: timestamp,
     });
 
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.update', { type: 'output_mapping', id: mappingId }, existing, parsed.data);
-    res.json({ id: mappingId, ...parsed.data });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'output_mapping.update', { type: 'output_mapping', id: mappingId }, existing, parsed);
+    res.json({ id: mappingId, ...parsed });
   });
 
   // DELETE /api/output-mappings/:id - delete mapping
@@ -91,7 +86,7 @@ export function createOutputMappingsRouter(): Router {
     const deleteId = sid(req.params.id);
     const existing = await getOutputMappingById(deleteId);
     if (!existing) {
-      res.status(404).json({ error: 'Output mapping not found' });
+      notFound(res, 'Output mapping', deleteId);
       return;
     }
 
