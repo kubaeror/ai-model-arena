@@ -193,12 +193,6 @@ export async function listWebhooks(activeOnly = false): Promise<WebhookRecord[]>
   return rows.map((r: any) => webhookRowToRecord(r));
 }
 
-export async function getWebhook(id: number): Promise<WebhookRecord | null> {
-  const db = getDrizzleDb();
-  const rows = await db.select().from(webhooks).where(eq(webhooks.id, id)).limit(1);
-  return rows.length ? webhookRowToRecord(rows[0]) : null;
-}
-
 export async function deleteWebhook(id: number): Promise<boolean> {
   const db = getDrizzleDb();
   const result = (await db.delete(webhooks).where(eq(webhooks.id, id))) as any;

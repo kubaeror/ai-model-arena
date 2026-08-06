@@ -12,7 +12,6 @@ export const SuccessCriteriaSchema = z.object({
   expectedExitCode: z.number().int().default(0),
   expectedOutputContains: z.string().optional(),
 });
-export type SuccessCriteria = z.infer<typeof SuccessCriteriaSchema>;
 
 export const ReasoningConfigSchema = z.object({
   effort: z.enum(['low', 'medium', 'high']).optional(),

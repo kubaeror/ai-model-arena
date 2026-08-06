@@ -2,11 +2,6 @@ import { sqliteTable, text, integer, real, uniqueIndex, index, primaryKey } from
 
 // ── Drizzle table definitions (source of truth for migrations) ────────────
 
-export const _migrations = sqliteTable('_migrations', {
-  id: text('id').primaryKey(),
-  applied_at: text('applied_at').notNull(),
-});
-
 export const providers = sqliteTable('providers', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
@@ -428,26 +423,6 @@ export interface ModelRow {
   last_synced_at: string;
 }
 
-export interface ModelProviderRow {
-  model_id: string;
-  provider_id: string;
-  api_model_id: string;
-}
-
-export interface PricingRow {
-  model_id: string;
-  input: number | null;
-  output: number | null;
-  cache_read: number | null;
-  cache_write: number | null;
-  tier_size: number;
-  over_200k_input: number | null;
-  over_200k_output: number | null;
-  over_200k_cache_read: number | null;
-  over_200k_cache_write: number | null;
-  updated_at: string;
-}
-
 export interface BenchmarkRow {
   id: number;
   model_id: string;
@@ -457,22 +432,6 @@ export interface BenchmarkRow {
   measured_at: string;
   source_url: string | null;
   is_preferred: number;
-}
-
-export interface ModelRuntimeStatRow {
-  id: number;
-  model_id: string;
-  run_id: string;
-  latency_p50_ms: number | null;
-  latency_p95_ms: number | null;
-  tps: number | null;
-  ttft_ms: number | null;
-  cache_hit_rate: number | null;
-  cache_read_tokens: number | null;
-  cache_write_tokens: number | null;
-  cost_usd: number | null;
-  success: number;
-  measured_at: string;
 }
 
 export interface CatalogCacheStateRow {
@@ -491,32 +450,15 @@ export interface CatalogCacheStateRow {
 
 import type { InferSelectModel } from 'drizzle-orm';
 
-export type DbProvider = InferSelectModel<typeof providers>;
-export type DbProviderVersion = InferSelectModel<typeof provider_versions>;
 export type DbModel = InferSelectModel<typeof models>;
-export type DbModelProvider = InferSelectModel<typeof model_providers>;
-export type DbPricing = InferSelectModel<typeof pricing>;
-export type DbPricingSnapshot = InferSelectModel<typeof pricing_snapshots>;
-export type DbBenchmark = InferSelectModel<typeof benchmarks>;
-export type DbModelRuntimeStat = InferSelectModel<typeof model_runtime_stats>;
-export type DbCatalogCacheState = InferSelectModel<typeof catalog_cache_state>;
-export type DbAnomaly = InferSelectModel<typeof anomalies>;
-export type DbWebhook = InferSelectModel<typeof webhooks>;
-export type DbRun = InferSelectModel<typeof runs>;
-export type DbCostLedgerEntry = InferSelectModel<typeof cost_ledger>;
-export type DbRunModel = InferSelectModel<typeof run_models>;
 export type DbSession = InferSelectModel<typeof sessions>;
 export type DbMessage = InferSelectModel<typeof messages>;
 export type DbModelCall = InferSelectModel<typeof model_calls>;
 export type DbUser = InferSelectModel<typeof users>;
 export type DbRole = InferSelectModel<typeof roles>;
-export type DbUserRole = InferSelectModel<typeof user_roles>;
-export type DbAuditLogEntry = InferSelectModel<typeof audit_log>;
-export type DbFile = InferSelectModel<typeof files>;
 export type DbPrompt = InferSelectModel<typeof prompts>;
 export type DbPromptVersion = InferSelectModel<typeof prompt_versions>;
 export type DbOutputMapping = InferSelectModel<typeof output_mappings>;
 export type DbSchedule = InferSelectModel<typeof schedules>;
-export type DbToolCallStat = InferSelectModel<typeof tool_call_stats>;
 export type DbJudgeScore = InferSelectModel<typeof judge_scores>;
 export type DbNotification = InferSelectModel<typeof notifications>;

@@ -1,10 +1,5 @@
 import { pgTable, text, integer, real, uniqueIndex, index, primaryKey, serial } from 'drizzle-orm/pg-core';
 
-export const _migrations = pgTable('_migrations', {
-  id: text('id').primaryKey(),
-  applied_at: text('applied_at').notNull(),
-});
-
 export const providers = pgTable('providers', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
@@ -426,26 +421,6 @@ export interface ModelRow {
   last_synced_at: string;
 }
 
-export interface ModelProviderRow {
-  model_id: string;
-  provider_id: string;
-  api_model_id: string;
-}
-
-export interface PricingRow {
-  model_id: string;
-  input: number | null;
-  output: number | null;
-  cache_read: number | null;
-  cache_write: number | null;
-  tier_size: number;
-  over_200k_input: number | null;
-  over_200k_output: number | null;
-  over_200k_cache_read: number | null;
-  over_200k_cache_write: number | null;
-  updated_at: string;
-}
-
 export interface BenchmarkRow {
   id: number;
   model_id: string;
@@ -455,22 +430,6 @@ export interface BenchmarkRow {
   measured_at: string;
   source_url: string | null;
   is_preferred: number;
-}
-
-export interface ModelRuntimeStatRow {
-  id: number;
-  model_id: string;
-  run_id: string;
-  latency_p50_ms: number | null;
-  latency_p95_ms: number | null;
-  tps: number | null;
-  ttft_ms: number | null;
-  cache_hit_rate: number | null;
-  cache_read_tokens: number | null;
-  cache_write_tokens: number | null;
-  cost_usd: number | null;
-  success: number;
-  measured_at: string;
 }
 
 export interface CatalogCacheStateRow {

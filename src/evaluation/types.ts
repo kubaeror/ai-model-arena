@@ -30,11 +30,8 @@ export const EvaluationConfigSchema = z.object({
   regression: RegressionConfigSchema.optional(),
 });
 
-export type RubricItem = z.output<typeof RubricItemSchema>;
 export type Rubric = z.output<typeof RubricSchema>;
-export type JudgeConfig = z.output<typeof JudgeConfigSchema>;
 export type EvaluationConfig = z.output<typeof EvaluationConfigSchema>;
-export type RegressionConfig = z.output<typeof RegressionConfigSchema>;
 
 export interface JudgeScore {
   category: string;
@@ -53,8 +50,6 @@ export interface JudgeResult {
   judgedAt: string;
   judgeModel: string;
 }
-
-export type { JudgeResult as JudgeResultType };
 
 export interface BaselineSnapshot {
   runId: string;

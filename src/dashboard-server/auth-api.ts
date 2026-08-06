@@ -158,14 +158,3 @@ export function requireApiKey(permissions: ApiKeyPermission[]) {
     next();
   };
 }
-
-export function resetApiKeysCache(): void {
-  apiKeysConfig = null;
-  apiKeyMap = null;
-  rateLimitStore.clear();
-  rateLimitPrunerStarted = false;
-  if (rateLimitPrunerHandle) {
-    clearInterval(rateLimitPrunerHandle);
-    rateLimitPrunerHandle = null;
-  }
-}

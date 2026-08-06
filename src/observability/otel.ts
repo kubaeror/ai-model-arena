@@ -27,10 +27,3 @@ export function startOtel(): void {
   });
   sdk.start();
 }
-
-export async function shutdownOtel(): Promise<void> {
-  if (sdk) {
-    await sdk.shutdown();
-    sdk = null;
-  }
-}

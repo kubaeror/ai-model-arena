@@ -1,5 +1,4 @@
-import { useMemo } from 'react';
-import { Link, useLocation } from 'react-router';
+import { Link } from 'react-router';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
@@ -11,22 +10,6 @@ export interface BreadcrumbItem {
 interface BreadcrumbProps {
   items: BreadcrumbItem[];
   className?: string;
-}
-
-/** Auto-generates breadcrumbs from the current path. Override with explicit items. */
-export function useRouteBreadcrumbs(): BreadcrumbItem[] {
-  const location = useLocation();
-  return useMemo(() => {
-    const segments = location.pathname.split('/').filter(Boolean);
-    const items: BreadcrumbItem[] = [{ label: 'Home', to: '/' }];
-    let path = '';
-    for (const seg of segments) {
-      path += `/${seg}`;
-      const label = seg.charAt(0).toUpperCase() + seg.slice(1).replace(/-/g, ' ');
-      items.push({ label, to: path });
-    }
-    return items;
-  }, [location.pathname]);
 }
 
 export function Breadcrumb({ items, className }: BreadcrumbProps) {

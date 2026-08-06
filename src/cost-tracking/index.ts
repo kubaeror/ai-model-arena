@@ -1,13 +1,10 @@
 export * from './types.js';
-export { getPricing, computeCost, formatCost, resetPricingCache } from './pricing.js';
+export { getPricing, computeCost, resetPricingCache } from './pricing.js';
 export { 
   loadBudgetConfig, 
   checkBudget, 
-  addSpend, 
-  saveBudgetState, 
   getBudgetStatus,
   reserveBudget,
   releaseReservation,
-  resetBudgetCache,
-  budgetStateRoot 
+  budgetStateRoot
 } from './budget.js';

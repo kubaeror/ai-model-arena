@@ -17,10 +17,8 @@ import { initDb as initSqlite, getDb as getSqlite, getDrizzleClient as getSqlite
 import { initPostgres, getPgClient, closePostgres } from './postgres.js';
 import { dbPath } from '../paths.js';
 import type { Database as SqliteDb } from 'better-sqlite3';
-import type { PgClient } from './postgres.js';
 
 export type DbClient = SqliteDb;
-export type DrizzleClient = ReturnType<typeof getSqliteDrizzle> | PgClient;
 
 let _driver: 'sqlite' | 'postgres' = 'sqlite';
 

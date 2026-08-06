@@ -90,28 +90,6 @@ export async function deleteCustomProvider(id: string): Promise<void> {
   await db.delete(providers).where(and(eq(providers.id, id), eq(providers.is_builtin, 0)));
 }
 
-export async function listCustomProviderVersions(providerId: string): Promise<CustomProviderVersion[]> {
-  const db = getDrizzleDb();
-  const rows = await db
-    .select()
-    .from(provider_versions)
-    .where(eq(provider_versions.provider_id, providerId))
-    .orderBy(desc(provider_versions.version));
-  return rows.map((r: typeof rows[number]) => ({
-    id: r.id,
-    providerId: r.provider_id,
-    version: r.version,
-    name: r.name,
-    apiBase: r.api_base,
-    authScheme: r.auth_scheme,
-    envVar: r.env_var,
-    adapter: r.adapter,
-    headerName: r.header_name,
-    createdBy: r.created_by,
-    createdAt: r.created_at,
-  }));
-}
-
 export async function getProviderVersion(providerId: string, version: number): Promise<ProviderRow | null> {
   const db = getDrizzleDb();
   const rows = await db

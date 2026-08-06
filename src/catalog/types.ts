@@ -55,8 +55,6 @@ export const ModelsDevProviderSchema = z.object({
 
 export const ModelsDevResponseSchema = z.record(z.string(), ModelsDevProviderSchema);
 
-export type ModelsDevModel = z.output<typeof ModelsDevModelSchema>;
-export type ModelsDevProvider = z.output<typeof ModelsDevProviderSchema>;
 export type ModelsDevResponse = z.output<typeof ModelsDevResponseSchema>;
 
 export const ModelbenchModelSchema = z.object({
@@ -82,5 +80,4 @@ export const ModelbenchResponseSchema = z.object({
 
 export const ZeroEvalModelSchema = z.record(z.string(), z.unknown());
 
-export type ModelbenchModel = z.infer<typeof ModelbenchModelSchema>;
 export type ModelbenchResponse = z.infer<typeof ModelbenchResponseSchema>;

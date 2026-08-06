@@ -59,7 +59,6 @@ export const ApiKeysConfigSchema = z.object({
 });
 
 export type ApiKeyPermission = z.output<typeof ApiKeyPermissionSchema>;
-export type ApiKey = z.output<typeof ApiKeySchema>;
 export type ApiKeysConfig = z.output<typeof ApiKeysConfigSchema>;
 
 export interface RequestContext {
@@ -75,8 +74,4 @@ export interface RateLimitState {
 
 export interface ApiKeyRequest extends Request {
   apiKey?: RequestContext;
-}
-
-export function hasApiKeyPermission(req: Request, permission: ApiKeyPermission): boolean {
-  return ((req as ApiKeyRequest).apiKey?.permissions ?? []).includes(permission);
 }

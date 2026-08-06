@@ -117,4 +117,4 @@ export async function dispatchNotification(
 
 export { DispatchEventType };
 export * from './types.js';
-export { dispatchWebhooks, type WebhookEvent } from './webhooks.js';
+export { dispatchWebhooks } from './webhooks.js';

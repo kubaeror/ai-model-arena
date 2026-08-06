@@ -137,10 +137,6 @@ export function errorRateStats(history: RunHistory, model: string, scenario: str
   return computeStats(history.toolErrorRates.get(`${model}|${scenario}`) ?? []);
 }
 
-export function durationStats(history: RunHistory, model: string, scenario: string): Stats {
-  return computeStats(history.durations.get(`${model}|${scenario}`) ?? []);
-}
-
 /** Expose for the observability stats endpoint. */
 export { computeStats, readResult, totalTokens };
 export type { RunIndexRecord, RunIndexModelEntry, SpanMeta };

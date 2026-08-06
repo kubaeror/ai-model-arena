@@ -9,28 +9,9 @@ export function startAgentSpan(name: string, attrs?: Record<string, string | num
   });
 }
 
-export function startTurnSpan(turn: number, provider: string, model: string): Span {
-  return tracer.startSpan(`agent-turn-${turn}`, {
-    attributes: {
-      'ai.model.provider': provider,
-      'ai.model.id': model,
-      turn,
-    },
-  });
-}
-
 export function startToolSpan(toolName: string): Span {
   return tracer.startSpan(`tool.${toolName}`, {
     attributes: { 'tool.name': toolName },
-  });
-}
-
-export function startProviderCallSpan(provider: string, model: string): Span {
-  return tracer.startSpan('provider.call', {
-    attributes: {
-      'ai.model.provider': provider,
-      'ai.model.id': model,
-    },
   });
 }
 

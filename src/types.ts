@@ -56,13 +56,6 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
-export interface ToolResult {
-  toolCallId: string;
-  name: string;
-  content: string;
-  isError: boolean;
-}
-
 /** Minimal structured logger interface (pino-backed implementation in logger/). */
 export interface Logger {
   info(msg: string, data?: unknown): void;
