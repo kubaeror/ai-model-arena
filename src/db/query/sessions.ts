@@ -37,9 +37,15 @@ export async function updateSessionStatus(id: string, status: string): Promise<v
 
 // ── Dashboard: sessions helpers ───────────────────────────────────────────
 
+export interface SessionWithCountsRow {
+  id: string; model: string; status: string;
+  created_at: string; updated_at: string;
+  message_count: number; call_count: number;
+}
+
 export async function listSessionsWithCounts(opts: {
   status?: string; model?: string; limit: number; offset: number;
-}): Promise<{ sessions: any[]; total: number }> {
+}): Promise<{ sessions: SessionWithCountsRow[]; total: number }> {
   const db = getDrizzleDb();
   const conds: SQL[] = [];
   if (opts.status) conds.push(eq(sessions.status, opts.status));
@@ -61,22 +67,26 @@ export async function listSessionsWithCounts(opts: {
   });
 
   const ids = (rows as Array<{ id: string }>).map(r => r.id);
-  const groups = async (table: any, col: any) =>
-    ids.length
-      ? db.select({ sessionId: col, c: count() }).from(table).where(inArray(col, ids)).groupBy(col)
-      : [];
-  const msgCounts = new Map((await groups(messages, messages.session_id)).map((g: any) => [g.sessionId, g.c]));
-  const callCounts = new Map((await groups(model_calls, model_calls.session_id)).map((g: any) => [g.sessionId, g.c]));
+  const msgCounts = new Map<string, number>();
+  const callCounts = new Map<string, number>();
+  if (ids.length > 0) {
+    const msgRows = await db.select({ sessionId: messages.session_id, c: count() })
+      .from(messages).where(inArray(messages.session_id, ids)).groupBy(messages.session_id);
+    const callRows = await db.select({ sessionId: model_calls.session_id, c: count() })
+      .from(model_calls).where(inArray(model_calls.session_id, ids)).groupBy(model_calls.session_id);
+    for (const g of msgRows) msgCounts.set(String(g.sessionId), Number(g.c));
+    for (const g of callRows) callCounts.set(String(g.sessionId), Number(g.c));
+  }
 
   const result = (rows as Array<{ id: string }>).map(r => ({
     ...r,
     message_count: msgCounts.get(r.id) ?? 0,
     call_count: callCounts.get(r.id) ?? 0,
-  }));
+  } as SessionWithCountsRow));
   return { sessions: result, total };
 }
 
-export async function getSessionWithCounts(sessionId: string): Promise<any | null> {
+export async function getSessionWithCounts(sessionId: string): Promise<SessionWithCountsRow | null> {
   const db = getDrizzleDb();
   const rows = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
   if (!rows[0]) return null;
@@ -86,8 +96,8 @@ export async function getSessionWithCounts(sessionId: string): Promise<any | nul
   ]);
   return {
     ...rows[0],
-    message_count: msgCount[0]?.c ?? 0,
-    call_count: callCount[0]?.c ?? 0,
+    message_count: Number(msgCount[0]?.c ?? 0),
+    call_count: Number(callCount[0]?.c ?? 0),
   };
 }
 

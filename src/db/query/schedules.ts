@@ -9,7 +9,7 @@ export async function listDueSchedules(now: string): Promise<DbSchedule[]> {
   const db = getDrizzleDb();
   return db.select().from(schedules)
     .where(and(eq(schedules.enabled, 1), sql`(${schedules.next_run} IS NULL OR ${schedules.next_run} <= ${now})`))
-    .orderBy(schedules.next_run) as any;
+    .orderBy(schedules.next_run);
 }
 
 export async function updateScheduleRun(id: string, lastRun: string, nextRun: string): Promise<void> {
@@ -69,5 +69,5 @@ export async function deleteSchedule(id: string): Promise<void> {
 
 export async function listSchedules(): Promise<DbSchedule[]> {
   const db = getDrizzleDb();
-  return db.select().from(schedules) as any;
+  return db.select().from(schedules);
 }

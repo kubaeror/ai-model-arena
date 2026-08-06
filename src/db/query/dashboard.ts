@@ -1,5 +1,5 @@
 import { count, desc, asc } from 'drizzle-orm';
-import type { SQL } from 'drizzle-orm';
+import type { Column, SQL } from 'drizzle-orm';
 import { getDrizzleDb } from '../index.js';
 
 // ── Dashboard: generic paginated query helpers ────────────────────────────
@@ -11,7 +11,7 @@ import { getDrizzleDb } from '../index.js';
  * ` ASC`/` DESC`); segments without an explicit direction use `dir` (or asc).
  */
 function resolveOrderBy(
-  columns: Record<string, SQL>,
+  columns: Record<string, Column>,
   orderBy: string | undefined,
   dir: 'asc' | 'desc' | undefined,
 ): SQL[] {
@@ -45,8 +45,8 @@ function resolveOrderBy(
  * speak limit/offset; tests speak page/pageSize).
  */
 export async function paginate<T extends Record<string, unknown>>(
-  table: any,
-  columns: Record<string, any>,
+  table: object,
+  columns: Record<string, Column>,
   q: {
     page?: number;
     pageSize: number;

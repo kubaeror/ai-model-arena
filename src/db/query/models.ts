@@ -6,7 +6,23 @@ import type { DbModel } from '../schema.js';
 
 // ── Models (for model-resolver) ───────────────────────────────────────────
 
-export async function getModelByNameOrId(nameOrId: string): Promise<(DbModel & { api_model_id: string; env_var: string | null; provider_adapter: string }) | null> {
+export interface CatalogModelRow {
+  id: string; name: string; family: string | null; provider_id: string;
+  release_date: string | null; attachment: number | null; reasoning: number | null;
+  temperature: number | null; tool_call: number | null;
+  context_limit: number | null; output_limit: number | null;
+  status: string | null; reasoning_options: string | null;
+  input: number | null; output: number | null;
+  cache_read: number | null; cache_write: number | null;
+}
+export interface CatalogModelDetailRow extends CatalogModelRow {
+  tier_size: number | null;
+}
+export type ModelWithProviderRow = DbModel & {
+  api_model_id: string; env_var: string | null; provider_adapter: string;
+};
+
+export async function getModelByNameOrId(nameOrId: string): Promise<ModelWithProviderRow | null> {
   const db = getDrizzleDb();
   const rows = await db.select({
     id: models.id, name: models.name, family: models.family,
@@ -24,7 +40,7 @@ export async function getModelByNameOrId(nameOrId: string): Promise<(DbModel & {
     .innerJoin(providers, eq(providers.id, model_providers.provider_id))
     .where(sql`${models.name} = ${nameOrId} OR ${models.id} = ${nameOrId}`)
     .limit(1);
-  return rows[0] as any;
+  return rows[0] as ModelWithProviderRow;
 }
 
 // ── Dashboard: catalog + model helpers ────────────────────────────────────
@@ -32,7 +48,7 @@ export async function getModelByNameOrId(nameOrId: string): Promise<(DbModel & {
 export async function listCatalogModels(filters: {
   provider?: string; reasoning?: boolean; toolCall?: boolean;
   minContext?: number; sort?: string; q?: string;
-}): Promise<any[]> {
+}): Promise<CatalogModelRow[]> {
   const db = getDrizzleDb();
   const conds: SQL[] = [];
   if (filters.provider) conds.push(eq(models.provider_id, filters.provider));
@@ -53,10 +69,10 @@ export async function listCatalogModels(filters: {
     .from(models)
     .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
     .where(conds.length ? and(...conds) : undefined)
-    .orderBy(order) as any;
+    .orderBy(order) as CatalogModelRow[];
 }
 
-export async function getModelDetail(modelId: string): Promise<any[]> {
+export async function getModelDetail(modelId: string): Promise<CatalogModelDetailRow[]> {
   const db = getDrizzleDb();
   return db.select({
     ...getTableColumns(models),
@@ -66,5 +82,5 @@ export async function getModelDetail(modelId: string): Promise<any[]> {
   })
     .from(models)
     .leftJoin(pricing, and(eq(pricing.model_id, models.id), eq(pricing.tier_size, 0)))
-    .where(eq(models.id, modelId)) as any;
+    .where(eq(models.id, modelId)) as CatalogModelDetailRow[];
 }

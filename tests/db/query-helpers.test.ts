@@ -91,8 +91,8 @@ test('listCatalogModels filters + getModelDetail via Drizzle joins', async () =>
     await seedCatalog();
     const all = await listCatalogModels({});
     assert.equal(all.length, 1);
-    assert.equal(all[0].name, 'GPT-4o');
-    assert.equal(all[0].input, 2.5);
+    assert.equal(all[0]!.name, 'GPT-4o');
+    assert.equal(all[0]!.input, 2.5);
 
     const provider = await listCatalogModels({ provider: 'openai' });
     assert.equal(provider.length, 1);
@@ -108,8 +108,8 @@ test('listCatalogModels filters + getModelDetail via Drizzle joins', async () =>
 
     const detail = await getModelDetail('openai/gpt-4o');
     assert.equal(detail.length, 1);
-    assert.equal(detail[0].name, 'GPT-4o');
-    assert.equal(detail[0].input, 2.5);
+    assert.equal(detail[0]!.name, 'GPT-4o');
+    assert.equal(detail[0]!.input, 2.5);
     assert.equal((await getModelDetail('nope')).length, 0);
   } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
@@ -124,8 +124,8 @@ test('getModelDetail returns exactly one base-tier pricing row with tiered prici
 
     const detail = await getModelDetail('openai/gpt-4o');
     assert.equal(detail.length, 1);
-    assert.equal(detail[0].tier_size, 0);
-    assert.equal(detail[0].input, 2.5);
+    assert.equal(detail[0]!.tier_size, 0);
+    assert.equal(detail[0]!.input, 2.5);
   } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
@@ -145,12 +145,12 @@ test('getCostSummary groups by model and by day', async () => {
     const byModel = await getCostSummary('model');
     assert.equal(byModel.length, 2);
     const gpt = byModel.find((r: any) => r.model === 'gpt-4o');
-    assert.equal(Number(gpt.total_cost), 3);
-    assert.equal(Number(gpt.entry_count), 2);
+    assert.equal(Number(gpt!.total_cost), 3);
+    assert.equal(Number(gpt!.entry_count), 2);
 
     const filtered = await getCostSummary('model', 'gpt-4o');
     assert.equal(filtered.length, 1);
-    assert.equal(Number(filtered[0].total_cost), 3);
+    assert.equal(Number(filtered[0]!.total_cost), 3);
 
     const byDay = await getCostSummary('day');
     assert.equal(byDay.length, 2);
@@ -158,7 +158,7 @@ test('getCostSummary groups by model and by day', async () => {
 
     const dayFiltered = await getCostSummary('day', 'claude');
     assert.equal(dayFiltered.length, 1);
-    assert.equal(dayFiltered[0].model, 'claude');
+    assert.equal(dayFiltered[0]!.model, 'claude');
   } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
@@ -195,18 +195,18 @@ test('queryTpsLeaderboard + queryCacheLeaderboard aggregate via Drizzle', async 
 
     const tps = await queryTpsLeaderboard();
     assert.equal(tps.length, 1);
-    assert.equal(tps[0].model_id, 'openai/gpt-4o');
-    assert.equal(Number(tps[0].avg_tps), 15);
-    assert.equal(Number(tps[0].max_tps), 20);
-    assert.equal(Number(tps[0].run_count), 2);
+    assert.equal(tps[0]!.model_id, 'openai/gpt-4o');
+    assert.equal(Number(tps[0]!.avg_tps), 15);
+    assert.equal(Number(tps[0]!.max_tps), 20);
+    assert.equal(Number(tps[0]!.run_count), 2);
 
     const lb = await queryCacheLeaderboard();
     assert.equal(lb.length, 1);
-    assert.equal(lb[0].name, 'GPT-4o');
-    assert.equal(lb[0].input, 2.5);
-    assert.equal(Number(lb[0].arena_tps), 15);
-    assert.equal(Number(lb[0].arena_runs), 2);
-    assert.equal(lb[0].intelligence, null);
+    assert.equal(lb[0]!.name, 'GPT-4o');
+    assert.equal(lb[0]!.input, 2.5);
+    assert.equal(Number(lb[0]!.arena_tps), 15);
+    assert.equal(Number(lb[0]!.arena_runs), 2);
+    assert.equal(lb[0]!.intelligence, null);
   } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
@@ -311,8 +311,8 @@ test('listPromptsWithLatestVersion merges latest version per prompt', async () =
     await insertPromptVersion({ id: 'v2', promptId: 'p1', version: 2, systemPrompt: 's', task: 't', config: null, tag: 'v2', createdAt: now, createdBy: 'u' });
     const rows = await listPromptsWithLatestVersion();
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].name, 'alpha');
-    assert.equal(rows[0].latest_version, 2);
-    assert.equal(rows[0].latest_tag, 'v2');
+    assert.equal(rows[0]!.name, 'alpha');
+    assert.equal(rows[0]!.latest_version, 2);
+    assert.equal(rows[0]!.latest_tag, 'v2');
   } finally { closeDb(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });

@@ -22,5 +22,5 @@ export async function listMessagesBySession(sessionId: string): Promise<DbMessag
   const db = getDrizzleDb();
   return db.select().from(messages)
     .where(eq(messages.session_id, sessionId))
-    .orderBy(messages.turn, messages.created_at) as any;
+    .orderBy(messages.turn, messages.created_at);
 }

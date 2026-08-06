@@ -22,7 +22,18 @@ export async function insertCostLedgerEntry(data: {
 
 // ── Dashboard: cost analytics ─────────────────────────────────────────────
 
-export async function getCostSummary(groupBy: 'model' | 'day', model?: string): Promise<any[]> {
+export interface CostSummaryRow {
+  model: string | null;
+  total_cost: number | null;
+  total_input_tokens: number | null;
+  total_output_tokens: number | null;
+  entry_count: number | null;
+}
+export interface CostSummaryDayRow extends CostSummaryRow {
+  period: string;
+}
+
+export async function getCostSummary(groupBy: 'model' | 'day', model?: string): Promise<CostSummaryDayRow[] | CostSummaryRow[]> {
   const db = getDrizzleDb();
   const where = model ? eq(cost_ledger.model, model) : undefined;
   const common = {
@@ -40,11 +51,11 @@ export async function getCostSummary(groupBy: 'model' | 'day', model?: string): 
       .from(cost_ledger)
       .where(where)
       .groupBy(sql`substr(${cost_ledger.recorded_at}, 1, 10)`, cost_ledger.model)
-      .orderBy(desc(sql`substr(${cost_ledger.recorded_at}, 1, 10)`), asc(cost_ledger.model)) as any;
+      .orderBy(desc(sql`substr(${cost_ledger.recorded_at}, 1, 10)`), asc(cost_ledger.model)) as CostSummaryDayRow[];
   }
   return db.select({ model: cost_ledger.model, ...common })
     .from(cost_ledger)
     .where(where)
     .groupBy(cost_ledger.model)
-    .orderBy(desc(sum(cost_ledger.cost_usd))) as any;
+    .orderBy(desc(sum(cost_ledger.cost_usd))) as CostSummaryRow[];
 }

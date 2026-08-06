@@ -47,10 +47,10 @@ export async function listModelCalls(runId: string): Promise<DbModelCall[]> {
   const prefix = `${runId}-`;
   return db.select().from(model_calls)
     .where(sql`substr(${model_calls.session_id}, 1, ${prefix.length}) = ${prefix}`)
-    .orderBy(model_calls.created_at, model_calls.turn) as any;
+    .orderBy(model_calls.created_at, model_calls.turn);
 }
 
-export async function listModelCallsForSession(sessionId: string): Promise<any[]> {
+export async function listModelCallsForSession(sessionId: string): Promise<DbModelCall[]> {
   const db = getDrizzleDb();
-  return db.select().from(model_calls).where(eq(model_calls.session_id, sessionId)).orderBy(model_calls.turn) as any;
+  return db.select().from(model_calls).where(eq(model_calls.session_id, sessionId)).orderBy(model_calls.turn);
 }

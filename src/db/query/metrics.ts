@@ -2,12 +2,13 @@ import { eq, gte, lte, and, desc, avg, max, count, gt, inArray, sum, countDistin
 import type { SQL } from 'drizzle-orm';
 import { getDrizzleDb } from '../index.js';
 import { models, model_runtime_stats, tool_call_stats, cost_ledger, run_models } from '../schema.js';
+import type { DbModelRuntimeStat } from '../schema.js';
 
 // ── Dashboard: metrics helpers ────────────────────────────────────────────
 
 export async function queryModelRuntimeStats(opts: {
   modelId?: string; from?: string; to?: string; limit?: number;
-}): Promise<any[]> {
+}): Promise<DbModelRuntimeStat[]> {
   const db = getDrizzleDb();
   const conds: SQL[] = [];
   if (opts.modelId) conds.push(eq(model_runtime_stats.model_id, opts.modelId));
@@ -17,10 +18,21 @@ export async function queryModelRuntimeStats(opts: {
   return db.select().from(model_runtime_stats)
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(model_runtime_stats.measured_at))
-    .limit(limit) as any;
+    .limit(limit);
 }
 
-export async function queryTpsLeaderboard(): Promise<any[]> {
+export interface TpsLeaderboardRow {
+  model_id: string;
+  name: string;
+  provider_id: string;
+  avg_tps: number | null;
+  max_tps: number | null;
+  avg_latency_p50: number | null;
+  avg_cache_hit_rate: number | null;
+  run_count: number;
+}
+
+export async function queryTpsLeaderboard(): Promise<TpsLeaderboardRow[]> {
   const db = getDrizzleDb();
   const r = model_runtime_stats;
   return db.select({
@@ -37,7 +49,7 @@ export async function queryTpsLeaderboard(): Promise<any[]> {
     .leftJoin(r, eq(r.model_id, models.id))
     .groupBy(models.id)
     .having(gt(count(r.run_id), 0))
-    .orderBy(desc(avg(r.tps))) as any;
+    .orderBy(desc(avg(r.tps))) as TpsLeaderboardRow[];
 }
 
 // ── Dashboard: analytics queries (moved from routes/analytics.ts) ─────────

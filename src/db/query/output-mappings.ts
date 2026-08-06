@@ -7,7 +7,7 @@ import type { DbOutputMapping } from '../schema.js';
 
 export async function listOutputMappings(): Promise<DbOutputMapping[]> {
   const db = getDrizzleDb();
-  return db.select().from(output_mappings).orderBy(output_mappings.scope, output_mappings.scope_id) as any;
+  return db.select().from(output_mappings).orderBy(output_mappings.scope, output_mappings.scope_id);
 }
 
 export async function getOutputMappingById(id: string): Promise<DbOutputMapping | null> {
@@ -33,7 +33,7 @@ export async function updateOutputMapping(id: string, data: {
   perModelPattern?: string; updatedAt: string;
 }): Promise<void> {
   const db = getDrizzleDb();
-  const set: Record<string, any> = { updated_at: data.updatedAt };
+  const set: Record<string, string | undefined> = { updated_at: data.updatedAt };
   if (data.scope !== undefined) set.scope = data.scope;
   if (data.scopeId !== undefined) set.scope_id = data.scopeId;
   if (data.parentFolder !== undefined) set.parent_folder = data.parentFolder;
