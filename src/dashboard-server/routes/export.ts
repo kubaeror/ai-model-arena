@@ -5,15 +5,7 @@ import { listRuns, getRunRecord } from '../../orchestrator/orchestrator.js';
 import { allowIfRunOwner } from '../run-ownership.js';
 import type { AuthedRequest } from '../auth.js';
 import { notFound } from '../helpers.js';
-
-async function readResultFile(resultPath: string): Promise<Record<string, unknown> | null> {
-  try { return JSON.parse(await fsp.readFile(resultPath, 'utf8')); } catch { return null; }
-}
-
-async function readJudgeScore(outputDir: string): Promise<Record<string, unknown> | null> {
-  const judgePath = path.join(outputDir, 'judge_score.json');
-  try { return JSON.parse(await fsp.readFile(judgePath, 'utf8')); } catch { return null; }
-}
+import { readJsonFile } from '../../fs/read-json.js';
 
 function escapeCSV(str: string): string {
   if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -61,10 +53,10 @@ export function createExportRouter(): Router {
       for (const perModel of run.perModel) {
         if (filterModel && perModel.model !== filterModel) continue;
         
-        const result = await readResultFile(perModel.resultPath);
+        const result = await readJsonFile<Record<string, unknown>>(perModel.resultPath);
         if (!result) continue;
         
-        const judgeScore = await readJudgeScore(perModel.outputDir);
+        const judgeScore = await readJsonFile<Record<string, unknown>>(path.join(perModel.outputDir, 'judge_score.json'));
         const judgeAvg = (judgeScore?.averageScore as number) ?? '';
         const tokenUsage = result.tokenUsage as Record<string, number> | undefined;
         const totalTokens = (tokenUsage?.prompt ?? 0) + (tokenUsage?.completion ?? 0);

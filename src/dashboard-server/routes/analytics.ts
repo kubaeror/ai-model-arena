@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import { promises as fsp } from 'node:fs';
 import { listRuns } from '../../orchestrator/orchestrator.js';
 import { extractToolCallsFromConversation, detectTurnLoops, type LoopIncident } from '../../logger/conversation-parser.js';
 import { getDrizzleDb } from '../../db/index.js';
-import { tool_call_stats, run_models, cost_ledger } from '../../db/schema.js';
-import { eq, inArray, sql, sum, countDistinct } from 'drizzle-orm';
+import { tool_call_stats, run_models } from '../../db/schema.js';
+import { inArray } from 'drizzle-orm';
+import { readJsonFile } from '../../fs/read-json.js';
+import { queryToolCallStats, queryDailyToolTrends, queryCostLeaderboard, type ToolCallStatsRow } from '../../db/query.js';
 
 // ── In-memory cache (30s TTL) ──────────────────────────────────────────────
 
@@ -18,14 +19,6 @@ function setCache<T>(key: string, data: T): CacheEntry<T> {
 }
 
 // ── Types ───────────────────────────────────────────────────────────────────
-
-interface ToolStatRow {
-  model: string;
-  tool_name: string;
-  total: number;
-  success_count: number;
-  fail_count: number;
-}
 
 interface ToolStatsAggregated {
   name: string;
@@ -69,14 +62,6 @@ interface ToolTrendPoint {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-async function readResultFile(resultPath: string): Promise<Record<string, unknown> | null> {
-  try { return JSON.parse(await fsp.readFile(resultPath, 'utf8')); } catch { return null; }
-}
-
-async function readConversationFile(convPath: string): Promise<Record<string, unknown> | null> {
-  try { return JSON.parse(await fsp.readFile(convPath, 'utf8')); } catch { return null; }
-}
-
 export function createAnalyticsRouter(): Router {
   const router = Router();
 
@@ -102,23 +87,9 @@ export function createAnalyticsRouter(): Router {
 
     // ── DB path: query tool_call_stats for matching runs ──────────────────
     const runIds = filteredRuns.map(r => r.runId);
-    let dbRows: ToolStatRow[] = [];
+    let dbRows: ToolCallStatsRow[] = [];
     if (runIds.length > 0) {
-      let query = db.select({
-        model: tool_call_stats.model,
-        tool_name: tool_call_stats.tool_name,
-        total: sql<number>`SUM(${tool_call_stats.total})`,
-        success_count: sql<number>`SUM(${tool_call_stats.success_count})`,
-        fail_count: sql<number>`SUM(${tool_call_stats.fail_count})`,
-      }).from(tool_call_stats)
-        .where(inArray(tool_call_stats.run_id, runIds as any))
-        .groupBy(tool_call_stats.model, tool_call_stats.tool_name);
-
-      if (filterModel) {
-        query = query.where(eq(tool_call_stats.model, filterModel)) as any;
-      }
-      const result = await query.orderBy(sql`model`, sql`total DESC`);
-      dbRows = result as unknown as ToolStatRow[];
+      dbRows = await queryToolCallStats({ runIds, model: filterModel });
     }
 
     // Track which (run_id, model) pairs we have DB data for
@@ -144,14 +115,14 @@ export function createAnalyticsRouter(): Router {
         if (filterModel && perModel.model !== filterModel) continue;
 
         if (coveredRunIds.has(run.runId)) {
-          const result = await readResultFile(perModel.resultPath);
+          const result = await readJsonFile<Record<string, unknown>>(perModel.resultPath);
           if (result?.success === true) successfulRuns++;
           continue;
         }
 
         // File fallback
-        const result = await readResultFile(perModel.resultPath);
-        const conv = await readConversationFile(perModel.conversationPath);
+        const result = await readJsonFile<Record<string, unknown>>(perModel.resultPath);
+        const conv = await readJsonFile<Record<string, unknown>>(perModel.conversationPath);
         if (conv) {
           const loops = detectTurnLoops(conv);
           allLoops.push(...loops);
@@ -253,28 +224,10 @@ export function createAnalyticsRouter(): Router {
     const cached = getCached(trendCache, cacheKey);
     if (cached) { res.json(cached); return; }
 
-    const db = getDrizzleDb();
     const dayCount = Math.min(parseInt(days ?? '30', 10) || 30, 90);
-    const since = new Date(Date.now() - dayCount * 24 * 60 * 60 * 1000).toISOString();
+    const rows = await queryDailyToolTrends(dayCount, { model: filterModel, tool: filterTool });
 
-    let query = db.select({
-      date: sql<string>`DATE(${tool_call_stats.recorded_at})`,
-      model: tool_call_stats.model,
-      tool_name: tool_call_stats.tool_name,
-      total_calls: sql<number>`SUM(${tool_call_stats.total})`,
-      success_count: sql<number>`SUM(${tool_call_stats.success_count})`,
-      fail_count: sql<number>`SUM(${tool_call_stats.fail_count})`,
-      run_count: sql<number>`COUNT(DISTINCT ${tool_call_stats.run_id})`,
-    }).from(tool_call_stats)
-      .where(sql`${tool_call_stats.recorded_at} >= ${since}`);
-
-    if (filterModel) query = query.where(eq(tool_call_stats.model, filterModel)) as any;
-    if (filterTool) query = query.where(eq(tool_call_stats.tool_name, filterTool)) as any;
-
-    const rows = await query.groupBy(sql`date`, tool_call_stats.model, tool_call_stats.tool_name)
-      .orderBy(sql`date ASC`) as any[];
-
-    const trends: ToolTrendPoint[] = rows.map((r: any) => ({
+    const trends: ToolTrendPoint[] = rows.map((r) => ({
       date: r.date,
       totalCalls: r.total_calls,
       successRate: r.total_calls > 0 ? r.success_count / r.total_calls : 0,
@@ -290,46 +243,16 @@ export function createAnalyticsRouter(): Router {
   // ── GET /cost — Cost leaderboard (cost_ledger + run_models, no file reads) ──
 
   router.get('/cost', async (req, res) => {
-    const db = getDrizzleDb();
     const filterModel = typeof req.query.model === 'string' && req.query.model ? req.query.model : undefined;
-    const where = filterModel ? eq(cost_ledger.model, filterModel) : undefined;
+    const rows = await queryCostLeaderboard(filterModel ? { model: filterModel } : {});
 
-    const costRows = await db.select({
-      model: cost_ledger.model,
-      total_cost: sum(cost_ledger.cost_usd),
-      total_tokens: sum(sql<number>`COALESCE(${cost_ledger.input_tokens}, 0) + COALESCE(${cost_ledger.output_tokens}, 0)`),
-    })
-      .from(cost_ledger)
-      .where(where)
-      .groupBy(cost_ledger.model);
-
-    const runRows = await db.select({
-      model: run_models.model,
-      runs: countDistinct(run_models.run_id),
-      successes: sum(sql<number>`CASE WHEN ${run_models.success} = 1 THEN 1 ELSE 0 END`),
-    })
-      .from(run_models)
-      .where(filterModel ? eq(run_models.model, filterModel) : undefined)
-      .groupBy(run_models.model);
-
-    const byModel = new Map<string, Record<string, number>>();
-    for (const c of costRows) {
-      byModel.set(c.model, { totalCost: Number(c.total_cost ?? 0), totalTokens: Number(c.total_tokens ?? 0) });
-    }
-    for (const r of runRows) {
-      const entry = byModel.get(r.model) ?? { totalCost: 0, totalTokens: 0 };
-      entry.runs = Number(r.runs ?? 0);
-      entry.successes = Number(r.successes ?? 0);
-      byModel.set(r.model, entry);
-    }
-
-    const leaderboard = Array.from(byModel.entries()).map(([model, s]) => {
-      const runs = s.runs ?? 0;
-      const successes = s.successes ?? 0;
-      const totalCost = s.totalCost ?? 0;
-      const totalTokens = s.totalTokens ?? 0;
+    const leaderboard = rows.map((s) => {
+      const runs = s.runs;
+      const successes = s.successes;
+      const totalCost = s.total_cost ?? 0;
+      const totalTokens = s.total_tokens ?? 0;
       return {
-        model,
+        model: s.model,
         runs,
         successes,
         successRate: runs > 0 ? successes / runs : 0,

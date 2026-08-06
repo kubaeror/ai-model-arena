@@ -1,6 +1,7 @@
-import fs from 'node:fs';
 import { loadRunIndex, type RunIndexRecord, type RunIndexModelEntry } from '../orchestrator/run-index.js';
 import { readTraceMeta, type TraceMeta, type SpanMeta } from '../observability/trace-meta.js';
+import { readJsonFile } from '../fs/read-json.js';
+import type { RunResult } from '../logger/result-logger.js';
 
 /**
  * Rolling statistics (mean + standard deviation) computed from stored run
@@ -24,16 +25,10 @@ export interface RunHistory {
   durations: Map<string, number[]>; // `${model}|${scenario}` -> run duration ms
 }
 
-function readResult(resultPath: string): Record<string, unknown> | null {
-  if (!fs.existsSync(resultPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(resultPath, 'utf8')) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
+/** Shared JSON file reader — returns null for missing/malformed files. */
+export const readResult = readJsonFile<RunResult>;
 
-function totalTokens(result: Record<string, unknown>): number {
+function totalTokens(result: RunResult): number {
   const usage = result.tokenUsage as Record<string, number> | undefined;
   return (usage?.prompt ?? 0) + (usage?.completion ?? 0);
 }
@@ -92,7 +87,7 @@ export async function buildRunHistory(
     if (taken >= slidingWindow) break;
     const perModel = run.perModel.find((m) => m.model === model);
     if (!perModel) continue;
-    const result = readResult(perModel.resultPath);
+    const result = await readResult(perModel.resultPath);
     if (!result) continue;
     // Only count completed runs toward history.
     if (result.success === undefined && perModel.status !== 'completed') continue;
@@ -138,5 +133,4 @@ export function errorRateStats(history: RunHistory, model: string, scenario: str
 }
 
 /** Expose for the observability stats endpoint. */
-export { readResult };
 export type { RunIndexRecord, RunIndexModelEntry, SpanMeta };

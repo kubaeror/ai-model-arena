@@ -56,7 +56,7 @@ export async function computeObservabilityStats(modelFilter?: string): Promise<O
     for (const pm of run.perModel) {
       if (modelFilter && pm.model !== modelFilter) continue;
       modelRuns.set(pm.model, (modelRuns.get(pm.model) ?? 0) + 1);
-      const result = readResult(pm.resultPath);
+      const result = await readResult(pm.resultPath);
       if (result) {
         const tokens = ((result.tokenUsage as Record<string, number> | undefined)?.prompt ?? 0) + ((result.tokenUsage as Record<string, number> | undefined)?.completion ?? 0);
         const arr = tokensBy.get(`${pm.model}|${run.scenario}`) ?? [];
