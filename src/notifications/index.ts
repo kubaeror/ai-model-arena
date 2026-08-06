@@ -82,19 +82,36 @@ export async function dispatchNotification(
   if (channelNames.length === 0) {
     return [];
   }
-  
+
+  // Delivery outbox (F10): every dispatch is persisted first, then an
+  // immediate best-effort send is attempted through deliverDueNotifications
+  // (which picks up the just-persisted row because next_attempt_at is null).
+  // Failed rows stay pending and the dashboard's 30s loop retries them with
+  // exponential backoff. Per-channel failures (persist or send) never throw
+  // out of dispatchNotification — they surface as failed NotificationResults.
+  const { persistNotification, deliverDueNotifications, getNotificationById } = await import('./outbox.js');
   const results: NotificationResult[] = [];
-  const settled = await Promise.allSettled(
-    channelNames.map((name) => sendNotification(name, event, logger)),
-  );
-  for (const outcome of settled) {
-    results.push(
-      outcome.status === 'fulfilled'
-        ? outcome.value
-        : { channel: 'unknown', success: false, error: String(outcome.reason), timestamp: new Date().toISOString() },
-    );
+  for (const channelName of channelNames) {
+    try {
+      const id = await persistNotification(event, channelName);
+      await deliverDueNotifications(logger, async (ch, ev) => sendNotification(ch, ev, logger));
+      const row = await getNotificationById(id);
+      results.push({
+        channel: channelName,
+        success: row?.status === 'delivered',
+        error: row?.lastError ?? undefined,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      results.push({
+        channel: channelName,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
-  
+
   return results;
 }
 

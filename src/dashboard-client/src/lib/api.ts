@@ -608,3 +608,25 @@ export async function listAudit(params?: {
   }
   return apiFetch<{ entries: AuditEntry[]; total: number }>(`/api/audit?${sp.toString()}`);
 }
+
+// ── Notifications (admin only) ───────────────────────────────────────────────
+export interface NotificationRow {
+  id: string;
+  eventType: string;
+  channel: string;
+  status: 'pending' | 'delivered' | 'failed';
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  nextAttemptAt: string | null;
+  deliveredAt: string | null;
+}
+
+export async function listNotifications(): Promise<NotificationRow[]> {
+  const r = await apiFetch<{ notifications: NotificationRow[] }>('/api/notifications');
+  return r.notifications;
+}
+
+export async function retryNotification(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/notifications/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+}

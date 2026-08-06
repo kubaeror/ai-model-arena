@@ -10,6 +10,7 @@ import { Modal } from '../components/ui/Modal';
 import { useSettings } from '../providers/SettingsProvider';
 import { SecretsPanel } from '../components/SecretsPanel';
 import { UsersPanel } from '../components/UsersPanel';
+import { NotificationsPanel } from '../components/NotificationsPanel';
 import { apiFetch, listWebhooks, registerWebhook, deleteWebhook } from '../lib/api';
 import type { WebhookRecord } from '../lib/types';
 
@@ -289,6 +290,7 @@ export function Settings() {
           { id: 'secrets', label: 'API Keys' },
           { id: 'webhooks', label: 'Webhooks' },
           { id: 'users', label: 'Users' },
+          { id: 'notifications', label: 'Notifications' },
         ]}
         value={tab}
         onChange={setTab}
@@ -313,6 +315,7 @@ export function Settings() {
       {tab === 'secrets' && <SecretsPanel />}
       {tab === 'webhooks' && <WebhooksPanel />}
       {tab === 'users' && <UsersPanel />}
+      {tab === 'notifications' && <NotificationsPanel />}
     </div>
   );
 }
