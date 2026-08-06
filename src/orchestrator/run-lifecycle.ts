@@ -1,13 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { load } from 'js-yaml';
 import type { Logger } from '../types.js';
-import { writeComparison, type ComparisonEntry } from '../logger/comparison-logger.js';
+import type { ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing, budgetStateRoot } from '../cost-tracking/index.js';
 import { projectRoot, timestamp } from './utils.js';
-import { writeRunStats } from '../metrics/writeback.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/index.js';
 import { outputRoot, dbPath } from '../paths.js';
@@ -19,10 +17,16 @@ import {
   getRunRecord,
   type RunIndexModelEntry,
 } from './run-index.js';
-import { analyzeRun } from '../anomaly-detection/index.js';
-import { runJudgeScoring, loadEvaluationConfig, writeJudgeResult } from '../evaluation/judge.js';
-import { insertJudgeScore } from '../db/query.js';
 import type { ModelAdapter } from '../providers/adapters/base.js';
+import {
+  aggregate,
+  patchIndexAfterFinalize,
+  buildPerModelEntries,
+} from './finalize/aggregate.js';
+import { recordRunReservations, releaseRunReservations } from './finalize/budget.js';
+import { runJudgeScoringPass } from './finalize/judge.js';
+import { runAnomalyAnalysis, writebackRuntimeStats } from './finalize/anomalies.js';
+import { notifyRunCompleted } from './finalize/notify.js';
 
 function makeIdempotencyKey(scenario: string, models: string[]): string {
   return crypto.createHash('sha256').update(`${scenario}:${models.join(',')}`).digest('hex').slice(0, 32);
@@ -46,9 +50,6 @@ export async function dispatchBudgetExceeded(
   } catch { /* non-blocking */ }
 }
 
-/** Per-run budget reservations (runId -> model -> reserved USD). */
-const runReservations = new Map<string, Map<string, number>>();
-
 /**
  * Tokens per turn used for the up-front cost estimate. Configurable via
  * RUN_COST_ESTIMATE_TOKENS (integer, fallback 8000, clamped to >= 1).
@@ -58,9 +59,6 @@ function costEstimateTokensPerTurn(): number {
   if (Number.isNaN(raw)) return 8000;
   return Math.max(1, raw);
 }
-
-let anomalyAnalysisFailures = 0;
-let statsWritebackFailures = 0;
 
 export interface PerModelSpec {
   model: string;
@@ -226,7 +224,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   
   const spec = await createRunSpec(opts);
   const runId = spec.runId;
-  runReservations.set(runId, new Map(reservations.map((r) => [r.model, r.estimated])));
+  recordRunReservations(runId, reservations);
 
   // Register before enqueue: a task that fails fast (e.g. missing API key)
   // writes its final state before the late registerRun upsert can clobber
@@ -300,91 +298,6 @@ export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
   return rec.perModel.every((m) => TERMINAL_STATUSES.has(m.status));
 }
 
-interface AggregateInput {
-  runId: string;
-  scenario: string;
-  startedAt: string;
-  models: { model: string; resultPath: string }[];
-}
-function aggregate(_root: string, input: AggregateInput): {
-  entries: ComparisonEntry[];
-  mdPath: string;
-  jsonPath: string;
-} {
-  const entries: ComparisonEntry[] = input.models.map((m) => {
-    try {
-      const result = JSON.parse(fs.readFileSync(m.resultPath, 'utf8'));
-      return { model: m.model, runId: input.runId, result, resultPath: m.resultPath };
-    } catch {
-      return {
-        model: m.model, runId: input.runId, resultPath: m.resultPath,
-        error: 'result.json missing or unreadable (worker may have crashed before writing it).',
-      };
-    }
-  });
-  const { mdPath, jsonPath } = writeComparison(
-    path.join(outputRoot(), 'comparisons', input.runId),
-    entries,
-    { scenario: input.scenario, startedAt: input.startedAt, finishedAt: new Date().toISOString() },
-  );
-  return { entries, mdPath, jsonPath };
-}
-
-async function patchIndexAfterFinalize(runId: string, mdPath: string, jsonPath: string, perModel: RunIndexModelEntry[]): Promise<void> {
-  await updateRun(runId, (rec) => {
-    rec.status = 'completed';
-    rec.finishedAt = new Date().toISOString();
-    rec.comparisonMdPath = mdPath;
-    rec.comparisonJsonPath = jsonPath;
-    for (const m of perModel) {
-      const entry = rec.perModel.find((x) => x.model === m.model);
-      if (entry) Object.assign(entry, m);
-    }
-  });
-}
-
-/**
- * Build per-model index entries, recording spend/cost-ledger for completed models.
- * Shared by the CLI (spec-based) and dashboard watcher (runId-based) paths.
- */
-async function buildPerModelEntries(
-  runId: string,
-  rec: Awaited<ReturnType<typeof getRunRecord>>,
-  entries: ComparisonEntry[],
-  logger: Logger,
-): Promise<RunIndexModelEntry[]> {
-  return Promise.all(rec!.perModel.map(async (m) => {
-    const r = entries.find((x) => x.model === m.model)?.result;
-    const base = {
-      model: m.model, runId, outputDir: m.outputDir,
-      sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
-      reportPath: m.reportPath, logFile: m.logFile,
-    };
-    if (!r) return { ...base, status: 'errored' as const };
-    if (typeof r.costUsd === 'number' && r.costUsd > 0) {
-      try {
-        const { insertCostLedgerEntry } = await import('../db/query.js');
-        const tokens = r.tokenUsage ?? {};
-        await insertCostLedgerEntry({
-          runId, model: m.model, costUsd: r.costUsd,
-          inputTokens: tokens.prompt ?? null,
-          outputTokens: tokens.completion ?? null,
-          cacheReadTokens: tokens.cacheReadTokens ?? null,
-          totalTokens: tokens.total ?? null,
-          pricingVersion: null,
-          recordedAt: new Date().toISOString(),
-        });
-      } catch (e) {
-        logger.warn('cost ledger write failed (non-fatal)', { runId, model: m.model, err: String(e) });
-      }
-    }
-    return {
-      ...base, status: 'completed', success: r.success, turnsUsed: r.turnsUsed,
-      totalToolCalls: r.totalToolCalls, stopReason: r.stopReason, durationMs: r.durationMs,
-    };
-  }));
-}
-
 /**
  * Single finalize core shared by the CLI (spec) and dashboard watcher (runId) paths.
  * Aggregates results, patches the index, releases budget, records spend/ledger,
@@ -414,78 +327,14 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
   const allSuccess = perModel.every((m) => m.status === 'completed' && m.success !== false);
   logger.info('Run finalized', { runId, md: mdPath, status: allSuccess ? 'success' : 'failed' });
 
-  // Release budget reservations with actual costs (from FAT.min ledger costs).
-  // Releasing the exact reserved amount keeps pendingReservations accurate —
-  // a fabricated estimate leaked the remainder and eventually blocked all runs.
-  const reservations = runReservations.get(runId) ?? new Map<string, number>();
-  for (const entry of entries) {
-    const actualCost = entry.result?.costUsd ?? 0;
-    const reserved = reservations.get(entry.model) ?? 0;
-    releaseReservation(entry.model, reserved, actualCost, budgetRoot, logger);
-  }
-  runReservations.delete(runId);
-
-  // Run anomaly detection over the just-completed run (best-effort, non-blocking).
-  void analyzeRun(runId, logger).catch((e) => {
-    anomalyAnalysisFailures++;
-    logger.warn('Anomaly analysis failed', { runId, error: e instanceof Error ? e.message : String(e), totalFailures: anomalyAnalysisFailures });
-  });
-  // Write per-model runtime stats back to the SQLite catalog (best-effort, non-fatal).
-  void writeRunStats(runId, root).catch((e) => {
-    statsWritebackFailures++;
-    logger.warn('writeRunStats failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e), totalFailures: statsWritebackFailures });
-  });
-
-  // LLM judge scoring + persist judge_score.json (feeds silent_failure detector + regression baselines).
-  void (async () => {
-    try {
-      const evalCfg = loadEvaluationConfig(path.join(root, 'configs', 'evaluation.yaml'), logger);
-      if (evalCfg.judge?.enabled) {
-        for (const m of rec.perModel) {
-          if (!fs.existsSync(m.resultPath)) continue;
-          const scenarioPath = path.join(root, 'configs', 'scenarios', `${rec.scenario}.yaml`);
-          const scenarioCfg = fs.existsSync(scenarioPath) ? (load(fs.readFileSync(scenarioPath, 'utf8')) as Record<string, unknown>) : null;
-          const task = (scenarioCfg?.task as string) ?? '';
-          const files: Record<string, string> = {};
-          try {
-            for (const f of fs.readdirSync(m.sandboxDir, { withFileTypes: true }).filter(e => e.isFile())) {
-              files[f.name] = fs.readFileSync(path.join(m.sandboxDir, f.name), 'utf8').slice(0, 4000);
-            }
-          } catch { /* sandbox may not exist */ }
-          const verdict = await runJudgeScoring(m.model, runId, task, files, evalCfg, logger, judgeAdapter);
-          if (verdict) {
-            writeJudgeResult(m.outputDir, verdict, logger);
-            try {
-              await insertJudgeScore({
-                runId,
-                model: m.model,
-                judgeModel: verdict.judgeModel,
-                averageScore: verdict.averageScore,
-                summary: verdict.summary,
-                scoresJson: JSON.stringify(verdict.scores),
-                judgedAt: verdict.judgedAt,
-              });
-            } catch (e) {
-              logger.warn('judge score DB persist failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e) });
-            }
-          }
-        }
-      }
-    } catch (e) {
-      logger.warn('judge scoring failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e) });
-    }
-  })();
-
-  // Notifications + webhooks: single dispatch point for run completion.
-  void (async () => {
-    try {
-      const { loadNotificationConfig, dispatchNotification, dispatchWebhooks, DispatchEventType } = await import('../notifications/index.js');
-      loadNotificationConfig(path.join(root, 'configs', 'notifications.yaml'), logger);
-      const data = { runId, scenario: rec.scenario, models: rec.perModel.map((m) => m.model), status: allSuccess ? 'success' : 'failed' };
-      await dispatchNotification({ type: DispatchEventType.onRunCompleted, data, timestamp: new Date().toISOString() }, logger);
-      await dispatchWebhooks('run_completed', data, logger);
-    } catch { /* non-blocking */ }
-  })();
+  // Release budget reservations with actual costs, then best-effort
+  // post-finalize jobs: anomaly analysis, stats writeback, judge scoring,
+  // and completion notifications. All non-blocking, never fatal.
+  releaseRunReservations(runId, entries, budgetRoot, logger);
+  void runAnomalyAnalysis(runId, logger);
+  void writebackRuntimeStats(runId, root, logger);
+  void runJudgeScoringPass(root, runId, rec, logger, judgeAdapter);
+  void notifyRunCompleted(root, runId, rec, allSuccess, logger);
 
   return { mdPath, jsonPath };
 }
@@ -583,5 +432,3 @@ export async function restartRun(runId: string): Promise<void> {
     for (const m of r.perModel) { m.status = 'running'; m.success = undefined; }
   });
 }
-
-
