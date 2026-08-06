@@ -1,22 +1,18 @@
 import { z } from 'zod';
 
-export const PricingSchema = z.record(z.string(), z.object({
+const PricingSchema = z.record(z.string(), z.object({
   input: z.number().min(0),
   output: z.number().min(0),
   cached: z.number().min(0).optional().default(0),
   cache_write: z.number().min(0).optional(),
 }));
 
-export const PricingConfigSchema = z.object({
-  models: PricingSchema,
-});
-
-export const BudgetThresholdsSchema = z.object({
+const BudgetThresholdsSchema = z.object({
   warn: z.number().min(0).max(100).default(80),
   block: z.number().min(0).max(100).default(100),
 });
 
-export const ModelBudgetSchema = z.object({
+const ModelBudgetSchema = z.object({
   daily: z.number().min(0).nullable().optional(),
   monthly: z.number().min(0).nullable().optional(),
 });

@@ -1,24 +1,24 @@
 import { z } from 'zod';
 
-export const RubricItemSchema = z.object({
+const RubricItemSchema = z.object({
   description: z.string(),
   maxScore: z.number().min(0).max(10),
 });
 
-export const RubricSchema = z.record(z.string(), RubricItemSchema);
+const RubricSchema = z.record(z.string(), RubricItemSchema);
 
-export const JudgeConfigSchema = z.object({
+const JudgeConfigSchema = z.object({
   model: z.string().default('gpt-4o'),
   enabled: z.boolean().default(true),
 });
 
-export const RegressionThresholdsSchema = z.object({
+const RegressionThresholdsSchema = z.object({
   scoreDrop: z.number().min(0).default(1.0),
   tokenIncrease: z.number().min(0).default(0.5),
   timeIncrease: z.number().min(0).default(0.5),
 });
 
-export const RegressionConfigSchema = z.object({
+const RegressionConfigSchema = z.object({
   baselineDir: z.string().default('outputs/baselines'),
   thresholds: RegressionThresholdsSchema.optional(),
   failOnRegression: z.boolean().default(true),

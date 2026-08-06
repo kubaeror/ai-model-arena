@@ -2,7 +2,7 @@ import fs from 'node:fs';
 
 let _platform: 'kubernetes' | 'bare-metal' | null = null;
 
-export function detectPlatform(): 'kubernetes' | 'bare-metal' {
+function detectPlatform(): 'kubernetes' | 'bare-metal' {
   if (_platform) return _platform;
 
   // Check for k8s service account token mount — definitive sign of in-cluster

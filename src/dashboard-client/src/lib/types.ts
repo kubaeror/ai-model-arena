@@ -12,7 +12,7 @@ export interface ModelConfig {
   retry?: { maxRetries: number; initialDelayMs: number; maxDelayMs: number };
 }
 
-export interface SuccessCriteria {
+interface SuccessCriteria {
   command?: string;
   expectedExitCode?: number;
   expectedOutputContains?: string;
@@ -35,7 +35,7 @@ export interface StarterFile {
   content: string;
 }
 
-export type RunStatus = 'running' | 'completed' | 'stopped' | 'errored' | 'unknown';
+type RunStatus = 'running' | 'completed' | 'stopped' | 'errored' | 'unknown';
 
 export interface RunIndexModelEntry {
   model: string;

@@ -5,7 +5,7 @@ import { withSpan, truncate, captureContent } from './span-helpers.js';
 import { TraceRecorder, writeTraceMeta, type TraceMeta } from './trace-meta.js';
 import { runInSpan } from './span-context.js';
 
-export interface TracedLoopOptions extends AgentLoopOptions {
+interface TracedLoopOptions extends AgentLoopOptions {
   provider: string;
   model: string;
   temperature: number;

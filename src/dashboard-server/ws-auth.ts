@@ -4,8 +4,8 @@ import { createLogger } from '../logger/pino-logger.js';
 
 const logger = createLogger('ai-arena:ws-auth');
 
-export interface WsPrincipal { sub: string; role: string; }
-export interface VerifyWsInfo {
+interface WsPrincipal { sub: string; role: string; }
+interface VerifyWsInfo {
   req: IncomingMessage;
 }
 

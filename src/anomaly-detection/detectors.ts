@@ -11,7 +11,7 @@ import { createLogger } from '../logger/pino-logger.js';
 
 const logger = createLogger('ai-arena:anomaly');
 
-export type ToolCallRow = ToolCallEntry;
+type ToolCallRow = ToolCallEntry;
 
 export interface RunAnalysisInput {
   runId: string;
@@ -24,7 +24,7 @@ export interface RunAnalysisInput {
   judgeScore: number | null;
 }
 
-export type Detector = (input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory) => NewAnomaly[];
+type Detector = (input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory) => NewAnomaly[];
 
 /** Read the judge score (0-100) for a run, if judge_score.json exists. */
 export function readJudgeScore(outputDir: string): number | null {
@@ -84,7 +84,7 @@ export function loopDetector(input: RunAnalysisInput, config: AnomalyDetectionCo
 
 // ── Token spike ───────────────────────────────────────────────────────────────
 
-export function tokenSpikeDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
+function tokenSpikeDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
   const cfg = config.tokenSpike;
   if (!cfg.enabled || !input.result) return [];
   const total = (input.result.tokenUsage.prompt ?? 0) + (input.result.tokenUsage.completion ?? 0);
@@ -134,7 +134,7 @@ export function costSpikeDetector(input: RunAnalysisInput, config: AnomalyDetect
 
 // ── Error rate ────────────────────────────────────────────────────────────────
 
-export function errorRateDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
+function errorRateDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig, history: RunHistory): NewAnomaly[] {
   const cfg = config.errorRate;
   if (!cfg.enabled || !input.result) return [];
   const totalToolCalls = input.result.totalToolCalls;
@@ -161,7 +161,7 @@ export function errorRateDetector(input: RunAnalysisInput, config: AnomalyDetect
 
 // ── Silent failure (criteria mismatch) ────────────────────────────────────────
 
-export function silentFailureDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): NewAnomaly[] {
+function silentFailureDetector(input: RunAnalysisInput, config: AnomalyDetectionConfig): NewAnomaly[] {
   const cfg = config.silentFailure;
   if (!cfg.enabled || !input.result || input.judgeScore == null) return [];
   const success = input.result.success;

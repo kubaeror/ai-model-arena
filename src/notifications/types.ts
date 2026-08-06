@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const NotificationChannelSchema = z.object({
+const NotificationChannelSchema = z.object({
   type: z.enum(['slack', 'discord']),
   webhookUrl: z.string(),
 });

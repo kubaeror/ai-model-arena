@@ -6,7 +6,7 @@ import { closeDb } from '../db/index.js';
 import { loadSchedulesConfig } from '../scheduler/manager.js';
 import { findProjectRoot } from '../paths.js';
 
-export function schedulesPath(): string {
+function schedulesPath(): string {
   return process.env.SCHEDULES_PATH ?? path.join(findProjectRoot(), 'configs', 'schedules.yaml');
 }
 

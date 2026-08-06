@@ -16,7 +16,7 @@ export interface SyncResult {
   error?: string;
 }
 
-export interface SyncOpts {
+interface SyncOpts {
   apiUrl: string;
   force?: boolean;
 }

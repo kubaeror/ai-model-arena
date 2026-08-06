@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ScheduleSchema = z.object({
+const ScheduleSchema = z.object({
   id: z.string(),
   scenario: z.string(),
   models: z.array(z.string()).min(1),

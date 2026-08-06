@@ -1,6 +1,6 @@
 import type { TokenUsage } from '../types.js';
 
-export interface CacheMetrics {
+interface CacheMetrics {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   cacheHitRate: number;

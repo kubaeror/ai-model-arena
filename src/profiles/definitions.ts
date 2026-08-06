@@ -7,9 +7,9 @@ export const EXECUTION_PROFILES = [
   'restricted-production-support',
 ] as const;
 
-export type ExecutionProfile = (typeof EXECUTION_PROFILES)[number];
+type ExecutionProfile = (typeof EXECUTION_PROFILES)[number];
 
-export interface ProfileDefinition {
+interface ProfileDefinition {
   name: ExecutionProfile;
   label: string;
   description: string;

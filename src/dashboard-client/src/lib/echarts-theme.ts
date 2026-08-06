@@ -2,7 +2,7 @@ function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#7CFFA0';
 }
 
-export interface EchartsTheme {
+interface EchartsTheme {
   bg: string;
   fg: string;
   fg1: string;

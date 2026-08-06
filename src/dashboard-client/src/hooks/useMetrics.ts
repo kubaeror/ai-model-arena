@@ -8,7 +8,7 @@ async function apiFetchJson<T>(path: string): Promise<T> {
   return res.json();
 }
 
-export interface RuntimeMetricFilters {
+interface RuntimeMetricFilters {
   model?: string;
   from?: string;
   to?: string;
@@ -31,7 +31,7 @@ export function useRuntimeMetrics(filters: RuntimeMetricFilters = {}) {
   });
 }
 
-export interface TpsLeaderboardEntry {
+interface TpsLeaderboardEntry {
   model_id: string;
   name: string;
   provider_id: string;

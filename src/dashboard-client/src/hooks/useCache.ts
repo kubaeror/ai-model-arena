@@ -16,7 +16,7 @@ async function apiPostJson<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
-export interface CacheStateRow {
+interface CacheStateRow {
   source: string;
   last_fetch: string;
   last_status: string;

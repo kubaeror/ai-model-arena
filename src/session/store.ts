@@ -6,9 +6,9 @@ import {
   deleteSessionCascade,
 } from '../db/query.js';
 
-export type SessionStatus = 'active' | 'completed' | 'errored';
+type SessionStatus = 'active' | 'completed' | 'errored';
 
-export interface Session {
+interface Session {
   id: string;
   promptId: string | null;
   promptVersion: number | null;
@@ -31,7 +31,7 @@ export interface StoredMessage {
   createdAt: string;
 }
 
-export interface ModelCallRecord {
+interface ModelCallRecord {
   sessionId: string;
   turn: number;
   provider: string;
@@ -44,7 +44,7 @@ export interface ModelCallRecord {
   ttftMs?: number | null;
 }
 
-export interface SessionStore {
+interface SessionStore {
   createSession(opts: { id?: string; promptId?: string; promptVersion?: number; model: string }): Promise<Session>;
   loadSession(sessionId: string): Promise<Session | null>;
   appendMessage(sessionId: string, msg: StoredMessage): Promise<void>;

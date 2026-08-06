@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Task } from './types.js';
 
-export const TaskSchema = z.object({
+const TaskSchema = z.object({
   taskId: z.string().min(1),
   sessionId: z.string().min(1),
   promptId: z.string().optional(),

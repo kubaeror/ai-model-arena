@@ -10,7 +10,7 @@ export interface ComparisonEntry {
   error?: string;
 }
 
-export interface ComparisonMeta {
+interface ComparisonMeta {
   scenario: string;
   startedAt: string;
   finishedAt?: string;

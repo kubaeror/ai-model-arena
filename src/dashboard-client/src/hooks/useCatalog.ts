@@ -86,7 +86,7 @@ export interface RuntimeStatRow {
   measured_at: string;
 }
 
-export interface ModelDetailResponse {
+interface ModelDetailResponse {
   model: ModelDetail;
   benchmarks: BenchmarkRow[];
   runtime: RuntimeStatRow[];
@@ -104,7 +104,7 @@ export function useCatalogModel(id: string) {
   });
 }
 
-export interface BenchmarkFilters {
+interface BenchmarkFilters {
   name?: string;
   source?: string;
   model?: string;

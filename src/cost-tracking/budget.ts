@@ -86,7 +86,7 @@ function loadBudgetState(config: BudgetConfig, rootDir: string, logger?: Logger)
   }
 }
 
-export function saveBudgetState(rootDir: string, logger?: Logger): void {
+function saveBudgetState(rootDir: string, logger?: Logger): void {
   if (!budgetConfig || !budgetState) return;
   
   const statePath = getStatePath(budgetConfig, rootDir);

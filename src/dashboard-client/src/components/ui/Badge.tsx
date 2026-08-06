@@ -42,7 +42,7 @@ function variantFromValue(variant: BadgeVariant, value: string): BadgeVariant {
   return variant;
 }
 
-export interface BadgeProps {
+interface BadgeProps {
   children?: ReactNode;
   value?: string;
   variant?: BadgeVariant;

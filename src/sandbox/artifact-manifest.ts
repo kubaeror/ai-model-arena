@@ -29,7 +29,7 @@ export function buildProducedByTool(
   return produced;
 }
 
-export interface ArtifactEntry {
+interface ArtifactEntry {
   path: string;
   size: number;
   sha256: string;
@@ -52,7 +52,7 @@ function hashFile(filePath: string): string {
 }
 
 /** Path → tool name that produced it. Accepts a Map or a plain record. */
-export type ProducedByTool = Map<string, string> | Record<string, string>;
+type ProducedByTool = Map<string, string> | Record<string, string>;
 
 function lookupTool(producedByTool: ProducedByTool | undefined, rel: string): string | undefined {
   if (!producedByTool) return undefined;

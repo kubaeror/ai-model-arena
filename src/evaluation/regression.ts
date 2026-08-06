@@ -32,7 +32,7 @@ export function getBaselinePath(baselineDir: string, model: string, scenario: st
   return path.join(baselineDir, model, `${scenario}.json`);
 }
 
-export function loadBaselineSnapshot(baselinePath: string): BaselineSnapshot | null {
+function loadBaselineSnapshot(baselinePath: string): BaselineSnapshot | null {
   if (!fs.existsSync(baselinePath)) return null;
   try {
     return JSON.parse(fs.readFileSync(baselinePath, 'utf8')) as BaselineSnapshot;
@@ -162,7 +162,7 @@ export interface SuiteResult {
  * call saveSuiteResult() so past runs stay browsable via GET
  * /api/regression/results.
  */
-export function regressionResultsDir(): string {
+function regressionResultsDir(): string {
   return path.join(outputRoot(), 'regression');
 }
 

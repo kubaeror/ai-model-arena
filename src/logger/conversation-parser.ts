@@ -44,7 +44,7 @@ export interface LoopIncident {
   tools: string[];
 }
 
-export interface ConsecutiveLoop {
+interface ConsecutiveLoop {
   tool: string;
   consecutive: number;
   turns: number[];

@@ -37,10 +37,10 @@ export function resolveFallback(
 }
 
 /** Default number of fallback hops when ARENA_MAX_FALLBACK_HOPS is unset. */
-export const DEFAULT_MAX_FALLBACK_HOPS = 3;
+const DEFAULT_MAX_FALLBACK_HOPS = 3;
 
 /** Upper bound for ARENA_MAX_FALLBACK_HOPS. */
-export const MAX_FALLBACK_HOPS_CAP = 10;
+const MAX_FALLBACK_HOPS_CAP = 10;
 
 /**
  * Resolve the fallback hop limit from ARENA_MAX_FALLBACK_HOPS.

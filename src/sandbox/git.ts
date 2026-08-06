@@ -7,7 +7,7 @@ import { sandboxEnv } from './sandbox.js';
 
 const execFile = promisify(execFileCallback);
 
-export interface GitOptions {
+interface GitOptions {
   sandboxDir: string;
   modelName: string;
   logger?: Logger;

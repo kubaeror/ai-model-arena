@@ -10,7 +10,7 @@ import type { Logger } from '../types.js';
  *
  * Events: run_completed, anomaly_detected, budget_exceeded.
  */
-export type WebhookEvent = 'run_completed' | 'anomaly_detected' | 'budget_exceeded';
+type WebhookEvent = 'run_completed' | 'anomaly_detected' | 'budget_exceeded';
 
 export async function dispatchWebhooks(event: WebhookEvent, payload: unknown, logger?: Logger): Promise<void> {
   let hooks;

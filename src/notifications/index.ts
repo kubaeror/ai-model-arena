@@ -32,14 +32,14 @@ export function loadNotificationConfig(configPath: string, logger?: Logger): Not
   return validated;
 }
 
-export function getChannel(name: string): { type: string; webhookUrl: string } | null {
+function getChannel(name: string): { type: string; webhookUrl: string } | null {
   if (!notificationConfig) return null;
   const channel = notificationConfig.channels[name];
   if (!channel) return null;
   return { type: channel.type, webhookUrl: channel.webhookUrl };
 }
 
-export function getRoutingForEvent(eventType: DispatchEventType): string[] {
+function getRoutingForEvent(eventType: DispatchEventType): string[] {
   if (!notificationConfig?.routing) return [];
   return notificationConfig.routing[eventType] ?? [];
 }

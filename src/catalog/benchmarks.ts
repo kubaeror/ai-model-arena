@@ -11,7 +11,7 @@ const ZEROEVAL_BENCH_MAP: Record<string, string> = {
   swebench: 'SWE-bench', gpqa: 'GPQA Diamond', mmlu: 'MMLU', humaneval: 'HumanEval', math: 'MATH',
 };
 
-export interface BenchmarkOpts {
+interface BenchmarkOpts {
   force?: boolean;
 }
 

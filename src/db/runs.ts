@@ -33,7 +33,7 @@ export interface RunIndexRecord {
   createdBy?: string;
 }
 
-export interface RunIndexFile {
+interface RunIndexFile {
   runs: RunIndexRecord[];
 }
 

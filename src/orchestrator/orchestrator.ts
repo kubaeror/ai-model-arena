@@ -43,7 +43,7 @@ export {
 };
 export type { RunIndexRecord, RunIndexModelEntry } from './run-index.js';
 
-export interface CliRunOptions extends RunStartOptions {
+interface CliRunOptions extends RunStartOptions {
   timeoutMs?: number;
 }
 

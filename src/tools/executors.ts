@@ -230,7 +230,7 @@ const spawnCmd = (): ReturnType<typeof exec> => {
 };
 
 // ── search_code ──────────────────────────────────────────────────────────────
-export const searchCode: ToolExecutor = async (args, ctx) => {
+const searchCode: ToolExecutor = async (args, ctx) => {
   const v = validateArgs(SearchCodeArgs, args);
   if (!v.ok) return { content: v.error, isError: true };
   const { query, regex: useRegex, caseSensitive } = v.data;
@@ -373,7 +373,7 @@ export const globFiles: ToolExecutor = async (args, ctx) => {
 };
 
 // ── task_complete ─────────────────────────────────────────────────────────────
-export const taskComplete: ToolExecutor = async (args) => {
+const taskComplete: ToolExecutor = async (args) => {
   const v = validateArgs(TaskCompleteArgs, args);
   if (!v.ok) return { content: `Error: ${v.error}`, isError: true };
   const { summary } = v.data;

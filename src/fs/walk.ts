@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const DEFAULT_EXCLUDE = new Set(['node_modules', '.git']);
 
-export interface WalkOptions {
+interface WalkOptions {
   /** Also include directory paths (post-order) in the result. */
   dirs?: boolean;
   /** Extra basenames to skip, on top of the default {node_modules, .git}. */

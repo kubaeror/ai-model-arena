@@ -10,7 +10,7 @@ import { readTraceMeta, type TraceMeta, type SpanMeta } from '../observability/t
  * currently being analysed).
  */
 
-export interface Stats {
+interface Stats {
   mean: number;
   std: number;
   count: number;
@@ -138,5 +138,5 @@ export function errorRateStats(history: RunHistory, model: string, scenario: str
 }
 
 /** Expose for the observability stats endpoint. */
-export { computeStats, readResult, totalTokens };
+export { readResult };
 export type { RunIndexRecord, RunIndexModelEntry, SpanMeta };

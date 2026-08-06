@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ModelsDevCostSchema = z.object({
+const ModelsDevCostSchema = z.object({
   input: z.number().optional(),
   output: z.number().optional(),
   cache_read: z.number().optional(),
@@ -16,18 +16,18 @@ export const ModelsDevCostSchema = z.object({
   }).optional(),
 }).optional();
 
-export const ModelsDevLimitSchema = z.object({
+const ModelsDevLimitSchema = z.object({
   context: z.number(),
   input: z.number().optional(),
   output: z.number(),
 });
 
-export const ModelsDevReasoningOptionSchema = z.object({
+const ModelsDevReasoningOptionSchema = z.object({
   type: z.enum(['effort', 'toggle', 'budget_tokens']),
   // provider-specific extra fields tolerated
 }).passthrough();
 
-export const ModelsDevModelSchema = z.object({
+const ModelsDevModelSchema = z.object({
   id: z.string(),
   name: z.string(),
   family: z.string().optional(),
@@ -44,7 +44,7 @@ export const ModelsDevModelSchema = z.object({
   status: z.enum(['alpha', 'beta', 'deprecated']).optional(),
 }).passthrough();
 
-export const ModelsDevProviderSchema = z.object({
+const ModelsDevProviderSchema = z.object({
   id: z.string(),
   name: z.string(),
   api: z.string().optional(),
@@ -57,7 +57,7 @@ export const ModelsDevResponseSchema = z.record(z.string(), ModelsDevProviderSch
 
 export type ModelsDevResponse = z.output<typeof ModelsDevResponseSchema>;
 
-export const ModelbenchModelSchema = z.object({
+const ModelbenchModelSchema = z.object({
   slug: z.string(),
   name: z.string(),
   developer: z.string().optional(),
