@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { runAgentLoop } from '../dist/agent-loop/index.js';
+import { runAgentLoop } from '../dist/agent-loop/loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from '../dist/tools/index.js';
 import { ConversationLogger } from '../dist/logger/conversation-logger.js';
 import { writeReport } from '../dist/logger/report-logger.js';
