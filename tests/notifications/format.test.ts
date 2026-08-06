@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DispatchEventType } from '../../src/notifications/types.js';
 import { formatSlackPayload } from '../../src/notifications/slack.js';
 import { formatDiscordPayload } from '../../src/notifications/discord.js';
+import { normalizeEvent, regressionSummary } from '../../src/notifications/format.js';
 
 type SlackField = { title: string; value: string; short?: boolean };
 
@@ -158,4 +159,95 @@ test('discord regression payload includes baseline/current/threshold values', ()
   assert.ok(numbers.includes('80'), `baseline 80 missing from rendered text: ${rendered}`);
   assert.ok(numbers.includes('60'), `current 60 missing from rendered text: ${rendered}`);
   assert.ok(numbers.includes('10'), `threshold 10 missing from rendered text: ${rendered}`);
+});
+
+test('normalizeEvent maps budget keys from spentUsd/limitUsd', () => {
+  const n = normalizeEvent({
+    type: DispatchEventType.onBudgetThreshold,
+    data: { model: 'gpt-4o', spentUsd: 12.345, limitUsd: 100.5, percentUsed: 12.2 },
+    timestamp: '2026-08-03T00:00:00Z',
+  });
+  assert.equal(n.type, DispatchEventType.onBudgetThreshold);
+  assert.equal(n.model, 'gpt-4o');
+  assert.equal(n.spent, 12.345);
+  assert.equal(n.limit, 100.5);
+  assert.equal(n.percentUsed, 12.2);
+  assert.deepEqual(n.extra, { model: 'gpt-4o', spentUsd: 12.345, limitUsd: 100.5, percentUsed: 12.2 });
+});
+
+test('normalizeEvent falls back to spent/limit when spentUsd/limitUsd absent', () => {
+  const n = normalizeEvent({
+    type: DispatchEventType.onBudgetThreshold,
+    data: { model: 'gpt-4o', spent: 9, limit: 10, percentUsed: 90 },
+  });
+  assert.equal(n.spent, 9);
+  assert.equal(n.limit, 10);
+  assert.equal(n.percentUsed, 90);
+});
+
+test('normalizeEvent maps run-completed keys', () => {
+  const n = normalizeEvent({
+    type: DispatchEventType.onRunCompleted,
+    data: { runId: 'run-123', scenario: 'backend-api', models: ['gpt-4o', 'claude-3.5'], status: 'success' },
+  });
+  assert.equal(n.status, 'success');
+  assert.equal(n.runId, 'run-123');
+  assert.equal(n.scenario, 'backend-api');
+  assert.deepEqual(n.models, ['gpt-4o', 'claude-3.5']);
+});
+
+test('normalizeEvent maps anomaly keys (data.type becomes anomalyType)', () => {
+  const n = normalizeEvent({
+    type: DispatchEventType.onAnomalyDetected,
+    data: { type: 'budget_spike', severity: 'high', model: 'gpt-4o', runId: 'run-123', description: '5x spend spike' },
+  });
+  assert.equal(n.anomalyType, 'budget_spike');
+  assert.equal(n.severity, 'high');
+  assert.equal(n.model, 'gpt-4o');
+  assert.equal(n.runId, 'run-123');
+  assert.equal(n.description, '5x spend spike');
+});
+
+test('normalizeEvent maps regression keys and preserves regressions in extra', () => {
+  const regressions = [{ metric: 'averageScore', baseline: 80, current: 60, threshold: 10 }];
+  const n = normalizeEvent({
+    type: DispatchEventType.onRegressionFailed,
+    data: { suite: 'backend-api', model: 'gpt-4o', regressions },
+  });
+  assert.equal(n.suite, 'backend-api');
+  assert.equal(n.model, 'gpt-4o');
+  assert.deepEqual(n.extra.regressions, regressions);
+});
+
+test('normalizeEvent treats missing data as empty and keeps extra a full copy', () => {
+  const n = normalizeEvent({
+    type: DispatchEventType.onRunCompleted,
+    data: { runId: 'r1', custom: { nested: true }, extraKey: 42 },
+  });
+  assert.equal(n.runId, 'r1');
+  assert.deepEqual(n.extra, { runId: 'r1', custom: { nested: true }, extraKey: 42 });
+  assert.equal(JSON.stringify(n.extra), JSON.stringify({ runId: 'r1', custom: { nested: true }, extraKey: 42 }));
+});
+
+test('regressionSummary renders metric with baseline/current/threshold', () => {
+  const rendered = regressionSummary({
+    regressions: [{ metric: 'averageScore', baseline: 80, current: 60, threshold: 10 }],
+  });
+  assert.equal(rendered, 'averageScore baseline=80 current=60 threshold=10');
+});
+
+test('regressionSummary omits missing parts per entry', () => {
+  const rendered = regressionSummary({
+    regressions: [{ metric: 'accuracy' }, { metric: 'latency', baseline: 1.2, current: 3.4 }],
+  });
+  assert.equal(rendered, 'accuracy, latency baseline=1.2 current=3.4');
+});
+
+test('regressionSummary returns n/a when regressions is null/undefined', () => {
+  assert.equal(regressionSummary({}), 'n/a');
+  assert.equal(regressionSummary({ regressions: null }), 'n/a');
+});
+
+test('regressionSummary JSON-stringifies non-array regressions', () => {
+  assert.equal(regressionSummary({ regressions: 'boom' }), '"boom"');
 });

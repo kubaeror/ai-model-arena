@@ -1,93 +1,77 @@
 import type { DispatchEvent, NotificationResult } from './types.js';
 import type { Logger } from '../types.js';
-import { postWithRetry } from './retry.js';
-
-function regressionSummary(data: Record<string, unknown>): string {
-  const regressions = data.regressions;
-  if (Array.isArray(regressions)) {
-    return regressions.map((r) => {
-      const x = r as { metric?: string; baseline?: number; current?: number; threshold?: number };
-      const parts = [`${x.metric}`];
-      if (x.baseline != null) parts.push(`baseline=${x.baseline}`);
-      if (x.current != null) parts.push(`current=${x.current}`);
-      if (x.threshold != null) parts.push(`threshold=${x.threshold}`);
-      return parts.join(' ');
-    }).join(', ');
-  }
-  if (regressions == null) return 'n/a';
-  return JSON.stringify(regressions);
-}
+import { normalizeEvent, regressionSummary, sendWebhook } from './format.js';
 
 export function formatDiscordPayload(evt: DispatchEvent): object {
-    const { type, data } = evt;
+    const n = normalizeEvent(evt);
     const toField = (name: string, value: string, inline: boolean = true) => ({ name, value, inline });
-    
+
     let title = '';
     let description = '';
     let color = 0x000000;
     const fields: object[] = [];
-    
-    switch (type) {
+
+    switch (n.type) {
       case 'onRunCompleted': {
-        const status = String(data.status ?? 'unknown');
+        const status = String(n.status ?? 'unknown');
         title = `Run ${status}`;
         description = status === 'started' ? 'Scheduled run started' : `Run completed with status: ${status}`;
         color = status === 'success' ? 0x00ff00 : status === 'started' ? 0x36a64f : 0xff0000;
         fields.push(
-          toField('Run ID', String(data.runId ?? 'n/a')),
-          toField('Scenario', String(data.scenario ?? 'n/a')),
-          { name: 'Models', value: (data.models as string[])?.join(', ') ?? 'n/a', inline: false }
+          toField('Run ID', String(n.runId ?? 'n/a')),
+          toField('Scenario', String(n.scenario ?? 'n/a')),
+          { name: 'Models', value: (n.models as string[])?.join(', ') ?? 'n/a', inline: false }
         );
         break;
       }
-      
+
       case 'onBudgetThreshold': {
-        const percentUsed = Number(data.percentUsed ?? 0);
-        const spent = Number(data.spentUsd ?? data.spent ?? 0);
-        const limit = Number(data.limitUsd ?? data.limit ?? 0);
-        const thresholdVal = data.threshold != null ? String(data.threshold) : `${Math.min(percentUsed, 100)}%`;
+        const percentUsed = Number(n.percentUsed ?? 0);
+        const spent = Number(n.spent ?? 0);
+        const limit = Number(n.limit ?? 0);
+        const thresholdVal = n.threshold != null ? String(n.threshold) : `${Math.min(percentUsed, 100)}%`;
         title = 'Budget Alert';
         description = `${thresholdVal} threshold reached`;
         color = percentUsed >= 100 ? 0xff0000 : 0xffff00;
         fields.push(
-          toField('Model', String(data.model ?? 'global')),
+          toField('Model', String(n.model ?? 'global')),
           toField('Spent', `$${spent.toFixed(2)}`),
           toField('Limit', `$${limit.toFixed(2)}`)
         );
         break;
       }
-      
+
       case 'onAnomalyDetected': {
         title = 'Anomaly Detected';
-        description = String(data.description ?? 'n/a');
+        description = String(n.description ?? 'n/a');
         color = 0xffff00;
         fields.push(
-          toField('Type', String(data.type ?? 'n/a')),
-          toField('Severity', String(data.severity ?? 'n/a')),
-          toField('Model', String(data.model ?? 'n/a')),
-          { name: 'Run', value: String(data.runId ?? 'n/a'), inline: false },
-          { name: 'Description', value: String(data.description ?? 'n/a'), inline: false }
+          toField('Type', String(n.anomalyType ?? 'n/a')),
+          toField('Severity', String(n.severity ?? 'n/a')),
+          toField('Model', String(n.model ?? 'n/a')),
+          { name: 'Run', value: String(n.runId ?? 'n/a'), inline: false },
+          { name: 'Description', value: String(n.description ?? 'n/a'), inline: false }
         );
         break;
       }
-      
+
       case 'onRegressionFailed': {
         title = 'Regression Test Failed';
         description = 'One or more regressions detected';
         color = 0xff0000;
         fields.push(
-          toField('Suite', String(data.suite ?? 'n/a')),
-          toField('Model', String(data.model ?? 'n/a')),
-          { name: 'Regressions', value: regressionSummary(data), inline: false }
+          toField('Suite', String(n.suite ?? 'n/a')),
+          toField('Model', String(n.model ?? 'n/a')),
+          { name: 'Regressions', value: regressionSummary(n.extra), inline: false }
         );
         break;
       }
-      
+
       default:
         title = 'Notification';
-        description = JSON.stringify(data);
+        description = JSON.stringify(n.extra);
     }
-    
+
     return {
       embeds: [{
         title,
@@ -104,21 +88,5 @@ export async function sendDiscordNotification(
   event: DispatchEvent,
   logger?: Logger
 ): Promise<NotificationResult> {
-  const timestamp = new Date().toISOString();
-  
-  try {
-    const response = await postWithRetry(webhookUrl, JSON.stringify(formatDiscordPayload(event)), {}, logger);
-    
-    if (!response.ok) {
-      const text = await response.text();
-      return { channel: 'discord', success: false, error: text, timestamp };
-    }
-    
-    logger?.debug('Discord notification sent', { type: event.type });
-    return { channel: 'discord', success: true, timestamp };
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    logger?.error('Failed to send Discord notification', { error });
-    return { channel: 'discord', success: false, error, timestamp };
-  }
+  return sendWebhook('discord', webhookUrl, formatDiscordPayload(event), event.type, logger);
 }
