@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
 import { outputRoot } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
+import { timingSafeEqual } from '../auth/timing-safe.js';
 
 const logger = createLogger('ai-arena:auth');
 
@@ -232,13 +233,6 @@ function writeGeneratedPasswordFile(password: string): void {
       'password file. Set DASHBOARD_PASSWORD explicitly to log in.\n',
     );
   }
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  const key = Buffer.alloc(32, 0);
-  const ha = crypto.createHmac('sha256', key).update(a).digest();
-  const hb = crypto.createHmac('sha256', key).update(b).digest();
-  return crypto.timingSafeEqual(ha, hb);
 }
 
 export function verifyCredentials(cfg: AuthConfig, username: string, password: string): boolean {

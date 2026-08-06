@@ -9,14 +9,10 @@ import {
   getUserRolesByUserId, assignUserRole, unassignUserRole,
   countUserRoles, listRoles, insertRole, countRoles,
 } from '../../db/query.js';
+import { hashPassword } from '../../auth/password.js';
 
 function now(): string {
   return new Date().toISOString();
-}
-
-async function hashPassword(password: string): Promise<string> {
-  const argon2 = await import('argon2');
-  return argon2.hash(password, { type: argon2.argon2id });
 }
 
 async function seedDefaultRoles(): Promise<void> {
