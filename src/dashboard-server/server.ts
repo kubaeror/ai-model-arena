@@ -36,6 +36,7 @@ import { createBudgetRouter } from './routes/budget.js';
 import { createSchedulesRouter } from './routes/schedules.js';
 import { createRegressionRouter } from './routes/regression.js';
 import { createSecretsRouter } from './routes/secrets.js';
+import { createNotificationsRouter } from './routes/notifications.js';
 import { registerRunnerRoutes } from './routes/runners.js';
 import { registerQueueRoutes } from './routes/queues.js';
 import { createPromptsRouter } from './routes/prompts.js';
@@ -96,6 +97,15 @@ async function start(): Promise<void> {
   // re-syncing on add/remove, and a missing/empty YAML sync is a warning.
   const { syncSchedulesToDb } = await import('../scheduler/manager.js');
   await syncSchedulesToDb(path.join(root, 'configs', 'schedules.yaml'), logger);
+
+  // Notification outbox: retry failed deliveries every 30s (non-fatal).
+  const { deliverDueNotifications } = await import('../notifications/outbox.js');
+  const outboxTimer = setInterval(() => {
+    deliverDueNotifications(logger).catch((e) =>
+      logger.warn('Notification outbox delivery failed', { error: String(e) }),
+    );
+  }, 30_000);
+  if (outboxTimer.unref) outboxTimer.unref();
 
   const app = express();
   const corsOrigins = allowedOrigins.length
@@ -275,6 +285,7 @@ async function start(): Promise<void> {
   app.use('/api/webhooks', requireAuth(auth), requireRole('admin'), createWebhooksRouter());
   app.use('/api/providers', requireAuth(auth), requireRole('admin'), createProvidersRouter());
   app.use('/api/secrets', requireAuth(auth), requireRole('admin'), createSecretsRouter());
+  app.use('/api/notifications', requireAuth(auth), requireRole('admin'), createNotificationsRouter());
   app.use('/api/catalog', requireAuth(auth), requireRole('viewer'), createCatalogRouter());
   app.use('/api/metrics', requireAuth(auth), requireRole('viewer'), createMetricsRouter());
   app.use('/api/cache', requireAuth(auth), requireRole('viewer'), createCacheRouter());
@@ -391,6 +402,7 @@ async function start(): Promise<void> {
 
   const shutdown = (): void => {
     logger.info('Shutting down dashboard server...');
+    clearInterval(outboxTimer);
     hub.close();
     stopCatalogCron();
     server.close(() => {

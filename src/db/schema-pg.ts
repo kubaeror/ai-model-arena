@@ -374,6 +374,22 @@ export const judge_scores = pgTable('judge_scores', {
   uniqueIndex('uq_judge_scores_run_model').on(table.run_id, table.model),
 ]);
 
+export const notifications = pgTable('notifications', {
+  id: text('id').primaryKey(),
+  event_type: text('event_type').notNull(),
+  channel: text('channel').notNull(),
+  payload_json: text('payload_json').notNull(),
+  status: text('status').notNull().default('pending'), // pending | delivered | failed
+  attempts: integer('attempts').notNull().default(0),
+  last_error: text('last_error'),
+  created_at: text('created_at').notNull(),
+  next_attempt_at: text('next_attempt_at'),
+  delivered_at: text('delivered_at'),
+}, (table) => [
+  index('idx_notifications_due').on(table.status, table.next_attempt_at),
+  index('idx_notifications_created').on(table.created_at),
+]);
+
 // ── Legacy type exports (kept for existing consumers) ──
 
 export interface ProviderRow {
@@ -501,3 +517,4 @@ export type DbOutputMapping = InferSelectModel<typeof output_mappings>;
 export type DbSchedule = InferSelectModel<typeof schedules>;
 export type DbToolCallStat = InferSelectModel<typeof tool_call_stats>;
 export type DbJudgeScore = InferSelectModel<typeof judge_scores>;
+export type DbNotification = InferSelectModel<typeof notifications>;
