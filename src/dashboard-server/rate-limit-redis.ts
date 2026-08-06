@@ -25,13 +25,17 @@ export async function redisCheckRateLimit(
   windowMs: number,
 ): Promise<RateLimitResult> {
   const { createQueue } = await import('../queue/index.js');
-  const queue = createQueue();
+  const { getSharedRedisClient } = await import('../queue/redis.js');
+  // Side-effect: registers the shared ioredis client (keyed by REDIS_URL) in
+  // the queue module when QUEUE_DRIVER=redis, mirroring the previous direct
+  // access of the queue's private client.
+  createQueue();
 
   // Access the underlying Redis client for rate limiting.
-  // The RedisStreamQueue exposes a private redis client — we use a simple
-  // fallback approach: use the shared Redis connection from the queue module.
+  // The RedisStreamQueue registers a shared ioredis client per config URL;
+  // we look it up here instead of reaching into the queue instance.
   try {
-    const redis = (queue as any).redis;
+    const redis = getSharedRedisClient(process.env.REDIS_URL ?? '');
     if (!redis) throw new Error('no redis client');
 
     const now = Date.now();

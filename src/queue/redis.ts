@@ -13,6 +13,11 @@ import { queueDepth, dlqDepth } from '../observability/metrics.js';
  */
 const sharedClients = new Map<string, Redis>();
 
+/** Return the shared ioredis client for a config URL, or null. */
+export function getSharedRedisClient(url: string): Redis | null {
+  return sharedClients.get(url) ?? null;
+}
+
 export class RedisStreamQueue implements TaskQueue {
   private redis: Redis;
   private config: RedisQueueConfig;

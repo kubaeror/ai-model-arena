@@ -66,7 +66,7 @@ export async function upsertCustomProvider(
 
 export async function listCustomProviders(): Promise<ProviderRow[]> {
   const db = getDrizzleDb();
-  return db.select().from(providers).where(eq(providers.is_builtin, 0)).orderBy(providers.id) as any;
+  return db.select().from(providers).where(eq(providers.is_builtin, 0)).orderBy(providers.id);
 }
 
 export async function deleteCustomProvider(id: string): Promise<void> {

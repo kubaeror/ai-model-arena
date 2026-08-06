@@ -10,6 +10,12 @@ interface PricingRow {
   cache_write: number | null;
 }
 
+interface Over200kRow {
+  input: number | null;
+  output: number | null;
+  cache_read: number | null;
+}
+
 const pricingCache = new Map<string, PricingRow>();
 
 /** Cache key includes the DB identity so tests and DB swaps never serve stale cross-DB entries. */
@@ -40,8 +46,8 @@ async function queryModelPricing(modelId: string): Promise<PricingRow | null> {
   const rows = await db.select({
     input: pricing.input, output: pricing.output,
     cache_read: pricing.cache_read, cache_write: pricing.cache_write,
-  }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} = 0`)).limit(1) as any[];
-  let direct = rows[0] as PricingRow | null;
+  }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} = 0`)).limit(1) as PricingRow[];
+  let direct = rows[0] ?? null;
   if (direct && (direct.input != null || direct.output != null)) return direct;
   // Fall back: treat `modelId` as a friendly name and resolve via the catalog.
   const modelRows = await db.select({ id: models.id }).from(models).where(sql`${models.name} = ${modelId} OR ${models.id} = ${modelId}`).limit(1);
@@ -49,7 +55,7 @@ async function queryModelPricing(modelId: string): Promise<PricingRow | null> {
   const fallback = await db.select({
     input: pricing.input, output: pricing.output,
     cache_read: pricing.cache_read, cache_write: pricing.cache_write,
-  }).from(pricing).where(and(eq(pricing.model_id, modelRows[0].id), sql`${pricing.tier_size} = 0`)).limit(1) as any[];
+  }).from(pricing).where(and(eq(pricing.model_id, modelRows[0].id), sql`${pricing.tier_size} = 0`)).limit(1) as PricingRow[];
   return fallback[0] ?? null;
 }
 
@@ -97,22 +103,23 @@ async function getTieredPricing(modelId: string): Promise<{ input: number; outpu
       input: pricing.over_200k_input,
       output: pricing.over_200k_output,
       cache_read: pricing.over_200k_cache_read,
-    }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.over_200k_input} IS NOT NULL`)).limit(1) as any[];
-    if (!rows.length || rows[0].input == null) return null;
-    let output = rows[0].output as number | null;
+    }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.over_200k_input} IS NOT NULL`)).limit(1) as Over200kRow[];
+    const row = rows[0];
+    if (!row || row.input == null) return null;
+    let output = row.output;
     if (output == null) {
       // Prefer the largest tier's output price over falling back to the input price.
       const tierRows = await db.select({ output: pricing.output })
         .from(pricing)
         .where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} > 200000`))
         .orderBy(desc(pricing.tier_size))
-        .limit(1) as any[];
-      output = tierRows[0]?.output ?? rows[0].input;
+        .limit(1) as Array<{ output: number | null }>;
+      output = tierRows[0]?.output ?? row.input;
     }
     return {
-      input: rows[0].input,
-      output: output ?? rows[0].input,
-      cache_read: rows[0].cache_read as number | null,
+      input: row.input,
+      output: output ?? row.input,
+      cache_read: row.cache_read,
     };
   } catch {
     return null;

@@ -34,7 +34,7 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
   const rec = await getRunRecord(runId);
   if (!rec || rec.perModel.length === 0) return;
 
-  const catalog = (await db.select({ id: models.id, name: models.name, provider_id: models.provider_id }).from(models)).map((r: any) => ({ id: r.id, name: r.name, provider_id: r.provider_id })) as CatalogEntry[];
+  const catalog = (await db.select({ id: models.id, name: models.name, provider_id: models.provider_id }).from(models)) as CatalogEntry[];
   const calls = await listModelCalls(runId);
   const callsBySession = new Map<string, typeof calls>();
   for (const c of calls) {
