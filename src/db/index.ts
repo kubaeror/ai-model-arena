@@ -2,17 +2,15 @@
  * Database driver dispatcher.
  *
  * Reads `DB_DRIVER` env var (`sqlite` | `postgres`) and routes init/get/close
- * to the correct backend.
+ * to the correct backend. SQLite is the default; Postgres is fully supported
+ * by the Drizzle ORM layer (migrations, schema, db/query/* helpers).
  *
- * SQLite is the default and fully supported across all consumers.
- *
- * Postgres is partially supported: the Drizzle ORM layer (migrations, schema)
- * works end-to-end, but raw-SQL consumers (runs.ts, model-resolver.ts,
- * session/store.ts, auth/rbac.ts, providers/custom.ts, catalog/*, several
- * dashboard routes, etc.) use `better-sqlite3` and need migration to
- * Drizzle ORM queries via `getDrizzleDb()` for full Postgres compat.
+ * `getDb()` (raw better-sqlite3 client) is reserved for SQLite-only code and
+ * throws under Postgres on purpose; all Postgres-capable code must use
+ * `getDrizzleDb()` + `db/query/*` helpers, which are dialect-neutral.
  */
 
+import { sql } from 'drizzle-orm';
 import { initDb as initSqlite, getDb as getSqlite, getDrizzleClient as getSqliteDrizzle, closeDb as closeSqlite } from './client.js';
 import { initPostgres, getPgClient, closePostgres } from './postgres.js';
 import { dbPath } from '../paths.js';
@@ -71,6 +69,20 @@ export function getDrizzleDb(): any {
 
 export function getDriver(): 'sqlite' | 'postgres' {
   return _driver;
+}
+
+/** Driver-aware health check: true when the active database answers SELECT 1. */
+export async function pingDb(): Promise<boolean> {
+  try {
+    if (_driver === 'postgres') {
+      await getPgClient().execute(sql`SELECT 1`);
+    } else {
+      await getSqliteDrizzle().run(sql`SELECT 1`);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function closeDb(): Promise<void> {

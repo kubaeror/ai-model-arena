@@ -11,7 +11,7 @@ import { findProjectRoot, dbPath } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { startOtel } from '../observability/otel.js';
 import { metricsHandler } from '../observability/metrics.js';
-import { initDb, closeDb, getDriver } from '../db/index.js';
+import { initDb, closeDb, pingDb } from '../db/index.js';
 import { ensureFresh } from '../catalog/cache.js';
 import { startCatalogCron, stopCatalogCron } from '../catalog/cron.js';
 import { loadAuthConfig, requireAuth, verifyCredentials, signToken, revokeToken, extractBearerToken, setTokenCookie, clearTokenCookie, type AuthedRequest } from './auth.js';
@@ -145,18 +145,7 @@ async function start(): Promise<void> {
     legacyHeaders: false,
   });
   app.get('/health', healthLimiter, async (_req, res) => {
-    let dbOk = false;
-    try {
-      if (getDriver() === 'postgres') {
-        const { getPgPool } = await import('../db/postgres.js');
-        await getPgPool().query('SELECT 1');
-        dbOk = true;
-      } else {
-        const { getDrizzleDb } = await import('../db/index.js');
-        await getDrizzleDb().run('SELECT 1');
-        dbOk = true;
-      }
-    } catch { /* db not ready */ }
+    const dbOk = await pingDb();
     res.status(dbOk ? 200 : 503).json({
       status: dbOk ? 'healthy' : 'degraded',
       uptime: process.uptime(),

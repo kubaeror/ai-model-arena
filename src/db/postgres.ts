@@ -36,9 +36,32 @@ export async function migratePostgres(client: PgClient): Promise<void> {
   await migrate(client, { migrationsFolder: './drizzle/pg' });
 }
 
+/**
+ * Empty all `public` schema tables (used only under `PG_TEST_RESET=1`, set by
+ * the `test:db-pg` script) so each test-file process sees the same blank
+ * database that SQLite's `:memory:` init gives the sqlite suite.
+ *
+ * The Drizzle migration journal lives in its own `drizzle` schema and is
+ * deliberately untouched, so re-running `migratePostgres()` stays a no-op.
+ */
+export async function resetPostgresTables(): Promise<void> {
+  if (!pgPool) throw new Error('Postgres not initialized — call initPostgres() first');
+  const { rows } = await pgPool.query<{ tablename: string }>(
+    "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+  );
+  const tables = rows.map((r) => r.tablename);
+  if (tables.length === 0) return;
+  await pgPool.query(
+    `TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(', ')} RESTART IDENTITY CASCADE`
+  );
+}
+
 export async function closePostgres(): Promise<void> {
   if (pgPool) {
     try {
+      if (process.env.PG_TEST_RESET === '1') {
+        await resetPostgresTables();
+      }
       await Promise.race([
         pgPool.end(),
         new Promise((_, reject) => setTimeout(() => reject(new Error('Pool end timed out after 5s')), 5_000)),

@@ -27,7 +27,7 @@
     "dashboard:build": "tsc && npm --prefix src/dashboard-client run build",
     "dashboard:start": "node dist/dashboard-server/server.js",
     "e2e": "playwright test",
-    "test:db-pg": "DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena npm run db:migrate && DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena tsx --test tests/db/postgres-smoke.test.ts"
+    "test:db-pg": "DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena npm run db:migrate && DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena PG_TEST_RESET=1 NODE_OPTIONS=\"--import=./tests/helpers/pg-test-reset.ts\" tsx --test --test-concurrency=1 tests/db/**/*.test.ts tests/catalog/**/*.test.ts tests/lineage/**/*.test.ts tests/metrics/writeback.test.ts tests/providers/custom.test.ts tests/runner/checkpoint*.test.ts tests/session/**/*.test.ts tests/worker/**/*.test.ts"
   },
   "engines": {
     "node": ">=22.22.0"

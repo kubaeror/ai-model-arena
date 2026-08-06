@@ -1,4 +1,4 @@
-import { getDrizzleDb, getDb } from '../db/index.js';
+import { getDrizzleDb, getDriver } from '../db/index.js';
 import { pricing, models } from '../db/schema.js';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import { type ModelPricing, type CostTokenUsage, type CostBreakdown } from './types.js';
@@ -20,11 +20,7 @@ const pricingCache = new Map<string, PricingRow>();
 
 /** Cache key includes the DB identity so tests and DB swaps never serve stale cross-DB entries. */
 function cacheKey(modelId: string): string {
-  try {
-    return `${getDb().name}|${modelId}`;
-  } catch {
-    return `postgres|${modelId}`;
-  }
+  return `${getDriver()}|${modelId}`;
 }
 
 /** Look up per-model pricing from the SQLite catalog. Returns null if not found. */
