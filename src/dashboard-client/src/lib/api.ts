@@ -530,6 +530,60 @@ export async function deleteOutputMapping(id: string): Promise<{ ok: boolean }> 
   return apiFetch(`/api/output-mappings/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+// ── Users / Roles (admin only) ───────────────────────────────────────────────
+export interface ArenaUser {
+  id: string;
+  username: string;
+  created_at: string;
+  roles: string[];
+}
+
+export interface ArenaRole {
+  id: string;
+  description: string;
+}
+
+export async function listUsers(): Promise<ArenaUser[]> {
+  const r = await apiFetch<{ users: ArenaUser[] }>('/api/users');
+  return r.users;
+}
+
+export async function listUserRoles(): Promise<ArenaRole[]> {
+  const r = await apiFetch<{ roles: ArenaRole[] }>('/api/users/roles');
+  return r.roles;
+}
+
+export async function createUser(username: string, password: string): Promise<ArenaUser> {
+  return apiFetch<ArenaUser>('/api/users', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function updateUser(id: string, opts: { username?: string; password?: string }): Promise<unknown> {
+  return apiFetch(`/api/users/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(opts),
+  });
+}
+
+export async function deleteUser(id: string): Promise<unknown> {
+  return apiFetch(`/api/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function assignUserRole(id: string, roleId: string): Promise<unknown> {
+  return apiFetch(`/api/users/${encodeURIComponent(id)}/roles`, {
+    method: 'POST',
+    body: JSON.stringify({ roleId }),
+  });
+}
+
+export async function removeUserRole(id: string, roleId: string): Promise<unknown> {
+  return apiFetch(`/api/users/${encodeURIComponent(id)}/roles/${encodeURIComponent(roleId)}`, {
+    method: 'DELETE',
+  });
+}
+
 // ── Audit ────────────────────────────────────────────────────────────────────
 export interface AuditEntry {
   id: number;
