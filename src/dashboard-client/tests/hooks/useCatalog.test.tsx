@@ -5,16 +5,11 @@ import { useCatalogModels } from '../../src/hooks/useCatalog';
 import type { ReactNode } from 'react';
 
 vi.mock('../../src/lib/api', () => ({
-  api: {
-    get: vi.fn().mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({
-        data: [
-          { id: 'openai/gpt-4o', name: 'GPT-4o', provider_id: 'openai', reasoning: 0, tool_call: 1, context_limit: 128000, input: 2.5, output: 10, status: null },
-        ],
-      }),
-    }),
-  },
+  apiFetch: vi.fn().mockResolvedValue({
+    data: [
+      { id: 'openai/gpt-4o', name: 'GPT-4o', provider_id: 'openai', reasoning: 0, tool_call: 1, context_limit: 128000, input: 2.5, output: 10, status: null },
+    ],
+  }),
 }));
 
 function wrapper({ children }: { children: ReactNode }) {

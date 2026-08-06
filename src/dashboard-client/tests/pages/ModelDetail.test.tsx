@@ -7,7 +7,7 @@ import { ModelDetail } from '../../src/pages/ModelDetail';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
 
-const { modelDetail, apiGetMock } = vi.hoisted(() => {
+const { modelDetail, apiFetchMock } = vi.hoisted(() => {
   const modelDetail = {
     model: {
       id: 'gpt-4o',
@@ -36,9 +36,9 @@ const { modelDetail, apiGetMock } = vi.hoisted(() => {
   };
   return {
     modelDetail,
-    apiGetMock: vi.fn().mockImplementation(async (path: string) => {
+    apiFetchMock: vi.fn().mockImplementation(async (path: string) => {
       if (path.startsWith('/api/catalog/models/')) {
-        return { ok: true, json: async () => modelDetail };
+        return modelDetail;
       }
       throw new Error(`unexpected GET ${path}`);
     }),
@@ -47,7 +47,7 @@ const { modelDetail, apiGetMock } = vi.hoisted(() => {
 
 vi.mock('../../src/lib/api', async () => {
   const actual = await vi.importActual('../../src/lib/api');
-  return { ...actual, api: { ...actual.api, get: apiGetMock } };
+  return { ...actual, apiFetch: apiFetchMock };
 });
 
 function renderWithProviders(ui: React.ReactElement) {
