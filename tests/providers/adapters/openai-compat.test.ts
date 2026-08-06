@@ -203,7 +203,7 @@ test('OpenAICompatAdapter refuses unconfigured placeholder base URLs', () => {
   };
   assert.throws(
     () => new OpenAICompatAdapter(desc, 'gpt-4o', { apiKey: 'k' }),
-    /unconfigured baseUrl/,
+    /unreplaced placeholder/,
   );
 });
 

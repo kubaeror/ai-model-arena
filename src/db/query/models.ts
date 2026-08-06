@@ -27,23 +27,6 @@ export async function getModelByNameOrId(nameOrId: string): Promise<(DbModel & {
   return rows[0] as any;
 }
 
-// ── Models (catalog listing) ──────────────────────────────────────────────
-
-export async function listModelsWithPricing(): Promise<any[]> {
-  const db = getDrizzleDb();
-  return db.select({
-    id: models.id, name: models.name, family: models.family,
-    provider_id: models.provider_id, reasoning: models.reasoning,
-    tool_call: models.tool_call, context_limit: models.context_limit,
-    output_limit: models.output_limit, status: models.status,
-    input: pricing.input, output: pricing.output,
-    cache_read: pricing.cache_read, cache_write: pricing.cache_write,
-  })
-    .from(models)
-    .leftJoin(pricing, and(eq(pricing.model_id, models.id), sql`${pricing.tier_size} = 0`))
-    .orderBy(models.name) as any;
-}
-
 // ── Dashboard: catalog + model helpers ────────────────────────────────────
 
 export async function listCatalogModels(filters: {

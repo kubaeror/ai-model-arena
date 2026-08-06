@@ -86,8 +86,8 @@ program
       if (!(await resolveModelForRun(name))) invalid.push(name);
     }
     if (invalid.length > 0) {
-      const { listModelsWithPricing } = await import('./db/query.js');
-      if ((await listModelsWithPricing()).length === 0) {
+      const { listCatalogModels } = await import('./db/query.js');
+      if ((await listCatalogModels({})).length === 0) {
         console.error('Catalog is empty — running models.dev sync…');
         const { fetchSync } = await import('./catalog/sync.js');
         const res = await fetchSync('models.dev');
@@ -103,8 +103,8 @@ program
       }
     }
     if (invalid.length > 0) {
-      const { listModelsWithPricing } = await import('./db/query.js');
-      const rows = await listModelsWithPricing();
+      const { listCatalogModels } = await import('./db/query.js');
+      const rows = await listCatalogModels({});
       const available = (rows as Array<{ name: string }>).map(r => r.name);
       console.error(`\nError: Unknown model(s): ${invalid.join(', ')}`);
       if (available.length > 0) {

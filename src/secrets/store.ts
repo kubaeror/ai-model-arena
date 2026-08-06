@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isKubernetes } from '../env/detect.js';
+import { SENSITIVE_KEYS } from './sensitive-keys.js';
 
 const SECRETS_DIR = '/etc/arena/secrets';
-const SENSITIVE_KEYS = /(api.?key|secret|password|token|auth|credential)/i;
 const K8S_SECRET_FILE_RE = /^[A-Za-z0-9_]+$/;
 
 interface SecretStoreOptions {

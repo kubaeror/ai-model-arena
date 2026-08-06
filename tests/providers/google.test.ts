@@ -11,7 +11,7 @@ const vertexDescriptor: ProviderDescriptor = {
 test('GoogleAdapter refuses unconfigured placeholder base URLs', () => {
   assert.throws(
     () => new GoogleAdapter(vertexDescriptor, 'gemini-2.0-flash', { apiKey: 'k' }),
-    /unconfigured baseUrl/,
+    /unreplaced placeholder/,
   );
 });
 

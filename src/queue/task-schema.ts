@@ -13,6 +13,7 @@ const TaskSchema = z.object({
   enqueuedAt: z.string().min(1),
   attempts: z.number().int().min(0).default(0),
   dueAt: z.number().int().optional(),
+  priority: z.number().int().min(0).max(255).optional(),
   idempotencyKey: z.string().optional(),
   _redisId: z.string().optional(),
   _traceparent: z.string().optional(),

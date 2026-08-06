@@ -12,21 +12,12 @@ export class OpenAICompatAdapter extends BaseAdapter implements ModelAdapter {
   private baseUrl?: string;
 
   constructor(descriptor: ProviderDescriptor, modelId: string, opts: CreateAdapterOpts) {
-    super(opts.logger);
+    super(opts.logger, opts.baseUrl ?? descriptor.apiBase, descriptor.id);
     this.descriptor = descriptor;
     this.modelId = modelId;
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? descriptor.apiBase;
     this.providerLabel = descriptor.id;
-    // Fail fast on unconfigured placeholder URLs (e.g. azure-openai's
-    // https://{resource}.openai.azure.com/openai/v1) instead of POSTing to a
-    // literal '{resource}' hostname and failing with a confusing DNS error.
-    if (/\{/.test(this.baseUrl ?? '')) {
-      throw new Error(
-        `Provider "${descriptor.id}" has an unconfigured baseUrl "${this.baseUrl}". ` +
-        `Set a concrete baseUrl in the provider settings (replace {resource}/{instance} placeholders).`,
-      );
-    }
   }
 
   supportsReasoning(): boolean { return true; }

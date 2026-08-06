@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { queryCacheLeaderboard } from '../../db/query.js';
-import { getCacheStates } from '../../catalog/cache.js';
+import { getCacheStates, ensureFresh } from '../../catalog/cache.js';
 import type { ApiKeyRequest } from '../auth-api-types.js';
 import { requireRole } from '../../auth/rbac.js';
 import { asyncHandler } from '../helpers.js';
@@ -29,15 +29,8 @@ export function createCacheRouter(): Router {
       res.status(400).json({ error: 'source must be one of: models.dev, modelbench, zeroeval' });
       return;
     }
-    if (source === 'models.dev') {
-      const { fetchSync } = await import('../../catalog/sync.js');
-      const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
-      res.json(result);
-    } else {
-      const { fetchBenchmarks } = await import('../../catalog/benchmarks.js');
-      const result = await fetchBenchmarks(source as 'modelbench' | 'zeroeval', { force: true });
-      res.json(result);
-    }
+    const result = await ensureFresh(source as 'models.dev' | 'modelbench' | 'zeroeval', { force: true });
+    res.json(result ?? { ok: true });
   }));
 
   return router;

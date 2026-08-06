@@ -59,7 +59,7 @@ export function getDb(): DbClient {
  * Returns a loosely-typed client because SQLite and Postgres Drizzle clients
  * have incompatible TypeScript generics (union of two disjoint signatures),
  * but the same runtime API. Consumers should cast to `any` or use the typed
- * query helpers in `db/query.ts`.
+ * query helpers in `db/query.ts` (single barrel).
  */
 export function getDrizzleDb(): any {
   if (_driver === 'postgres') {
