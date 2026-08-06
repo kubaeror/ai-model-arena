@@ -365,35 +365,34 @@ export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAda
   await finalizeCore(runId, entries, logger, judgeAdapter);
 }
 
-let killSwitchActive = false;
-
-// Run-level cancellation signals — set when stopRun() is called, cleared on task completion
-const cancelledRuns = new Set<string>();
+import {
+  setKillSwitch as setKillSwitchSignal,
+  isKillSwitchActive as isKillSwitchSignalActive,
+  isRunCancelled as isRunCancelledSignal,
+  markRunCancelled as markRunCancelledSignal,
+  clearRunCancelled as clearRunCancelledSignal,
+} from './run-signals.js';
 
 /** Activate global kill switch — stops new runs, drains ongoing. */
-export function activateKillSwitch(): void { killSwitchActive = true; }
+export function activateKillSwitch(): Promise<void> { return setKillSwitchSignal(true); }
 
 /** Deactivate global kill switch. */
-export function deactivateKillSwitch(): void { killSwitchActive = false; }
+export function deactivateKillSwitch(): Promise<void> { return setKillSwitchSignal(false); }
 
 /** Check if kill switch is active. */
-export function isKillSwitchActive(): boolean { return killSwitchActive; }
+export function isKillSwitchActive(): Promise<boolean> { return isKillSwitchSignalActive(); }
 
 /** Check if a specific run has been cancelled. */
-export function isRunCancelled(runId: string): boolean {
-  return cancelledRuns.has(runId);
-}
+export function isRunCancelled(runId: string): Promise<boolean> { return isRunCancelledSignal(runId); }
 
 /** Mark a run's cancellation as acknowledged (cleared by runner after stopping). */
-export function clearRunCancelled(runId: string): void {
-  cancelledRuns.delete(runId);
-}
+export function clearRunCancelled(runId: string): Promise<void> { return clearRunCancelledSignal(runId); }
 
 /** Stop a running run (marks as stopped in the index and signals cancellation). */
 export async function stopRun(runId: string): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
-  cancelledRuns.add(runId);
+  await markRunCancelledSignal(runId);
   await updateRun(runId, (r) => { r.status = 'stopped'; });
 }
 
@@ -401,7 +400,7 @@ export async function stopRun(runId: string): Promise<void> {
 export async function restartRun(runId: string): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
-  cancelledRuns.delete(runId);
+  await clearRunCancelledSignal(runId);
   const queue = createQueue();
   const ts = timestamp();
   const idemKey = makeIdempotencyKey(rec.scenario, rec.perModel.map((m) => m.model));
