@@ -156,6 +156,43 @@ test('releaseReservation for a never-persisted amount leaves the state file unto
   }
 });
 
+test('expired reservations no longer count against the budget', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    writeState(statePath, {
+      models: {},
+      reservations: { 'gpt-4o': [{ amount: 6, dailyKey: today, expiresAt: Date.now() - 1000 }] },
+    });
+    loadBudgetConfig(configPath);
+    // 6 (expired reservation) + 5 = 11 > 10 limit — but the reservation is stale
+    const result = reserveBudget('gpt-4o', 5, rootDir);
+    assert.equal(result.ok, true);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('live reservations still count against the budget', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    writeState(statePath, {
+      models: {},
+      reservations: { 'gpt-4o': [{ amount: 6, dailyKey: today, expiresAt: Date.now() + 60_000 }] },
+    });
+    loadBudgetConfig(configPath);
+    const result = reserveBudget('gpt-4o', 5, rootDir);
+    assert.equal(result.ok, false);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('addSpend ignores prototype-polluting model names', async () => {
   resetBudgetCache();
   const { tmp, rootDir, configPath } = setup();
