@@ -1,4 +1,5 @@
 import { eq, and, count, inArray } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { getDrizzleDb } from '../index.js';
 import { sessions, messages, model_calls } from '../schema.js';
 import type { DbSession } from '../schema.js';
@@ -40,7 +41,7 @@ export async function listSessionsWithCounts(opts: {
   status?: string; model?: string; limit: number; offset: number;
 }): Promise<{ sessions: any[]; total: number }> {
   const db = getDrizzleDb();
-  const conds: any[] = [];
+  const conds: SQL[] = [];
   if (opts.status) conds.push(eq(sessions.status, opts.status));
   if (opts.model) conds.push(eq(sessions.model, opts.model));
   const where = conds.length ? and(...conds) : undefined;

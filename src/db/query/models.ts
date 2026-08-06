@@ -1,4 +1,5 @@
 import { eq, and, sql, desc, asc, gte, like, getTableColumns } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { getDrizzleDb } from '../index.js';
 import { models, model_providers, providers, pricing } from '../schema.js';
 import type { DbModel } from '../schema.js';
@@ -50,7 +51,7 @@ export async function listCatalogModels(filters: {
   minContext?: number; sort?: string; q?: string;
 }): Promise<any[]> {
   const db = getDrizzleDb();
-  const conds: any[] = [];
+  const conds: SQL[] = [];
   if (filters.provider) conds.push(eq(models.provider_id, filters.provider));
   if (filters.reasoning) conds.push(eq(models.reasoning, 1));
   if (filters.toolCall) conds.push(eq(models.tool_call, 1));
