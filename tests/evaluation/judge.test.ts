@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
-import { extractJsonObject, computeAverageScore, runJudgeScoring } from '../../src/evaluation/judge.js';
+import { extractJsonObject, computeAverageScore, runJudgeScoring, resolveJudgeApiKey } from '../../src/evaluation/judge.js';
 import type { EvaluationConfig } from '../../src/evaluation/types.js';
 
 const tmpDirs: string[] = [];
@@ -82,6 +82,19 @@ test('computeAverageScore falls back to unweighted when maxScore is missing', ()
     { category: 'b', score: 4 },
   ];
   assert.equal(computeAverageScore(scores), 6);
+});
+
+test('resolveJudgeApiKey reads from the secret store, not process.env directly', () => {
+  const prev = process.env.OPENAI_API_KEY;
+  try {
+    delete process.env.OPENAI_API_KEY;
+    assert.equal(resolveJudgeApiKey('OPENAI_API_KEY'), undefined);
+    process.env.OPENAI_API_KEY = 'sk-test-123';
+    assert.equal(resolveJudgeApiKey('OPENAI_API_KEY'), 'sk-test-123');
+  } finally {
+    if (prev === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = prev;
+  }
 });
 
 test('runJudgeScoring returns a verdict but does not persist judge_scores (single persistence site is run-lifecycle)', async () => {
