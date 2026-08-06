@@ -16,13 +16,19 @@ function mask(v: string): string {
 }
 
 /**
- * Reject envVar keys that could break .env parsing or inject lines into the
- * file (bare-metal store). k8s API keys (alphanumeric, '-', '_', '.') and
- * regex-special store keys remain settable — only whitespace, '=' and empty
- * names are dangerous on the write path.
+ * Object.prototype keys that must never be used as env var / secret names —
+ * writing them as object properties could mutate the prototype chain.
+ */
+const RESERVED_ENV_VAR_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Reject envVar keys that could break .env parsing, inject lines into the
+ * file (bare-metal store), collide with Object.prototype keys, or fail k8s
+ * secret key validation. Only k8s-compatible names (alphanumeric, '-', '_',
+ * '.') are settable.
  */
 export function isValidEnvVarName(name: string): boolean {
-  return name.length > 0 && !/[\s=]/.test(name);
+  return /^[-._A-Za-z0-9]+$/.test(name) && !RESERVED_ENV_VAR_NAMES.has(name);
 }
 
 /** Secret values must not contain line breaks (would break .env quoting). */
@@ -117,7 +123,7 @@ export function createSecretsRouter(): Router {
         await k8sApi.patchNamespacedSecret({
           name,
           namespace: ns,
-          body: { stringData: { [envVar]: value } },
+          body: { stringData: Object.fromEntries([[envVar, value]]) },
         });
       } catch (patchErr: unknown) {
         const e = patchErr as { response?: { statusCode?: number }; statusCode?: number };
@@ -126,7 +132,7 @@ export function createSecretsRouter(): Router {
             namespace: ns,
             body: {
               metadata: { name, namespace: ns },
-              stringData: { [envVar]: value },
+              stringData: Object.fromEntries([[envVar, value]]),
             },
           });
         } else {
@@ -160,7 +166,7 @@ export function createSecretsRouter(): Router {
         await k8sApi.patchNamespacedSecret({
           name,
           namespace: ns,
-          body: { stringData: { [envVar]: null } },
+          body: { stringData: Object.fromEntries([[envVar, null]]) },
         });
       } catch (err: unknown) {
         const e = err as { response?: { statusCode?: number }; statusCode?: number };

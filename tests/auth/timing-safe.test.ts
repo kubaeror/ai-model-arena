@@ -11,8 +11,8 @@ test('timingSafeEqual returns false for differing strings of equal length', () =
 });
 
 test('timingSafeEqual returns false for strings of differing length', () => {
-  // The pre-hash makes this safe: crypto.timingSafeEqual itself would throw
-  // on unequal buffer lengths, so the pre-hash is required for correctness.
+  // Values are padded to the longer length before comparing, so this never
+  // throws on unequal buffer lengths.
   assert.equal(timingSafeEqual('short', 'a-much-longer-string'), false);
 });
 
