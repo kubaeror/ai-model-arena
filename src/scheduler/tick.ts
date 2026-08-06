@@ -7,6 +7,14 @@ import type { RunStartOptions } from '../orchestrator/run-lifecycle.js';
 
 const logger = createLogger('ai-arena:scheduler');
 
+function nextCounters(base: { consecutiveFailures?: number; totalRuns?: number; totalFailures?: number }, failed: boolean): { consecutiveFailures: number; totalRuns: number; totalFailures: number } {
+  return {
+    consecutiveFailures: failed ? (base.consecutiveFailures ?? 0) + 1 : 0,
+    totalRuns: (base.totalRuns ?? 0) + 1,
+    totalFailures: (base.totalFailures ?? 0) + (failed ? 1 : 0),
+  };
+}
+
 export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions: RunStartOptions) => Promise<unknown> } = {}): Promise<{ ticked: string[]; failures: string[] }> {
   const now = opts.now?.toISOString() ?? new Date().toISOString();
   const start = opts.startRunFn ?? (await import('../orchestrator/run-lifecycle.js')).startRun;
@@ -67,21 +75,18 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
       await updateScheduleRun(scheduleId, now, backoff);
       scheduleFailures.inc({ schedule_id: scheduleId });
       failures.push(scheduleId);
-      const consecutiveFailures = (state.consecutiveFailures ?? 0) + 1;
+      const counters = nextCounters(state, true);
+      const consecutiveFailures = counters.consecutiveFailures;
       updateScheduleState(scheduleId, {
         status: 'error',
         lastError: 'Failed to enqueue one or more model tasks',
-        consecutiveFailures,
-        totalRuns: (state.totalRuns ?? 0) + 1,
-        totalFailures: (state.totalFailures ?? 0) + 1,
+        ...counters,
       });
       // Seed counters from the DB row so restarts don't regress totals.
       await updateScheduleStatus(scheduleId, {
         lastStatus: 'error',
         lastError: 'Failed to enqueue one or more model tasks',
-        consecutiveFailures: (row.consecutive_failures ?? 0) + 1,
-        totalRuns: (row.total_runs ?? 0) + 1,
-        totalFailures: (row.total_failures ?? 0) + 1,
+        ...nextCounters({ consecutiveFailures: row.consecutive_failures, totalRuns: row.total_runs, totalFailures: row.total_failures }, true),
       });
 
       if (consecutiveFailures >= 3) {
@@ -95,14 +100,12 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
       ticked.push(scheduleId);
       updateScheduleState(scheduleId, {
         status: 'idle',
-        consecutiveFailures: 0,
-        totalRuns: (state.totalRuns ?? 0) + 1,
+        ...nextCounters(state, false),
       });
       // Seed counters from the DB row so restarts don't regress totals.
       await updateScheduleStatus(scheduleId, {
         lastStatus: 'idle',
-        consecutiveFailures: 0,
-        totalRuns: (row.total_runs ?? 0) + 1,
+        ...nextCounters({ consecutiveFailures: row.consecutive_failures, totalRuns: row.total_runs, totalFailures: row.total_failures }, false),
       });
     }
   }
