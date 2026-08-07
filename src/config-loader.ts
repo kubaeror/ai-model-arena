@@ -46,7 +46,6 @@ export function loadYamlConfigSync<T>(opts: LoadYamlConfigOpts<T>): T {
   const resolved = path.resolve(opts.filePath);
   if (opts.cache && cache.has(resolved)) return cache.get(resolved) as T;
   let result: T;
-  // codeql[js/path-injection] filePath comes from operator-controlled CLI/env config or pre-validated scenario names (scenarios route: strict regex + isWithin).
   if (!fs.existsSync(resolved)) {
     if (opts.throwOnMissing || opts.fallback === undefined) {
       throw new Error(`Config file not found: ${opts.filePath}`);
@@ -54,7 +53,6 @@ export function loadYamlConfigSync<T>(opts: LoadYamlConfigOpts<T>): T {
     opts.logger?.warn(opts.missingMessage ?? `Config not found at ${resolved}, using defaults`);
     result = opts.fallback;
   } else {
-    // codeql[js/path-injection] Same callers as the existsSync suppression above.
     const content = fs.readFileSync(resolved, 'utf8');
     const parsed = load(content);
     const expanded = opts.expandEnv ? expandDeep(parsed) : parsed;

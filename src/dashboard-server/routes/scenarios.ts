@@ -78,15 +78,6 @@ function writeScenarioYaml(filePath: string, config: ScenarioConfig): ScenarioCo
 export function createScenariosRouter(): Router {
   const router = Router();
 
-  function resolveAndValidate(name: string): string | null {
-    // Allow only simple alphanumeric names — no path separators or shell chars.
-    if (!/^[a-zA-Z0-9_-]+$/.test(name)) return null;
-    const resolved = resolveScenarioPath(scenariosDir(), name);
-    // Defence in depth: confirm resolved path is within scenariosDir.
-    if (!isWithin(scenariosDir(), resolved)) return null;
-    return resolved;
-  }
-
   // GET /api/scenarios — list all
   router.get('/', (_req, res) => {
     const dir = scenariosDir();
@@ -106,10 +97,16 @@ export function createScenariosRouter(): Router {
 
   // GET /api/scenarios/:name — one scenario + its starter files
   router.get('/:name', (req, res) => {
-    const p = resolveAndValidate(req.params.name as string);
-    if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
+    // Validate inline so the guarded value reaches loadScenario: CodeQL only
+    // recognizes the startsWith sanitization pattern when it appears in the
+    // same function as the tainted value's use.
+    const name = req.params.name as string;
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
+    const p = resolveScenarioPath(scenariosDir(), name);
+    // Defence in depth: confirm resolved path is within scenariosDir.
+    if (!path.resolve(p).startsWith(path.resolve(scenariosDir()) + path.sep)) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
-      notFound(res, 'Scenario', req.params.name as string);
+      notFound(res, 'Scenario', name);
       return;
     }
     const scenario = loadScenario(p);
@@ -138,10 +135,15 @@ export function createScenariosRouter(): Router {
     // was previously passed straight to resolveScenarioPath(), which accepted
     // absolute paths and `../` traversal — allowing an editor to write a YAML
     // file to arbitrary filesystem locations (e.g. overwrite configs/api-keys.yaml
-    // to register an admin API key). resolveAndValidate() enforces a bare
+    // to register an admin API key). The inline guard enforces a bare
     // alphanumeric name and isWithin(scenariosDir()) on the resolved path.
-    const p = resolveAndValidate(parsed.name);
-    if (!p) {
+    const name = parsed.name;
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
+      return;
+    }
+    const p = resolveScenarioPath(scenariosDir(), name);
+    if (!path.resolve(p).startsWith(path.resolve(scenariosDir()) + path.sep)) {
       res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
       return;
     }
@@ -160,10 +162,12 @@ export function createScenariosRouter(): Router {
       res.status(403).json({ error: 'Permissive shell policy requires admin approval' });
       return;
     }
-    const p = resolveAndValidate(req.params.name as string);
-    if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
+    const name = req.params.name as string;
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
+    const p = resolveScenarioPath(scenariosDir(), name);
+    if (!path.resolve(p).startsWith(path.resolve(scenariosDir()) + path.sep)) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
-      notFound(res, 'Scenario', req.params.name as string);
+      notFound(res, 'Scenario', name);
       return;
     }
     const existing = loadScenario(p);
@@ -172,10 +176,18 @@ export function createScenariosRouter(): Router {
     // Validate the rename target the same way as POST: bare alphanumeric name,
     // resolved path must stay within scenariosDir(). Without this, a PUT with
     // body.name = "/etc/cron.d/evil.yaml" could write outside scenariosDir().
-    const target = newName !== existing.name ? resolveAndValidate(newName) : p;
-    if (!target) {
-      res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
-      return;
+    let target = p;
+    if (newName !== existing.name) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(newName)) {
+        res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
+        return;
+      }
+      const targetResolved = resolveScenarioPath(scenariosDir(), newName);
+      if (!path.resolve(targetResolved).startsWith(path.resolve(scenariosDir()) + path.sep)) {
+        res.status(400).json({ error: 'Invalid scenario name; must be alphanumeric with - or _ only' });
+        return;
+      }
+      target = targetResolved;
     }
 
     let starterFiles = body.starterFiles ?? existing.starterFiles;
@@ -195,10 +207,12 @@ export function createScenariosRouter(): Router {
 
   // DELETE /api/scenarios/:name
   router.delete('/:name', requireRole('editor'), (req, res) => {
-    const p = resolveAndValidate(req.params.name as string);
-    if (!p) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
+    const name = req.params.name as string;
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
+    const p = resolveScenarioPath(scenariosDir(), name);
+    if (!path.resolve(p).startsWith(path.resolve(scenariosDir()) + path.sep)) { res.status(400).json({ error: 'Invalid scenario name' }); return; }
     if (!fs.existsSync(p)) {
-      notFound(res, 'Scenario', req.params.name as string);
+      notFound(res, 'Scenario', name);
       return;
     }
     const scenario = loadScenario(p);
@@ -210,8 +224,8 @@ export function createScenariosRouter(): Router {
         fs.rmSync(tplDir, { recursive: true, force: true });
       }
     }
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: req.params.name as string });
-    res.json({ deleted: req.params.name as string });
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'scenario.delete', { type: 'scenario', id: name });
+    res.json({ deleted: name });
   });
 
   return router;
