@@ -1,5 +1,5 @@
 # ── build stage ──
-FROM node:22-bookworm-slim AS build
+FROM node:25-bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3=3.11.2-1+b1 make=4.3-4.1 g++=4:12.2.0-3 libargon2-dev=0~20171227-0.3+deb12u1 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
@@ -16,7 +16,7 @@ RUN npm run build
 RUN npm audit --audit-level=high --production && npm prune --production
 
 # ── dashboard client build ──
-FROM node:22-bookworm-slim AS client-build
+FROM node:25-bookworm-slim AS client-build
 WORKDIR /app/src/dashboard-client
 COPY src/dashboard-client/package*.json ./
 RUN npm ci
@@ -27,7 +27,7 @@ RUN npm run build
 # Healthchecks live in docker-compose.yml only (node one-liner on :4000 for the
 # dashboard). An image-level HEALTHCHECK would lie for the runner role, which
 # serves /metrics on :4001 and never binds :4000.
-FROM node:22-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libargon2-1=0~20171227-0.3+deb12u1 && rm -rf /var/lib/apt/lists/*
 # npm is not needed at runtime (CMD runs node directly). The base image's
 # bundled npm ships vulnerable transitive deps (brace-expansion, ip-address)
