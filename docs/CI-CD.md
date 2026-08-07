@@ -17,7 +17,7 @@ pull request ──▶ pr-checks ───────────────�
                                                                        ▼
 main ──▶ build-deploy ────────────────────────────────────────────┐  must pass
    (push)  typecheck · lint · test:coverage                        │
-           PG parity gate (migrations vs postgres:16.8)             │
+           PG parity gate (migrations vs postgres:18.4)             │
            client typecheck/test · build                            │
            multi-arch build+push (amd64+arm64, provenance+SBOM)     │
            CycloneDX SBOM artifact · Trivy (HIGH/CRITICAL gate)     │
@@ -121,7 +121,7 @@ Two jobs:
    the backend suite double-run (`npm run test:coverage` + the full
    `npm test`, added in `ci: double-run backend suite nightly` so a flake in
    one run doesn't silently pass), the Postgres migration parity gate
-   (`npm run test:db-pg` against a `postgres:16.8-alpine` container), client
+   (`npm run test:db-pg` against a `postgres:18.4-alpine` container), client
    typecheck + tests, `npm run build`, stub agent-loop smoke
    (`scripts/smoke-stub.mjs`), trace smoke (`scripts/trace-smoke-test.mjs`),
    `docker build`, and a docker-compose smoke against `/health`.

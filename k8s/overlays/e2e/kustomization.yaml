@@ -137,7 +137,7 @@ patches:
         selector:
           matchLabels:
             storage-tier: outputs
-  # Relocate PGDATA under the mount: the postgres:16 entrypoint chmods the data
+  # Relocate PGDATA under the mount: the postgres:18 entrypoint chmods the data
   # dir, and on kind's local-path volume the mount root is root-owned, so a
   # non-root postgres (uid 999, fsGroup-only group write) cannot chmod it and
   # initdb dies. A subdir the entrypoint creates itself is owned by uid 999.
