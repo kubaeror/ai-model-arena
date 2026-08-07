@@ -289,12 +289,12 @@ jobs:
             cytopia/yamllint:latest -f parsable \
             k8s configs .github/workflows .github/dependabot.yml docker-compose.yml
       - name: Markdownlint
-        # Vendored skill trees (.agents/, .opencode/, .superpowers/) and
-        # node_modules are excluded by linting project docs explicitly.
+        # Vendored skill trees (.agents/, .opencode/, .superpowers/), docs/
+        # and node_modules are excluded by linting project docs explicitly.
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo \
             davidanson/markdownlint-cli2:latest --config .markdownlint.json \
-            README.md AGENTS.md docs k8s/README.md src/dashboard-client/DESIGN.md
+            README.md AGENTS.md k8s/README.md src/dashboard-client/DESIGN.md
 
   dockerfile-lint:
     runs-on: ubuntu-latest
