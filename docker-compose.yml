@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16.8-alpine
+    image: postgres:18.4-alpine
     environment:
       POSTGRES_USER: arena
       POSTGRES_PASSWORD: arena
@@ -16,7 +16,7 @@ services:
       retries: 10
 
   redis:
-    image: redis:7.4-alpine
+    image: redis:8.10-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
