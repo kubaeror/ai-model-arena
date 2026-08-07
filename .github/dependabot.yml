@@ -16,6 +16,16 @@ updates:
     open-pull-requests-limit: 10
     versioning-strategy: increase
 
+  # Vendored skill docs tooling (.agents/skills/...) is third-party content,
+  # not part of the application; skip updates and security alerts for it.
+  - package-ecosystem: "npm"
+    directory: "/.agents/skills/kubernetes-skill/docs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    ignore:
+      - dependency-name: "*"
+
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
