@@ -10,7 +10,7 @@ labels:
     includeSelectors: false
 
 images:
-  - name: ghcr.io/kubaeror/ai-model-arena-runner
+  - name: ghcr.io/kubaeror/ai-model-arena
     newTag: PLACEHOLDER
 
 resources:

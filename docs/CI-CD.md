@@ -51,7 +51,7 @@ What happens next:
 1. `release.yaml` triggers on `push` of tags matching `v*` (a single shared
    concurrency group `release-main` serializes promotions across tags). It
    runs typecheck, lint, and `test:coverage`, then builds and pushes the
-   multi-arch image as `ghcr.io/<owner>/ai-model-arena-runner:v1.2.3` and
+   multi-arch image as `ghcr.io/<owner>/ai-model-arena:v1.2.3` and
    `:latest`.
 2. A CycloneDX SBOM is generated (`anchore/sbom-action`) and uploaded as a
    workflow artifact; Trivy gates on HIGH/CRITICAL findings (`exit-code: 1`,
@@ -79,7 +79,7 @@ gh release view v1.2.3
 # Image + signature/attestation in the registry
 cosign verify --certificate-identity-regexp 'https://github.com/.*/.github/workflows/release.yaml' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ghcr.io/<owner>/ai-model-arena-runner:v1.2.3
+  ghcr.io/<owner>/ai-model-arena:v1.2.3
 
 # Prod overlay now points at the release commit
 kubectl kustomize k8s/overlays/prod | grep newTag   # or read k8s/overlays/prod/kustomization.yaml

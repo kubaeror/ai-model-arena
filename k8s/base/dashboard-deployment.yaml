@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: db-migrate
-          image: ghcr.io/kubaeror/ai-model-arena-runner:PLACEHOLDER
+          image: ghcr.io/kubaeror/ai-model-arena:PLACEHOLDER
           command: ["node", "dist/scripts/db-migrate.js"]
           envFrom:
             - configMapRef:
@@ -51,7 +51,7 @@ spec:
               memory: 256Mi
       containers:
         - name: dashboard
-          image: ghcr.io/kubaeror/ai-model-arena-runner:PLACEHOLDER
+          image: ghcr.io/kubaeror/ai-model-arena:PLACEHOLDER
           command: ["node", "dist/dashboard-server/server.js"]
           envFrom:
             - configMapRef:

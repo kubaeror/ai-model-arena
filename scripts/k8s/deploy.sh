@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "=== Building image ==="
 eval "$(minikube docker-env)"
-docker build -t ghcr.io/kubaeror/ai-model-arena-runner:latest .
+docker build -t ghcr.io/kubaeror/ai-model-arena:latest .
 
 echo "=== Applying infra via kustomize (dev overlay) ==="
 kubectl apply -k k8s/overlays/dev

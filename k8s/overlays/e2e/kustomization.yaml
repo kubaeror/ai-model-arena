@@ -31,7 +31,7 @@ resources:
   - secrets.yaml
 
 images:
-  - name: ghcr.io/kubaeror/ai-model-arena-runner
+  - name: ghcr.io/kubaeror/ai-model-arena
     newTag: latest
 
 patches:

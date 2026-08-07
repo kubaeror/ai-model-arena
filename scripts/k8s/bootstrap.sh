@@ -24,7 +24,7 @@ fi
 
 echo "=== Building container image ==="
 eval "$(minikube docker-env)"
-docker build -t ghcr.io/kubaeror/ai-model-arena-runner:latest .
+docker build -t ghcr.io/kubaeror/ai-model-arena:latest .
 
 echo "=== Bootstrap complete ==="
 echo "Next: run scripts/k8s/deploy.sh to apply manifests"

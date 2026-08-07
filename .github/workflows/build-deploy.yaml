@@ -17,7 +17,7 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     outputs:
-      image: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner
+      image: ghcr.io/${{ github.repository }}
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,8 +63,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
@@ -72,7 +72,7 @@ jobs:
       - name: Generate SBOM (CycloneDX JSON)
         uses: anchore/sbom-action@df80a981bc6edbc4e220a492d3cbe9f5547a6e75 # v0.17.9
         with:
-          image: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner@${{ steps.build.outputs.digest }}
+          image: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
           format: cyclonedx-json
           output-file: sbom-${{ github.sha }}.cdx.json
       - name: Upload SBOM
@@ -84,7 +84,7 @@ jobs:
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner:${{ github.sha }}
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
           format: table
           exit-code: 1
           ignore-unfixed: true
@@ -102,7 +102,7 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign Docker image
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository_owner }}/ai-model-arena-runner@${{ steps.build.outputs.digest }}
+          cosign sign --yes ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
         env:
           COSIGN_EXPERIMENTAL: "1"  # keyless signing via GitHub OIDC
 
