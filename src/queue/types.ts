@@ -36,9 +36,9 @@ export interface TaskQueue {
   maxAttempts?: number;
   size(): Promise<number>;
   /** Number of tasks waiting to be processed (not in-flight). */
-  pendingCount?(): Promise<number>;
-  deadLetterSize?(): Promise<number>;
-  deadLetterPeek?(limit: number): Promise<Task[]>;
-  deadLetterRetry?(taskId: string): Promise<boolean>;
-  close?(): Promise<void>;
+  pendingCount(): Promise<number>;
+  deadLetterSize(): Promise<number>;
+  deadLetterPeek(limit: number): Promise<Task[]>;
+  deadLetterRetry(taskId: string): Promise<boolean>;
+  close(): Promise<void>;
 }
