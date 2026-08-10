@@ -5,6 +5,8 @@ import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { Button } from '../components/ui/Button';
 import { listAudit, type AuditEntry } from '../lib/api';
 
 function summarize(v: unknown, max = 200): string {
@@ -23,15 +25,19 @@ const columns: Column<AuditEntry>[] = [
   { key: 'before', header: 'Before', render: (r) => <span className="font-mono text-12 text-fg-1 whitespace-pre-wrap">{summarize(r.before)}</span> },
 ];
 
+const PAGE = 50;
+
 export function Audit() {
   const [actor, setActor] = useState<string>('');
   const [action, setAction] = useState<string>('');
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['audit', actor, action],
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['audit', actor, action, offset],
     queryFn: () => listAudit({
       actor: actor || undefined,
       action: action || undefined,
-      limit: 200,
+      limit: PAGE,
+      offset,
     }),
     refetchInterval: 15_000,
   });
@@ -45,14 +51,14 @@ export function Audit() {
             <div className="flex gap-2">
               <input
                 value={actor}
-                onChange={(e) => setActor(e.target.value.trim())}
+                onChange={(e) => { setActor(e.target.value.trim()); setOffset(0); }}
                 placeholder="Filter by actor…"
                 className="rounded-inner border border-border bg-bg-1 px-2 py-1 font-mono text-12"
                 aria-label="Filter by actor"
               />
               <input
                 value={action}
-                onChange={(e) => setAction(e.target.value.trim())}
+                onChange={(e) => { setAction(e.target.value.trim()); setOffset(0); }}
                 placeholder="Filter by action…"
                 className="rounded-inner border border-border bg-bg-1 px-2 py-1 font-mono text-12"
                 aria-label="Filter by action"
@@ -64,15 +70,22 @@ export function Audit() {
           {isLoading ? (
             <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading audit log…</div>
           ) : isError ? (
-            <EmptyState title="Failed to load audit log" />
+            <ErrorState message="Failed to load audit log" onRetry={() => void refetch()} />
           ) : (data?.entries.length ?? 0) === 0 ? (
             <EmptyState title="No audit entries" description="Audit entries appear as users take sensitive actions." />
           ) : (
-            <DataTable
-              columns={columns}
-              data={data?.entries ?? []}
-              getRowId={(r) => String(r.id)}
-            />
+            <>
+              <DataTable
+                columns={columns}
+                data={data?.entries ?? []}
+                getRowId={(r) => String(r.id)}
+              />
+              {(data?.entries.length ?? 0) < (data?.total ?? 0) && (
+                <div className="flex justify-center p-3">
+                  <Button variant="ghost" size="sm" onClick={() => setOffset((o) => o + PAGE)}>Load more</Button>
+                </div>
+              )}
+            </>
           )}
         </PanelBody>
       </Panel>

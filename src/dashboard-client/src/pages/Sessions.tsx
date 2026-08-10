@@ -7,6 +7,8 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { Button } from '../components/ui/Button';
 import { listSessions, type SessionRow } from '../lib/api';
 
 const STATUS_TIER: Record<string, 'status' | 'success' | 'failure' | 'neutral'> = {
@@ -30,12 +32,15 @@ const columns: Column<SessionRow>[] = [
   },
 ];
 
+const PAGE = 50;
+
 export function Sessions() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<string>('');
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['sessions', status],
-    queryFn: () => listSessions(status ? { status, limit: 100 } : { limit: 100 }),
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['sessions', status, offset],
+    queryFn: () => listSessions({ limit: PAGE, offset, ...(status ? { status } : {}) }),
     refetchInterval: 15_000,
   });
 
@@ -47,7 +52,7 @@ export function Sessions() {
           actions={
             <select
               value={status}
-              onChange={(e) => setStatus(e.target.value)}
+              onChange={(e) => { setStatus(e.target.value); setOffset(0); }}
               className="rounded-inner border border-border bg-bg-1 px-2 py-1 font-mono text-12"
               aria-label="Filter by status"
             >
@@ -62,16 +67,23 @@ export function Sessions() {
           {isLoading ? (
             <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading sessions…</div>
           ) : isError ? (
-            <EmptyState title="Failed to load sessions" />
+            <ErrorState message="Failed to load sessions" onRetry={() => void refetch()} />
           ) : (data?.sessions.length ?? 0) === 0 ? (
             <EmptyState title="No sessions yet" description="Sessions appear once the runner checkpoints a run." />
           ) : (
-            <DataTable
-              columns={columns}
-              data={data?.sessions ?? []}
-              getRowId={(r) => r.id}
-              onRowClick={(r) => navigate(`/sessions/${r.id}`)}
-            />
+            <>
+              <DataTable
+                columns={columns}
+                data={data?.sessions ?? []}
+                getRowId={(r) => r.id}
+                onRowClick={(r) => navigate(`/sessions/${r.id}`)}
+              />
+              {(data?.sessions.length ?? 0) < (data?.total ?? 0) && (
+                <div className="flex justify-center p-3">
+                  <Button variant="ghost" size="sm" onClick={() => setOffset((o) => o + PAGE)}>Load more</Button>
+                </div>
+              )}
+            </>
           )}
         </PanelBody>
       </Panel>
