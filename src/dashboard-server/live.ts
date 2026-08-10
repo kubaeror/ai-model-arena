@@ -11,6 +11,19 @@ import {
 import { type AuthConfig } from './auth.js';
 import { verifyWsRequest } from './ws-auth.js';
 import { createLogger } from '../logger/pino-logger.js';
+import { isOwnerAllowed } from '../auth/rbac.js';
+
+/** Ownership gate for WS subscriptions: admins pass; otherwise the actor
+ *  must match the run's createdBy. Missing/unknown runs deny. Mirrors the
+ *  REST allowIfRunOwner contract (default-DENY for ownerless runs). */
+export async function canSubscribeToRun(
+  user: { sub?: string; role?: string },
+  runId: string,
+): Promise<boolean> {
+  const rec = await getRunRecord(runId);
+  if (!rec) return false;
+  return isOwnerAllowed(user, rec.createdBy);
+}
 
 interface RunStatus {
   runId: string;
@@ -114,8 +127,20 @@ export class LiveHub {
       return;
     }
     if (msg.type === 'subscribe' && typeof msg.runId === 'string') {
-      this.subs.get(ws)?.add(msg.runId);
-      void this.sendRunSnapshot(ws, msg.runId);
+      const user = this.clients.get(ws);
+      const runId = msg.runId;
+      // Ownership gate (IDOR fix): a viewer may only subscribe to their own
+      // runs; admins pass. Denials get an explicit error frame instead of a
+      // silent no-op.
+      void canSubscribeToRun(user ?? { sub: undefined, role: 'viewer' }, runId)
+        .then((allowed) => {
+          if (!allowed) {
+            this.send(ws, { type: 'error', error: 'forbidden: not the run owner' });
+            return;
+          }
+          this.subs.get(ws)?.add(runId);
+          void this.sendRunSnapshot(ws, runId);
+        });
     } else if (msg.type === 'unsubscribe' && typeof msg.runId === 'string') {
       this.subs.get(ws)?.delete(msg.runId);
     }
