@@ -82,16 +82,16 @@ test('getModelPricing returns null for unknown models', async () => {
   } finally { closeDb(); cleanup(); }
 });
 
-test('computeCost computes per-1000-token costs', async () => {
+test('computeCost computes per-1M-token costs (models.dev units)', async () => {
   const cleanup = freshDb();
   try {
     await seed();
-    // 1000 prompt @ 2.5 + 500 completion @ 10 + 200 cached @ 1.25
+    // 1000 prompt @ 2.5/1M + 500 completion @ 10/1M + 200 cached @ 1.25/1M
     const c = await computeCost('openai/gpt-4o', { prompt: 1000, completion: 500, cached: 200 });
-    assert.equal(c.inputCost, 2.5);
-    assert.equal(c.outputCost, 5);
-    assert.equal(c.cachedCost, 0.25);
-    assert.equal(c.total, 7.75);
+    assert.equal(c.inputCost, 0.0025);
+    assert.equal(c.outputCost, 0.005);
+    assert.equal(c.cachedCost, 0.00025);
+    assert.ok(Math.abs(c.total - 0.00775) < 1e-12);
   } finally { closeDb(); cleanup(); }
 });
 
@@ -109,9 +109,9 @@ test('computeCost uses over-200k tier when total tokens exceed 200k', async () =
   try {
     await seed();
     const c = await computeCost('openai/gpt-x', { prompt: 250000, completion: 0 });
-    // tier input 1.5 per 1k
-    assert.equal(c.inputCost, 375);
-    assert.equal(c.total, 375);
+    // tier input 1.5 per 1M
+    assert.equal(c.inputCost, 0.375);
+    assert.equal(c.total, 0.375);
   } finally { closeDb(); cleanup(); }
 });
 
@@ -145,9 +145,9 @@ test('over-200k output cost uses the tier output price, not the input fallback',
       updated_at: new Date().toISOString(),
     });
     const c = await computeCost('openai/gpt-x', { prompt: 250000, completion: 1000 });
-    assert.equal(c.inputCost, 375); // 250000/1000 * 1.5
-    assert.equal(c.outputCost, 7.5); // largest tier output, not the over-200k input price
-    assert.equal(c.total, 382.5);
+    assert.equal(c.inputCost, 0.375); // 250000/1M * 1.5
+    assert.equal(c.outputCost, 0.0075); // 1000/1M * 7.5 (tier output, not the over-200k input price)
+    assert.ok(Math.abs(c.total - 0.3825) < 1e-12);
   } finally { closeDb(); cleanup(); }
 });
 
@@ -158,7 +158,7 @@ test('getPricing exposes cache_write and computeCost uses it when cache_read is 
     const p = await getPricing('openai/gpt-cw');
     assert.equal(p?.cache_write, 0.75);
     const c = await computeCost('openai/gpt-cw', { prompt: 0, completion: 0, cached: 2000 });
-    assert.equal(c.cachedCost, 1.5); // 2000/1000 * 0.75
+    assert.equal(c.cachedCost, 0.0015); // 2000/1M * 0.75
   } finally { closeDb(); cleanup(); }
 });
 

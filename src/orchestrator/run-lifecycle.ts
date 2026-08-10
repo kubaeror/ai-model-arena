@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import type { Logger } from '../types.js';
 import type { ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
-import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing, recordRunReservations, releaseRunReservations, budgetStateRoot } from '../cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, computeCost, recordRunReservations, releaseRunReservations, budgetStateRoot } from '../cost-tracking/index.js';
 import { projectRoot, timestamp } from './utils.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/index.js';
@@ -194,14 +194,17 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
       throw new Error(reason);
     }
 
-    // Estimate cost: assume maxTurns tokens × worst-case pricing
+    // Estimate cost: assume maxTurns turns of the configured token budget,
+    // priced through the single computeCost path (no second formula to drift).
     const resolved = await resolveModelForRun(modelName);
     const maxTurns = resolved?.maxTurns ?? 20;
     const estTokensPerTurn = costEstimateTokensPerTurn();
-    const pricingData = await getPricing(modelName);
-    const inputPrice = pricingData?.input ?? 0;
-    const outputPrice = pricingData?.output ?? 0;
-    const estimatedCost = maxTurns * estTokensPerTurn * (inputPrice + outputPrice) / 1_000_000;
+    const perTurnCost = await computeCost(modelName, {
+      prompt: estTokensPerTurn,
+      completion: estTokensPerTurn,
+      cached: 0,
+    });
+    const estimatedCost = perTurnCost.total * maxTurns;
 
     const reservation = reserveBudget(modelName, estimatedCost, budgetRoot, logger);
     if (!reservation.ok) {

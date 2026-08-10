@@ -80,9 +80,10 @@ export async function computeCost(modelName: string, usage: CostTokenUsage): Pro
   const outputPrice = tieredPricing?.output ?? pricingData.output;
   const cachedPrice = tieredPricing?.cache_read ?? pricingData.cached;
 
-  const inputCost = ((usage.prompt ?? 0) / 1000) * inputPrice;
-  const outputCost = ((usage.completion ?? 0) / 1000) * outputPrice;
-  const cachedCost = ((usage.cached ?? 0) / 1000) * cachedPrice;
+  // Catalog prices are USD per 1M tokens (models.dev convention).
+  const inputCost = ((usage.prompt ?? 0) / 1_000_000) * inputPrice;
+  const outputCost = ((usage.completion ?? 0) / 1_000_000) * outputPrice;
+  const cachedCost = ((usage.cached ?? 0) / 1_000_000) * cachedPrice;
 
   return {
     inputCost,

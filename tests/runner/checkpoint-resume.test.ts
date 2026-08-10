@@ -195,9 +195,9 @@ test('sumPriorRunSpend accumulates usage JSON across persisted model calls', asy
 
   const { sumPriorRunSpend } = await import('../../src/runner.js');
   const total = await sumPriorRunSpend(s.id, 'gpt-4o');
-  // computeCost units: (tokens/1000) * price. call1: 1*2.5 + 0.5*10 = 7.5,
-  // call2: 2*2.5 + 1*10 = 15. The helper mirrors the loop's max-per-call
-  // convention, so the seed data yields exactly 15.
-  assert.equal(total, 15, 'prior spend should equal the max per-call cost');
+  // computeCost units: (tokens/1M) * price. call1: 2.5*1000/1M + 10*500/1M
+  // = 0.0075, call2: 2.5*2000/1M + 10*1000/1M = 0.015. The helper mirrors the
+  // loop's max-per-call convention, so the seed data yields exactly 0.015.
+  assert.equal(total, 0.015, 'prior spend should equal the max per-call cost');
   closeDb();
 });
