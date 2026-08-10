@@ -63,3 +63,25 @@ spec:
         pendingEntriesCount: "5"
       authenticationRef:
         name: keda-redis-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: runner-bedrock-scaler
+  namespace: ai-arena
+spec:
+  scaleTargetRef:
+    name: runner-bedrock
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 5
+  cooldownPeriod: 60
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.ai-arena.svc:6379
+        stream: arena:tasks:bedrock
+        consumerGroup: arena-runners
+        pendingEntriesCount: "5"
+      authenticationRef:
+        name: keda-redis-auth

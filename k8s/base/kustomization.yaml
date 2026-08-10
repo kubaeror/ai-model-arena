@@ -28,6 +28,7 @@ resources:
   - runner-deployment.yaml
   - runner-anthropic.yaml
   - runner-google.yaml
+  - runner-bedrock.yaml
   - keda-scaledobject.yaml
   - keda-trigger-auth.yaml
   - scheduler-cronjob.yaml
