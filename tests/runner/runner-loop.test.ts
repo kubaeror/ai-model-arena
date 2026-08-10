@@ -103,6 +103,18 @@ class NoRetryQueue implements TaskQueue {
   async deadLetterPeek(_limit: number): Promise<Task[]> {
     return [];
   }
+
+  async pendingCount(): Promise<number> {
+    return this.pending.length;
+  }
+
+  async deadLetterRetry(_taskId: string): Promise<boolean> {
+    return false;
+  }
+
+  async close(): Promise<void> {
+    // no-op — in-memory state is lost on process exit
+  }
 }
 
 test('runner dequeues and nacks an unresolvable model into the DLQ', async () => {
