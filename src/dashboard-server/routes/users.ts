@@ -114,7 +114,9 @@ export function createUsersRouter(): Router {
       await updateUser(req.params.id, { passwordHash: hash });
     }
 
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.update', { type: 'user', id: req.params.id }, { username: existing.username }, parsed);
+    // Never persist the plaintext password: strip it before the audit row.
+    const { password: _pw, ...safeAfter } = parsed;
+    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'user.update', { type: 'user', id: req.params.id }, { username: existing.username }, safeAfter);
     res.json({ ok: true });
   });
 

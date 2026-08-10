@@ -5,7 +5,32 @@ import path from 'node:path';
 import { boot, authedGet, postJson, TEST_ADMIN } from './route-test-harness.js';
 import { getDrizzleDb } from '../../src/db/index.js';
 import { insertAuditEntry } from '../../src/db/query.js';
-import { models, pricing, providers, run_models, runs } from '../../src/db/schema.js';
+import { models, pricing, providers, run_models, runs, audit_log as auditLog } from '../../src/db/schema.js';
+
+test('user password changes never reach the audit log as plaintext', async (t) => {
+  const h = await boot(t);
+  const db = getDrizzleDb();
+
+  const created = await postJson(h.base, h.adminToken, '/api/users', {
+    username: 'pw-audit-user', password: 'initial-pass-123',
+  });
+  assert.equal(created.status, 201);
+  const body = (await created.json()) as { id: string };
+  assert.ok(body.id);
+
+  const updated = await fetch(`${h.base}/api/users/${body.id}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${h.adminToken}` },
+    body: JSON.stringify({ password: 'changed-pass-456' }),
+  });
+  assert.equal(updated.status, 200);
+
+  const rows = await db.select().from(auditLog).all();
+  for (const row of rows) {
+    assert.ok(!String(row.after ?? '').includes('pass-'), `audit after must not contain the password: ${row.after}`);
+    assert.ok(!String(row.before ?? '').includes('pass-'), `audit before must not contain the password: ${row.before}`);
+  }
+});
 
 test('POST /api/auth/login authenticates env and DB users, rejects bad credentials', async (t) => {
   const h = await boot(t);
