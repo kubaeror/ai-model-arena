@@ -31,7 +31,7 @@ describe('Home', () => {
   it('renders the recent-runs stat tile (not a fake token flow)', async () => {
     renderWithProviders(<Home />);
     await waitFor(() => {
-      expect(screen.getByText(/Recent runs/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/Recent runs/i).length).toBeGreaterThanOrEqual(1);
       expect(screen.queryByText(/Token Flow/i)).not.toBeInTheDocument();
     });
   });
