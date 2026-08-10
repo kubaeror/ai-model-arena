@@ -26,10 +26,10 @@ test('GET /api/cost exposes the cost ledger summary', async (t) => {
 
   const res = await authedGet(h.base, h.adminToken, '/api/cost');
   assert.equal(res.status, 200);
-  const body = (await res.json()) as { groupBy: string; models: Array<{ model: string; total_cost: number }> };
+  const body = (await res.json()) as { groupBy: string; models: Array<{ model: string; total_cost: string | number }> };
   assert.equal(body.groupBy, 'model');
   const row = body.models.find((m) => m.model === 'gpt-4o');
-  assert.equal(row?.total_cost, 1.25);
+  assert.equal(Number(row?.total_cost), 1.25, 'sqlite sum() may come back as a string');
 
   const byDay = await authedGet(h.base, h.adminToken, '/api/cost?groupBy=day');
   assert.equal(byDay.status, 200);
