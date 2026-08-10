@@ -40,6 +40,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [, forceRender] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
+  const subsRef = useRef<Set<string>>(new Set());
   const runStateRef = useRef<Map<string, RunLiveState>>(new Map());
   const rerender = useCallback(() => forceRender((v) => v + 1), []);
 
@@ -52,7 +53,15 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const connect = () => {
       const ws = new WebSocket(`${wsUrl()}`, [token, 'access_token']);
       wsRef.current = ws;
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        setConnected(true);
+        // Re-send every subscription after (re)connect: a fresh socket has no
+        // server-side subscriptions, so a dropped connection would otherwise
+        // silently stop live updates until the page remounts.
+        for (const runId of subsRef.current) {
+          ws.send(JSON.stringify({ type: 'subscribe', runId }));
+        }
+      };
       ws.onclose = () => {
         setConnected(false);
         if (!disposed) reconnectTimer = setTimeout(connect, 2000);
@@ -116,9 +125,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   }, [rerender]);
 
   const subscribe = useCallback((runId: string) => {
+    subsRef.current.add(runId);
     wsRef.current?.send(JSON.stringify({ type: 'subscribe', runId }));
   }, []);
   const unsubscribe = useCallback((runId: string) => {
+    subsRef.current.delete(runId);
     wsRef.current?.send(JSON.stringify({ type: 'unsubscribe', runId }));
   }, []);
   const getRunState = useCallback(
