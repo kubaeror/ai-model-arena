@@ -315,7 +315,7 @@ export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
  * runs anomaly analysis + stats writeback, persists judge scores, and dispatches
  * the run_completed notification + webhook. Never throws on ancillary failures.
  */
-async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string }> {
+async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   // Idempotency guard: the CLI and the dashboard watcher can both finalize a
@@ -329,10 +329,6 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], logger: L
   // Release budget reservations against the same state root they were
   // reserved under in startRun, so estimates always match.
   const budgetRoot = budgetStateRoot(root);
-  const { mdPath, jsonPath } = aggregate(root, {
-    runId, scenario: rec.scenario, startedAt: rec.startedAt,
-    models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-  });
   const perModel = await buildPerModelEntries(runId, rec, entries, logger);
   await patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
   const allSuccess = perModel.every((m) => m.status === 'completed' && m.success !== false);
@@ -356,11 +352,11 @@ export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: 
   mdPath: string;
   jsonPath: string;
 }> {
-  const { entries } = aggregate(spec.root!, {
+  const { entries, mdPath, jsonPath } = aggregate(spec.root!, {
     runId: spec.runId, scenario: spec.scenario, startedAt: spec.startedAt,
     models: spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
-  const core = await finalizeCore(spec.runId, entries, logger, judgeAdapter);
+  const core = await finalizeCore(spec.runId, entries, mdPath, jsonPath, logger, judgeAdapter);
   return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath };
 }
 
@@ -369,11 +365,11 @@ export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAda
   const rec = await getRunRecord(runId);
   if (!rec) return;
   const root = projectRoot();
-  const { entries } = aggregate(root, {
+  const { entries, mdPath, jsonPath } = aggregate(root, {
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
-  await finalizeCore(runId, entries, logger, judgeAdapter);
+  await finalizeCore(runId, entries, mdPath, jsonPath, logger, judgeAdapter);
 }
 
 import {
