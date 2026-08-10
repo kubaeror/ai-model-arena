@@ -5,7 +5,6 @@ import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { StatTile } from '../components/ui/StatTile';
 import { MetricBar } from '../components/ui/MetricBar';
 import { Button } from '../components/ui/Button';
-import { Sankey, type SankeyNode, type SankeyLink } from '../components/ui/Sankey';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Launcher } from '../components/Launcher';
 import { useTpsLeaderboard } from '../hooks/useMetrics';
@@ -19,28 +18,9 @@ export function Home() {
   const { data: runtime } = useRuntimeMetrics({ limit: 20 });
   const { data: cacheStats } = useCacheStats();
 
-  const activeRuns = runtime?.filter(r => r.success === 0 && r.run_id).length ?? 0;
+  const activeRuns = new Set((runtime ?? []).map((r) => r.run_id).filter(Boolean)).size;
   const modelCount = tpsData?.length ?? 0;
   const cacheSources = cacheStats?.length ?? 0;
-
-  // Sankey: aggregate tokens from recent runtime stats
-  const recentRuntime = runtime ?? [];
-  const totalCacheRead = recentRuntime.reduce((sum, r) => sum + Math.round((r.cache_hit_rate ?? 0) * 1000), 0);
-  const totalCompletion = recentRuntime.reduce((sum, r) => sum + Math.round((r.tps ?? 0) * 10), 0);
-  const totalCost = recentRuntime.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0);
-
-  const sankeyNodes: SankeyNode[] = [
-    { name: 'prompt' },
-    { name: 'cache_read', color: 'var(--accent)' },
-    { name: 'completion', color: 'var(--warn)' },
-    { name: 'cost', color: 'var(--danger)' },
-  ];
-  const sankeyLinks: SankeyLink[] = [
-    { source: 'prompt', target: 'cache_read', value: Math.max(1, totalCacheRead) },
-    { source: 'prompt', target: 'completion', value: Math.max(1, totalCompletion) },
-    { source: 'cache_read', target: 'cost', value: Math.max(1, Math.round(totalCost * 1000)) },
-    { source: 'completion', target: 'cost', value: Math.max(1, Math.round(totalCost * 1000)) },
-  ];
 
   const topTps = (tpsData ?? []).slice(0, 3);
   const recentRuns = (runtime ?? []).slice(0, 5);
@@ -60,21 +40,10 @@ export function Home() {
     <div className="flex flex-col gap-6">
 
       <div className="grid grid-cols-3 gap-4">
-        <StatTile value={activeRuns} label="Active runs" />
+        <StatTile value={activeRuns} label="Recent runs" />
         <StatTile value={modelCount} label="Models in DB" />
         <StatTile value={cacheSources} label="Cache sources" />
       </div>
-
-      <Panel>
-        <PanelHeader title="Token Flow" actions={<span className="font-mono text-12 text-fg-1">live</span>} />
-        <PanelBody>
-          {recentRuntime.length === 0 ? (
-            <EmptyState title="No runs yet" description="Launch a run to see token flow." />
-          ) : (
-            <Sankey nodes={sankeyNodes} links={sankeyLinks} />
-          )}
-        </PanelBody>
-      </Panel>
 
       <div className="grid grid-cols-2 gap-4">
         <Panel>
