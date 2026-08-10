@@ -10,6 +10,7 @@ import rateLimit from 'express-rate-limit';
 import { findProjectRoot, dbPath } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { startOtel } from '../observability/otel.js';
+import { startOtelMetrics } from '../observability/otel-metrics.js';
 import { metricsHandler } from '../observability/metrics.js';
 import { initDb, closeDb, pingDb } from '../db/index.js';
 import { ensureFresh } from '../catalog/cache.js';
@@ -68,6 +69,7 @@ async function start(): Promise<void> {
     process.exit(1);
   }
   startOtel();
+  const stopOtelMetrics = startOtelMetrics('ai-arena-dashboard');
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
   // loadAuthConfig() throws in production if DASHBOARD_PASSWORD is unset, and
   // writes a generated dev password to <OUTPUT_ROOT>/.admin-password in dev.
@@ -396,6 +398,7 @@ async function start(): Promise<void> {
     clearInterval(outboxTimer);
     hub.close();
     stopCatalogCron();
+    stopOtelMetrics();
     server.close(() => {
       logger.info('Server closed cleanly');
       try { void closeDb(); } catch { /* ignore */ }
