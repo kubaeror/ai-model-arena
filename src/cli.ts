@@ -190,6 +190,10 @@ program
     const logger = createLogger('ai-arena:regress');
     initDb(dbPath());
 
+    const { loadEvaluationConfig } = await import('./evaluation/judge.js');
+    const evalConfig = loadEvaluationConfig(path.join(root, 'configs', 'evaluation.yaml'));
+    const failOn = evalConfig.regression?.failOnRegression ?? true;
+
     const { runRegressionSuite, createBaselineSnapshot, saveBaselineSnapshot, getBaselinePath, saveSuiteResult } =
       await import('./evaluation/regression.js');
     const result = await runRegressionSuite(
@@ -242,7 +246,7 @@ program
         console.log(`    ${reg.metric}: ${reg.baseline} -> ${reg.current} (delta ${reg.change.toFixed(2)}, threshold ${reg.threshold})`);
       }
     }
-    process.exit(passed ? 0 : 1);
+    process.exit(passed || !failOn ? 0 : 1);
   });
 
 // ── schedule ──────────────────────────────────────────────────────────────────

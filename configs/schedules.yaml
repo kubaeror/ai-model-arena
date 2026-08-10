@@ -9,8 +9,6 @@ schedules:
       - claude-sonnet-4
     cron: "0 3 * * *"  # 3:00 AM daily
     enabled: true
-    notifications:
-      - slack-runs
     options:
       forceBudget: false
       timeoutMs: 1800000
