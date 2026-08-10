@@ -392,7 +392,13 @@ export async function stopRun(runId: string): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   await markRunCancelledSignal(runId);
-  await updateRun(runId, (r) => { r.status = 'stopped'; });
+  await updateRun(runId, (r) => {
+    r.status = 'stopped';
+    r.finishedAt = new Date().toISOString();
+    for (const m of r.perModel) {
+      if (m.status === 'running' || m.status === 'unknown') m.status = 'stopped';
+    }
+  });
 }
 
 /** Restart a run by re-enqueuing tasks. */

@@ -241,10 +241,13 @@ test('runner acks a task for a cancelled run without executing it', async () => 
 
   try {
     await waitFor(async () => (await queue.size()) === 0, 8000, 'cancelled task acked');
-    // Cancelled runs must NOT be finalized as completed — status stays running
-    // per-model but the task itself is gone (ack, not execute).
+    // Cancelled runs must NOT be finalized as completed — the ack path never
+    // executes the task. stopRun has already marked the per-model row
+    // 'stopped' (terminal), so it must not read 'running' or 'completed'.
     const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get('run3', 'GPT-4o') as { status: string } | undefined;
-    assert.equal(row?.status, 'running', 'cancelled run should not transition to completed');
+    assert.equal(row?.status, 'stopped', 'cancelled run per-model row should be terminal (stopped)');
+    const runRow = getDb().prepare('SELECT status FROM runs WHERE run_id = ?').get('run3') as { status: string } | undefined;
+    assert.equal(runRow?.status, 'stopped', 'cancelled run must not be finalized as completed');
   } finally {
     ac.abort();
     await runnerDone;
