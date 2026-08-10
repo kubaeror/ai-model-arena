@@ -40,9 +40,14 @@ services:
       REDIS_URL: redis://redis:6379
       ARENA_PROVIDER_FILTER: openai-compat
       OUTPUT_ROOT: /var/arena/outputs
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "4001:4001"
     depends_on:
       postgres:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     volumes:
       - outputs:/var/arena/outputs
     command: ["node", "dist/runner.js"]
@@ -82,11 +87,14 @@ services:
       DASHBOARD_PASSWORD: change-me
       DASHBOARD_JWT_SECRET: dev-jwt-secret-change-in-production-at-least-32-chars
       WEBHOOK_SECRET_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     ports:
       - "4000:4000"
     volumes:
@@ -98,6 +106,48 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.119.0
+    command: ["--config=/etc/otel/collector.yaml"]
+    volumes:
+      - ./observability/collector.yaml:/etc/otel/collector.yaml:ro
+    ports:
+      - "4318:4318"
+      - "4317:4317"
+      - "8889:8889"
+    depends_on:
+      - tempo
+      - loki
+
+  tempo:
+    image: grafana/tempo:2.7.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    ports:
+      - "3200:3200"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  loki:
+    image: grafana/loki:3.4.2
+    ports:
+      - "3100:3100"
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_SECURITY_ADMIN_PASSWORD: arena
+    volumes:
+      - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    ports:
+      - "3000:3000"
 
 volumes:
   pgdata:
