@@ -151,3 +151,53 @@ test('runAgentLoop resumed from checkpoint does not duplicate system+user entrie
   assert.equal(taskEntries.length, 1, `task duplicated on resume: ${taskEntries.length} entries`);
   assert.ok(entries.some((e) => e.content === '[resumed from checkpoint]'), 'expected "[resumed from checkpoint]" marker entry');
 });
+
+test('sumPriorRunSpend accumulates usage JSON across persisted model calls', async () => {
+  initDb(':memory:');
+  const store = createSessionStore();
+  const s = await store.createSession({ model: 'gpt-4o' });
+
+  // computeCost reads pricing from the catalog DB — seed providers/models/pricing.
+  const { getDrizzleDb } = await import('../../src/db/index.js');
+  const { providers, models, pricing } = await import('../../src/db/schema.js');
+  const now = new Date().toISOString();
+  await getDrizzleDb().insert(providers).values({
+    id: 'openai', name: 'OpenAI', api_base: null, auth_scheme: 'bearer',
+    env_var: 'OPENAI_API_KEY', is_builtin: 1, adapter: 'openai-compat',
+    header_name: null, created_at: now, updated_at: now,
+  });
+  await getDrizzleDb().insert(models).values({
+    id: 'gpt-4o', name: 'gpt-4o', family: null, provider_id: 'openai',
+    release_date: null, attachment: 0, reasoning: 0, temperature: 0,
+    tool_call: 1, interleaved: null, status: 'active',
+    context_limit: 128000, input_limit: null, output_limit: 16384,
+    modalities: null, reasoning_options: null, source_json: null,
+    last_synced_at: now,
+  });
+  await getDrizzleDb().insert(pricing).values({
+    model_id: 'gpt-4o', tier_size: 0,
+    input: 2.5, output: 10, cache_read: 0, cache_write: 0,
+    over_200k_input: null, over_200k_output: null,
+    over_200k_cache_read: null, over_200k_cache_write: null,
+    updated_at: now,
+  });
+
+  await store.recordModelCall({
+    sessionId: s.id, turn: 0, provider: 'openai', model: 'gpt-4o',
+    requestHash: 'h1', responseText: 'a',
+    usage: { prompt: 1000, completion: 500, total: 1500 }, latencyMs: 10,
+  });
+  await store.recordModelCall({
+    sessionId: s.id, turn: 1, provider: 'openai', model: 'gpt-4o',
+    requestHash: 'h2', responseText: 'b',
+    usage: { prompt: 2000, completion: 1000, total: 3000 }, latencyMs: 10,
+  });
+
+  const { sumPriorRunSpend } = await import('../../src/runner.js');
+  const total = await sumPriorRunSpend(s.id, 'gpt-4o');
+  // computeCost units: (tokens/1000) * price. call1: 1*2.5 + 0.5*10 = 7.5,
+  // call2: 2*2.5 + 1*10 = 15. The helper mirrors the loop's max-per-call
+  // convention, so the seed data yields exactly 15.
+  assert.equal(total, 15, 'prior spend should equal the max per-call cost');
+  closeDb();
+});

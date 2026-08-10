@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { outputRoot, dbPath, findProjectRoot } from './paths.js';
 import { initDb } from './db/index.js';
-import { transitionTaskState } from './db/query.js';
+import { transitionTaskState, listModelCallsForSession, listMessagesBySession } from './db/query.js';
 import { resumeFrom } from './runner/checkpoint.js';
 import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
@@ -158,6 +158,22 @@ async function maybeFinalizeRun(runId: string, log: Logger): Promise<void> {
   }
 }
 
+/** Sum of a session's prior model-call spend (for resume budget continuity). */
+export async function sumPriorRunSpend(sessionId: string, modelName: string): Promise<number> {
+  let total = 0;
+  const priorCalls = await listModelCallsForSession(sessionId);
+  for (const c of priorCalls) {
+    const usage = JSON.parse(c.usage ?? '{}') as { prompt?: number; completion?: number };
+    const prior = await computeCost(modelName, {
+      prompt: Number(usage.prompt ?? 0),
+      completion: Number(usage.completion ?? 0),
+      cached: 0,
+    });
+    total = Math.max(total, prior.total);
+  }
+  return total;
+}
+
 export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   const logger = createLogger('ai-arena:runner');
 
@@ -307,6 +323,11 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
 
       let initialTurn = 1;
+      // Cumulative spend of this run's tokens, so per-turn budget checks see
+      // the current run (addSpend is only called during finalize otherwise).
+      // Seeded from persisted model calls on resume so a restarted run does
+      // not lose sight of what the pre-crash attempt already spent.
+      let prevRunCost = 0;
       let session = await store.loadSession(task.sessionId);
       let resumedMessages: ChatMessage[] | undefined;
       if (!session) {
@@ -317,7 +338,12 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         if (resumed.messages.length > 0) {
           resumedMessages = resumed.messages;
           initialTurn = resumed.lastCompletedTurn + 1;
-          logger.info('Resuming session from checkpoint', { sessionId: session.id, turns: initialTurn, messages: resumed.messages.length });
+          try {
+            prevRunCost = await sumPriorRunSpend(session.id, task.model);
+          } catch (e) {
+            logger.warn('Failed to sum prior run spend (non-fatal)', { sessionId: session.id, err: String(e) });
+          }
+          logger.info('Resuming session from checkpoint', { sessionId: session.id, turns: initialTurn, messages: resumed.messages.length, priorSpend: prevRunCost });
         }
       }
 
@@ -353,6 +379,26 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         runId: modelRunId,
         startedAt: startedAt.toISOString(),
       });
+
+      // Resume continuity: replay the persisted transcript into
+      // conversation.json so artifacts (report.md, manifest) cover the whole
+      // run, not just the post-resume fragment.
+      if (resumedMessages) {
+        try {
+          const stored = await listMessagesBySession(session.id);
+          for (const m of stored) {
+            if (m.role === 'system' || m.role === 'user') {
+              conv.append({ type: m.role === 'system' ? 'system' : 'user', role: m.role, content: m.content, turn: m.turn });
+            } else if (m.role === 'assistant') {
+              conv.append({ type: 'assistant', role: 'assistant', content: m.content, turn: m.turn, toolCalls: m.tool_calls ? JSON.parse(m.tool_calls) : undefined });
+            } else if (m.role === 'tool') {
+              conv.append({ type: 'tool_result', role: 'tool', content: m.content, toolCallId: m.tool_call_id ?? undefined, turn: m.turn });
+            }
+          }
+        } catch (e) {
+          logger.warn('Failed to replay persisted transcript (non-fatal)', { sessionId: session.id, err: String(e) });
+        }
+      }
 
       const profile = getProfile(scenario.executionProfile ?? 'read-only-analysis');
       const allowedTools = new Set(getAllowedTools(profile));
@@ -464,9 +510,6 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       };
       let loopResult;
       let maxFallbackHops = resolveMaxFallbackHops();
-      // Cumulative spend of this run's tokens, so per-turn budget checks see
-      // the current run (addSpend is only called during finalize otherwise).
-      let prevRunCost = 0;
       // Scenario-configured reasoning, converted to the adapter union shape.
       // Undefined when the scenario sets nothing — no behavior change.
       const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
@@ -618,7 +661,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         model: modelName, scenario: scenarioName, runId: modelRunId,
         startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
-        turnsUsed: result.turnsUsed, maxTurns: result.maxTurns,
+        turnsUsed: result.turnsUsed + (initialTurn - 1), maxTurns: result.maxTurns,
         totalToolCalls: result.totalToolCalls, toolsCalled: result.toolsCalled,
         tokenUsage: result.tokenUsage, stopReason: result.stopReason,
         errors: result.errors, success, costUsd: costBreakdown.total,
