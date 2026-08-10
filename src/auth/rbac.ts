@@ -10,9 +10,58 @@ const logger = createLogger('ai-arena:audit');
 const ROLE_ORDER = { viewer: 0, editor: 1, admin: 2 } as const;
 type Role = keyof typeof ROLE_ORDER;
 
+/**
+ * Lowest role an API-key permission implies, used to bridge the v1
+ * (X-API-Key) surface onto the routers' role gates. A key holding
+ * `runs:write` passes a `requireRole('editor')` gate, an admin-level
+ * permission passes 'admin' gates, and read-only keys stay viewer-level.
+ */
+const PERMISSION_TO_ROLE: Record<string, Role> = {
+  'models:write': 'editor',
+  'scenarios:write': 'editor',
+  'runs:write': 'editor',
+  'cache:write': 'editor',
+  'anomalies:write': 'editor',
+  'analytics:write': 'editor',
+  'regression:write': 'admin',
+  'schedules:write': 'admin',
+  'prompts:write': 'admin',
+  'output_mappings:write': 'admin',
+  'sessions:write': 'admin',
+  'secrets:write': 'admin',
+  'users:write': 'admin',
+  'webhooks:write': 'admin',
+  'providers:write': 'admin',
+  'runners:write': 'admin',
+  'queues:write': 'admin',
+  'ops:admin': 'admin',
+};
+
+interface ApiKeyBearer { apiKey?: { permissions?: string[] } }
+
+/** Highest role implied by an API key's declared permissions. Read-only keys
+ *  (no write permissions) still imply viewer — the floor for any valid key. */
+export function apiKeyImpliedRole(apiKey: { permissions?: string[] } | undefined): Role | undefined {
+  if (!apiKey?.permissions?.length) return undefined;
+  let max: Role = 'viewer';
+  for (const p of apiKey.permissions) {
+    const r = PERMISSION_TO_ROLE[p];
+    if (r && ROLE_ORDER[r] > ROLE_ORDER[max]) max = r;
+  }
+  return max;
+}
+
+/** True when the request carries an API key with ops:admin (admin-equivalent). */
+export function apiKeyIsAdmin(req: unknown): boolean {
+  const key = (req as ApiKeyBearer).apiKey;
+  return key?.permissions?.includes('ops:admin') ?? false;
+}
+
 export function requireRole(min: Role): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
-    const role = (req as UserRequest).user?.role as string | undefined;
+    const user = (req as UserRequest).user;
+    const apiKey = (req as unknown as ApiKeyBearer).apiKey;
+    const role = user?.role ?? apiKeyImpliedRole(apiKey);
     const order = ROLE_ORDER as Record<string, number>;
     if (!role || (order[role] ?? -1) < (order[min] ?? 0)) {
       res.status(403).json({ error: 'forbidden' });

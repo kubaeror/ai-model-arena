@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { auditSafe } from '../../auth/rbac.js';
+import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { asyncHandler, notFound } from '../helpers.js';
 import {
@@ -75,7 +75,7 @@ export function createAnomaliesRouter(): Router {
     res.json({ anomaly, run, trace });
   });
 
-  router.patch('/:id', async (req, res) => {
+  router.patch('/:id', requireRole('editor'), async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
       res.status(400).json({ error: 'Invalid anomaly id' });

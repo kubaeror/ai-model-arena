@@ -1,7 +1,7 @@
 import type { Response } from 'express';
 import { getRunRecord } from '../orchestrator/run-index.js';
 import type { AuthedRequest } from './auth.js';
-import { isOwnerAllowed } from '../auth/rbac.js';
+import { isOwnerAllowed, apiKeyIsAdmin } from '../auth/rbac.js';
 
 /**
  * Shared run-ownership gate (extracted from routes/runs.ts so every runId
@@ -17,7 +17,7 @@ async function checkRunOwnership(
 ): Promise<{ ok: true } | { ok: false; status: 404 | 403 }> {
   const rec = await getRunRecord(runId);
   if (!rec) return { ok: false, status: 404 };
-  const allowed = isOwnerAllowed({ sub: req.user?.sub, role: req.user?.role }, rec.createdBy);
+  const allowed = apiKeyIsAdmin(req) || isOwnerAllowed({ sub: req.user?.sub, role: req.user?.role }, rec.createdBy);
   if (!allowed) return { ok: false, status: 403 };
   return { ok: true };
 }
