@@ -147,6 +147,17 @@ function hydrateReservations(state: BudgetState): void {
   }
 }
 
+function todayReservedTotal(state: BudgetState, modelName: string): number {
+  const today = DAY_KEY();
+  let total = 0;
+  for (const entry of state.reservations?.[modelName] ?? []) {
+    if (entry.dailyKey !== today) continue;
+    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) continue;
+    total += entry.amount;
+  }
+  return total;
+}
+
 /**
  * Reserve an estimated cost before dispatching a job.
  * Returns {ok: true} if the reservation is within budget limits, {ok: false} otherwise.
@@ -175,9 +186,11 @@ export function reserveBudget(
   const limitDaily = modelLimits?.daily ?? globalLimits?.daily;
   const limitMonthly = modelLimits?.monthly ?? globalLimits?.monthly;
 
-  // Include all pending reservations in the projected spend
+  // Include all pending reservations in the projected spend. Read from the
+  // persisted state file (not the in-memory mirror) so a process that did not
+  // make the reservations — e.g. the runner — still sees them.
   const reservationKey = `res:${modelName}:d`;
-  const totalReserved = (pendingReservations.get(reservationKey) ?? 0);
+  const totalReserved = todayReservedTotal(state, modelName);
 
   if (limitDaily !== null && limitDaily !== undefined) {
     const projectedDaily = spentDaily + totalReserved + estimatedCostUsd;
@@ -395,6 +408,43 @@ export function getBudgetStatus(rootDir: string, logger?: Logger): {
   }
   
   return result;
+}
+
+/** Persist per-run reservations (runId -> model -> amount) in the budget state
+ *  file so the releasing process — usually the runner, a different process
+ *  from the one that called startRun — knows the exact amounts. */
+export function recordRunReservations(
+  runId: string,
+  reservations: Array<{ model: string; estimated: number }>,
+  rootDir: string,
+  logger?: Logger,
+): void {
+  if (!budgetConfig) return;
+  const state = loadBudgetState(budgetConfig, rootDir, logger);
+  state.runReservations = state.runReservations ?? {};
+  const entry: Record<string, number> = {};
+  for (const r of reservations) entry[r.model] = (entry[r.model] ?? 0) + r.estimated;
+  state.runReservations[runId] = entry;
+  saveBudgetState(rootDir, logger);
+}
+
+/** Release a run's reservations against actual costs, reading the reserved
+ *  amounts from the persisted state file (process-independent). */
+export function releaseRunReservations(
+  runId: string,
+  entries: Array<{ model: string; result?: { costUsd?: number } | null }>,
+  rootDir: string,
+  logger: Logger,
+): void {
+  const state = budgetConfig ? loadBudgetState(budgetConfig, rootDir, logger) : null;
+  const reserved = state?.runReservations?.[runId] ?? {};
+  for (const entry of entries) {
+    releaseReservation(entry.model, reserved[entry.model] ?? 0, entry.result?.costUsd ?? 0, rootDir, logger);
+  }
+  if (state?.runReservations) {
+    delete state.runReservations[runId];
+    saveBudgetState(rootDir, logger);
+  }
 }
 
 export function resetBudgetCache(): void {

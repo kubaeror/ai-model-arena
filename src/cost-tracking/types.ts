@@ -40,6 +40,10 @@ export interface BudgetState {
     monthly: Record<string, number>;
   }>;
   reservations?: Record<string, Array<{ amount: number; dailyKey: string; expiresAt?: number }>>;
+  /** Per-run reservations (runId -> model -> reserved USD) persisted so ANY
+   *  process (runner, dashboard, CLI) can release the exact amounts at
+   *  finalize — the in-memory map cannot cross the process boundary. */
+  runReservations?: Record<string, Record<string, number>>;
   lastReset: string;
 }
 

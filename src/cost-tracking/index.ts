@@ -5,5 +5,7 @@ export {
   getBudgetStatus,
   reserveBudget,
   releaseReservation,
+  recordRunReservations,
+  releaseRunReservations,
   budgetStateRoot
 } from './budget.js';

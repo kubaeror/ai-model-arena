@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import type { Logger } from '../types.js';
 import type { ComparisonEntry } from '../logger/comparison-logger.js';
 import { createLogger } from '../logger/pino-logger.js';
-import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing, budgetStateRoot } from '../cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, getPricing, recordRunReservations, releaseRunReservations, budgetStateRoot } from '../cost-tracking/index.js';
 import { projectRoot, timestamp } from './utils.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/index.js';
@@ -23,7 +23,6 @@ import {
   patchIndexAfterFinalize,
   buildPerModelEntries,
 } from './finalize/aggregate.js';
-import { recordRunReservations, releaseRunReservations } from './finalize/budget.js';
 import { runJudgeScoringPass } from './finalize/judge.js';
 import { runAnomalyAnalysis, writebackRuntimeStats } from './finalize/anomalies.js';
 import { notifyRunCompleted } from './finalize/notify.js';
@@ -224,7 +223,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
   
   const spec = await createRunSpec(opts);
   const runId = spec.runId;
-  recordRunReservations(runId, reservations);
+  recordRunReservations(runId, reservations, budgetRoot, logger);
 
   // Register before enqueue: a task that fails fast (e.g. missing API key)
   // writes its final state before the late registerRun upsert can clobber

@@ -6,6 +6,7 @@ import os from 'node:os';
 import {
   loadBudgetConfig, addSpend, checkBudget, resetBudgetCache,
   reserveBudget, releaseReservation, getBudgetStatus,
+  recordRunReservations, releaseRunReservations,
 } from '../../src/cost-tracking/budget.js';
 
 describe('addSpend callable and functional', () => {
@@ -126,5 +127,42 @@ describe('reserve/release/extra-spend/status (fresh state per test)', () => {
     assert.strictEqual(status.global.daily.limit, 10);
     assert.strictEqual(status.models['test-model']?.daily.limit, 5);
     assert.strictEqual(status.global.daily.spent, 2.5);
+  });
+
+  it('run reservations survive a process boundary (record → reset → release)', () => {
+    resetBudgetCache();
+    // Isolate from spend accumulated by earlier tests in the shared file.
+    fs.rmSync(path.join(tmp, '.budget-test-state.json'), { force: true });
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+    // "Dashboard" process: reserveBudget creates the model-level entry,
+    // recordRunReservations the run-level entry (as startRun does).
+    const reserved = reserveBudget('test-model', 1.5, tmp);
+    assert.strictEqual(reserved.ok, true);
+    recordRunReservations('run-x', [{ model: 'test-model', estimated: 1.5 }], tmp);
+    // A fresh process (e.g. the runner) sees the persisted reservation in
+    // projected spend.
+    resetBudgetCache();
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+    const blocked = reserveBudget('test-model', 4, tmp);
+    assert.strictEqual(blocked.ok, false, 'persisted run reservation must count toward projected spend');
+    // Simulate the runner process releasing: fresh module state, no memory.
+    resetBudgetCache();
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+    releaseRunReservations('run-x', [{ model: 'test-model', result: { costUsd: 0.1 } }], tmp);
+    // The released reservation must not count anywhere anymore.
+    resetBudgetCache();
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+    const again = reserveBudget('test-model', 4, tmp);
+    assert.strictEqual(again.ok, true, 'released reservation must not block new reservations');
+    releaseReservation('test-model', 4, 0, tmp);
+  });
+
+  it('releaseRunReservations with no matching run is a no-op', () => {
+    resetBudgetCache();
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+    releaseRunReservations('never-recorded', [{ model: 'test-model', result: { costUsd: 0.5 } }], tmp);
+    const r = reserveBudget('test-model', 1, tmp);
+    assert.strictEqual(r.ok, true);
+    releaseReservation('test-model', 1, 0, tmp);
   });
 });
