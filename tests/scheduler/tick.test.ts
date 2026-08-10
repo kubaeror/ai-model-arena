@@ -236,6 +236,57 @@ test('empty SCHEDULER_FAILURE_BACKOFF_MS falls back to the 1h default', async ()
   }
 });
 
+test('invalid cron is surfaced as a schedule failure with lastError', async () => {
+  const tmp = freshDb();
+  try {
+    await insertSchedule({
+      id: 's-cron', scenario: 'express-rest',
+      models: ['gpt-4o'], cron: 'not a cron', enabled: true,
+      createdAt: new Date().toISOString(),
+    });
+    getDb().prepare('UPDATE schedules SET next_run = ? WHERE id = ?').run(new Date(Date.now() - 60000).toISOString(), 's-cron');
+
+    const result = await tickScheduler({ startRunFn: async () => { throw new Error('must not be called'); } });
+    assert.deepEqual(result.ticked, []);
+    assert.deepEqual(result.failures, ['s-cron'], 'invalid cron must surface as a failure');
+
+    const row = await getScheduleRow('s-cron');
+    assert.equal(row?.last_status, 'error');
+    assert.ok(row?.last_error?.toLowerCase().includes('cron'), `last_error should mention the cron, got: ${row?.last_error}`);
+    assert.ok(row?.next_run, 'next_run should back off after an invalid cron');
+  } finally {
+    delete process.env.AI_ARENA_ROOT;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('failure counters seed from the DB row after a fresh process', async () => {
+  const tmp = freshDb();
+  try {
+    await insertSchedule({
+      id: 's-seed', scenario: 'express-rest', models: ['gpt-4o'],
+      cron: '* * * * *', enabled: true, createdAt: new Date().toISOString(),
+    });
+    // Simulate 2 consecutive failures recorded by a previous process.
+    getDb().prepare('UPDATE schedules SET next_run = ?, consecutive_failures = 2, total_runs = 3, total_failures = 2 WHERE id = ?')
+      .run(new Date(Date.now() - 60000).toISOString(), 's-seed');
+
+    const startRunFn = async () => { throw new Error('boom'); };
+    const result = await tickScheduler({ startRunFn });
+    assert.deepEqual(result.failures, ['s-seed']);
+
+    const state = getScheduleState('s-seed');
+    assert.equal(state?.consecutiveFailures, 3, 'consecutive failures must continue the DB streak across restarts');
+    assert.equal(state?.totalRuns, 4);
+    assert.equal(state?.totalFailures, 3);
+  } finally {
+    delete process.env.AI_ARENA_ROOT;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('scheduler-tick entrypoint loads schedules config before ticking (production path)', async () => {
   const tmp = freshDb();
   const configPath = path.join(tmp, 'schedules.yaml');
