@@ -155,9 +155,10 @@ export function createAnalyticsRouter(): Router {
     }
 
     // For DB-covered runs, query run-level success
+    let successRows: Array<{ run_id: string; model: string; success: number | null }> = [];
     if (coveredRunIds.size > 0) {
       const coveredList = [...coveredRunIds];
-      const successRows = await db.select({ run_id: run_models.run_id, model: run_models.model, success: run_models.success })
+      successRows = await db.select({ run_id: run_models.run_id, model: run_models.model, success: run_models.success })
         .from(run_models)
         .where(inArray(run_models.run_id, coveredList));
       for (const row of successRows) {
@@ -179,6 +180,25 @@ export function createAnalyticsRouter(): Router {
       stats.success += entry.success_count;
       stats.runCount++;
       toolAggMap.set(entry.tool_name, stats);
+    }
+    // successRunCount: distinct successful (run, model) pairs per tool, from
+    // tool_call_stats joined against run_models.success (DB-covered runs).
+    // Without this avgPerSuccessfulTask stayed 0 forever.
+    if (coveredRunIds.size > 0) {
+      const successPairs = new Set<string>();
+      for (const row of successRows) if (row.success === 1) successPairs.add(`${row.run_id}:${row.model}`);
+      const toolRows = await db.select({
+        run_id: tool_call_stats.run_id,
+        model: tool_call_stats.model,
+        tool_name: tool_call_stats.tool_name,
+      }).from(tool_call_stats).where(inArray(tool_call_stats.run_id, [...coveredRunIds]));
+      for (const row of toolRows) {
+        if (!successPairs.has(`${row.run_id}:${row.model}`)) continue;
+        const toolName = String(row.tool_name);
+        const stats = toolAggMap.get(toolName) ?? { total: 0, failed: 0, success: 0, runCount: 0, successRunCount: 0 };
+        stats.successRunCount++;
+        toolAggMap.set(toolName, stats);
+      }
     }
 
     const toolStats: ToolStatsAggregated[] = [];
