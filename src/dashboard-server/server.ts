@@ -34,6 +34,7 @@ import { createCatalogRouter } from './routes/catalog.js';
 import { createMetricsRouter } from './routes/metrics.js';
 import { createCacheRouter } from './routes/cache.js';
 import { createBudgetRouter } from './routes/budget.js';
+import { createCostRouter } from './routes/cost.js';
 import { createSchedulesRouter } from './routes/schedules.js';
 import { createRegressionRouter } from './routes/regression.js';
 import { createSecretsRouter } from './routes/secrets.js';
@@ -302,7 +303,7 @@ async function start(): Promise<void> {
   app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
 
   // ── Cost ledger (viewer for reads) ────────────────────────────────────
-
+  app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
   // ── Files listing (viewer for reads) ─────────────────────────────────
   app.use('/api/files', requireAuth(auth), requireRole('viewer'), createFilesRouter());
 
@@ -346,6 +347,7 @@ async function start(): Promise<void> {
 
   // ── v1 for newly added modules ──────────────────────────────────────────
   app.use('/api/v1/budget', requireApiKey(['budget:read']), createBudgetRouter());
+  app.use('/api/v1/cost', requireApiKey(['cost:read']), createCostRouter());
   app.use('/api/v1/schedules', requireApiKey(['schedules:read']), createSchedulesRouter());
   app.use('/api/v1/regression', requireApiKey(['regression:execute']), createRegressionRouter());
   app.use('/api/v1/files', requireApiKey(['files:read']), createFilesRouter());

@@ -5,7 +5,35 @@ import path from 'node:path';
 import { boot, authedGet, postJson, TEST_ADMIN } from './route-test-harness.js';
 import { getDrizzleDb } from '../../src/db/index.js';
 import { insertAuditEntry } from '../../src/db/query.js';
-import { models, pricing, providers, run_models, runs, audit_log as auditLog } from '../../src/db/schema.js';
+import { models, pricing, providers, run_models, runs, audit_log as auditLog, cost_ledger as costLedger } from '../../src/db/schema.js';
+
+test('GET /api/cost exposes the cost ledger summary', async (t) => {
+  const h = await boot(t);
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  await db.insert(runs).values({
+    run_id: 'cost-run-1', scenario: 'smoke', models: '["gpt-4o"]',
+    started_at: now, finished_at: now, status: 'completed', source: 'cli',
+    comparison_md_path: null, comparison_json_path: null, created_by: null,
+  });
+  await db.insert(costLedger).values({
+    run_id: 'cost-run-1', model: 'gpt-4o', cost_usd: 1.25,
+    input_tokens: 1000, output_tokens: 500, recorded_at: now,
+  });
+
+  const anon = await fetch(`${h.base}/api/cost`);
+  assert.equal(anon.status, 401);
+
+  const res = await authedGet(h.base, h.adminToken, '/api/cost');
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { groupBy: string; models: Array<{ model: string; total_cost: number }> };
+  assert.equal(body.groupBy, 'model');
+  const row = body.models.find((m) => m.model === 'gpt-4o');
+  assert.equal(row?.total_cost, 1.25);
+
+  const byDay = await authedGet(h.base, h.adminToken, '/api/cost?groupBy=day');
+  assert.equal(byDay.status, 200);
+});
 
 test('user password changes never reach the audit log as plaintext', async (t) => {
   const h = await boot(t);

@@ -154,6 +154,7 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   const { createSecretsRouter } = await import(`../../src/dashboard-server/routes/secrets.js${bust}`);
   const { createAuditRouter } = await import(`../../src/dashboard-server/routes/audit.js${bust}`);
   const { createUsersRouter } = await import(`../../src/dashboard-server/routes/users.js${bust}`);
+  const { createCostRouter } = await import(`../../src/dashboard-server/routes/cost.js${bust}`);
   const { registerQueueRoutes } = await import(`../../src/dashboard-server/routes/queues.js${bust}`);
 
   app.use('/api/models', requireAuth(auth), requireRole('viewer'), createModelsRouter());
@@ -162,6 +163,7 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   app.use('/api/secrets', requireAuth(auth), requireRole('admin'), createSecretsRouter());
   app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
   app.use('/api/users', requireAuth(auth), requireRole('admin'), createUsersRouter());
+  app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
   app.get('/api/roles', requireAuth(auth), requireRole('viewer'), async (_req, res) => {
     const { listRoles } = await import('../../src/db/query.js');
     res.json({ roles: await listRoles() });
