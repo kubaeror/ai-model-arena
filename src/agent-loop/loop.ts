@@ -12,7 +12,7 @@ import { TASK_COMPLETE_TOOL } from '../tools/schema.js';
 import { detectInjection, scanToolResult } from '../security/prompt-injection.js';
 import { startAgentSpan, startToolSpan, endSpan, setSpanAttributes } from '../observability/instrumentation-helpers.js';
 import type { Span } from '@opentelemetry/api';
-import { runTurnLoop } from './turn-loop.js';
+import { runTurnLoop, remapStopReason } from './turn-loop.js';
 
 export interface AgentLoopOptions {
   adapter: ModelAdapter;
@@ -260,7 +260,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     },
   });
 
-  const stopReason = result.turnsUsed >= maxTurns && result.stopReason === 'unknown' ? 'max_turns' : result.stopReason;
+  const stopReason = remapStopReason(result.stopReason, result.turnsUsed, maxTurns);
   if (stopReason === 'max_turns') {
     logger.warn('Agent stopped: max_turns reached', { turnsUsed: result.turnsUsed, maxTurns });
   }

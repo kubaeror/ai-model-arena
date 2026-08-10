@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { validateArgs } from './util.js';
 import type { ToolExecutor, ChatMessage, TokenUsage, SubagentConfig } from '../types.js';
 import type { ModelAdapter } from '../providers/adapters/base.js';
-import { runTurnLoop } from '../agent-loop/turn-loop.js';
+import { runTurnLoop, remapStopReason } from '../agent-loop/turn-loop.js';
 import { TASK_COMPLETE_TOOL } from './schema.js';
 
 const TaskArgs = z.object({
@@ -74,10 +74,7 @@ async function runSubagent(
     },
   });
 
-  let stopReason = result.stopReason;
-  if (result.turnsUsed >= sub.maxTurns && stopReason === 'unknown') {
-    stopReason = 'max_turns';
-  }
+  const stopReason = remapStopReason(result.stopReason, result.turnsUsed, sub.maxTurns);
 
   const finalAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
   const finalOutput = finalAssistantMsg?.content ?? '';

@@ -127,8 +127,7 @@ const DEFAULT_UNKNOWN_TOOL_CONTENT = (name: string, tools: ToolDefinition[]): st
  * and delegates everything caller-specific (budget checks, compaction, transcripts,
  * spans, error wording, truncation caps) to hooks/events/options.
  */
-export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult> {
-  const { adapter, tools, executors, toolCtx, messages, maxTurns, taskCompleteToolName, sendOpts } = opts;
+export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult> {  const { adapter, tools, executors, toolCtx, messages, maxTurns, taskCompleteToolName, sendOpts } = opts;
   const startTurn = opts.startTurn ?? 1;
   const maxToolResultChars = opts.maxToolResultChars ?? DEFAULT_MAX_TOOL_RESULT_CHARS;
   const truncateSuffix = opts.truncateSuffix ?? DEFAULT_TRUNCATE_SUFFIX;
@@ -254,4 +253,10 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
   const toolsCalled = [...toolCounts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
 
   return { turnsUsed, totalToolCalls, toolsCalled, toolSuccessRates, tokenUsage: usage, stopReason, errors };
+}
+
+/** Normalize an 'unknown' stop reason when the turn budget was exhausted.
+ *  Shared by the top-level loop and the subagent loop. */
+export function remapStopReason(stopReason: string, turnsUsed: number, maxTurns: number): string {
+  return stopReason === 'unknown' && turnsUsed >= maxTurns ? 'max_turns' : stopReason;
 }

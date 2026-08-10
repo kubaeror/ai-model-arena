@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis';
 import { propagation, context } from '@opentelemetry/api';
 import type { Task, TaskQueue } from './types.js';
+import { isTerminalAttempt } from './types.js';
 import type { RedisQueueConfig } from './redis-config.js';
 import { parseTask, safeParseTask } from './task-schema.js';
 import { streamKey, dlqStreamKey } from './router.js';
@@ -140,7 +141,7 @@ export class RedisStreamQueue implements TaskQueue {
             continue;
           }
 
-          if ((task.attempts ?? 0) >= this.config.maxAttempts) {
+          if (isTerminalAttempt(task.attempts ?? 0, this.config.maxAttempts)) {
             const dlq = dlqStreamKey(this.config.streamPrefix, provider);
             const dlqFields: (string | number)[] = [
               'task', JSON.stringify(task),
@@ -314,7 +315,9 @@ export class RedisStreamQueue implements TaskQueue {
       local taskId = ARGV[1]
       local reason = ARGV[2]
       local group = ARGV[3]
-      local maxAttempts = tonumber(ARGV[4])
+            local maxAttempts = tonumber(ARGV[4])
+      -- Mirrors isTerminalAttempt in types.ts: the nack bumps attempts and
+      -- dead-letters at attempts >= maxAttempts (attempts + 1 >= max).
       local backoffMs = tonumber(ARGV[5]) or 2000
 
       -- Read the message from the stream (single message by exact ID)
@@ -380,7 +383,7 @@ export class RedisStreamQueue implements TaskQueue {
       const task = parseTask(JSON.parse(taskData.task ?? '{}'));
       task.attempts = (task.attempts ?? 0) + 1;
 
-      if (task.attempts >= maxAttempts) {
+      if (isTerminalAttempt(task.attempts, maxAttempts)) {
         const dlqFields: (string | number)[] = ['task', JSON.stringify(task), 'reason', reason ?? ''];
         if (task._traceparent) { dlqFields.push('traceparent'); dlqFields.push(task._traceparent); }
         await this.redis.xadd(dlq, '*', ...dlqFields);

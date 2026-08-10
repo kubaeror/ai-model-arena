@@ -6,7 +6,7 @@ import { outputRoot, dbPath, findProjectRoot } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState, listModelCallsForSession, listMessagesBySession } from './db/query.js';
 import { resumeFrom } from './runner/checkpoint.js';
-import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS } from './queue/index.js';
+import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS, isTerminalAttempt } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
 import { resolveModelForRun } from './db/model-resolver.js';
@@ -190,7 +190,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
   // task's attempts and dead-letters at >= maxAttempts, so the attempt being
   // nacked right now is terminal iff attempts + 1 >= maxAttempts.
   const maxTaskAttempts = queue.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const isTerminalFailure = (attempts: number): boolean => attempts + 1 >= maxTaskAttempts;
+  const isTerminalFailure = (attempts: number): boolean => isTerminalAttempt(attempts, maxTaskAttempts);
   const ac = new AbortController();
   const signal = opts.signal ?? ac.signal;
   const runnerId = process.env.REDIS_CONSUMER_NAME ?? `runner-${process.pid}`;
