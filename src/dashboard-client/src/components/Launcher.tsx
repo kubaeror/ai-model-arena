@@ -27,18 +27,25 @@ export function Launcher({ open, onClose }: LauncherProps) {
     queryFn: async () => (await api.get('/api/scenarios')).json() as Promise<{ scenarios: Scenario[] }>,
   });
   const [submitting, setSubmitting] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
 
   async function handleLaunch() {
     if (!scenario || selectedModels.length === 0) return;
     setSubmitting(true);
+    setLaunchError(null);
     try {
       const res = await api.post('/api/runs', {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scenario, models: selectedModels }),
       });
+      if (!res.ok) {
+        throw new Error(`Launch failed (${res.status})`);
+      }
       const data = await res.json() as { runId: string };
       onClose();
       navigate(`/runs/${data.runId}`);
+    } catch {
+      setLaunchError('Launch failed — check server logs');
     } finally {
       setSubmitting(false);
     }
@@ -74,6 +81,7 @@ export function Launcher({ open, onClose }: LauncherProps) {
             ))}
           </div>
         </div>
+        {launchError && <p className="text-12 text-danger" role="alert">{launchError}</p>}
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={handleLaunch} disabled={!scenario || selectedModels.length === 0 || submitting}>
