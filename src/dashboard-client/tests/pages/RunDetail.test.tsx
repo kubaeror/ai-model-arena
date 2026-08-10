@@ -24,6 +24,13 @@ vi.mock('../../src/hooks/useLive', () => ({
     completed: false,
     online: false,
   }),
+  useLive: () => ({
+    connected: true,
+    processes: [],
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    getRunState: () => ({ entries: [], logLines: [], completed: false }),
+  }),
 }));
 
 vi.mock('../../src/lib/api', async () => {

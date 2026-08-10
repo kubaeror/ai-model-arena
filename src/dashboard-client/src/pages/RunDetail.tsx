@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useRunLive } from '../hooks/useLive.js';
+import { useRunLive, useLive } from '../hooks/useLive.js';
 import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, getRunDiff, stopRun, restartRun, getTrace, type JudgeScoreRow } from '../lib/api.js';
 import { PageShell } from '../components/ui/PageShell';
 import { Button } from '../components/ui/Button';
@@ -40,6 +40,7 @@ export function RunDetail() {
   const [tab, setTab] = useState<string>('conversation');
 
   const live = useRunLive(runId, activeModel);
+  const { connected } = useLive();
   const convQuery = useQuery({
     queryKey: ['conversation', runId, activeModel],
     queryFn: () => getConversation(runId, activeModel),
@@ -64,6 +65,7 @@ export function RunDetail() {
       breadcrumbs={[{ label: 'Home', to: '/' }, { label: run?.scenario ?? runId }]}
       actions={
         <div className="flex items-center gap-2">
+          <Badge variant={connected ? 'success' : 'neutral'} value={connected ? 'live' : 'offline'} />
           {actionError && <span className="text-12 text-danger" role="alert">{actionError}</span>}
           <Badge variant={statusTier === 'S' ? 'tier' : 'neutral'} value={statusLabel} />
           <Button variant="ghost" size="sm" onClick={() => actionMutation.mutate(() => stopRun(runId))} disabled={!live.online}>Stop</Button>

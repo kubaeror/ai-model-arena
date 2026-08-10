@@ -526,13 +526,6 @@ export async function createUser(username: string, password: string): Promise<Ar
   });
 }
 
-export async function updateUser(id: string, opts: { username?: string; password?: string }): Promise<unknown> {
-  return apiFetch(`/api/users/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    body: JSON.stringify(opts),
-  });
-}
-
 export async function deleteUser(id: string): Promise<unknown> {
   return apiFetch(`/api/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
