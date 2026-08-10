@@ -21,11 +21,12 @@ export async function getCacheStates(): Promise<CatalogCacheStateRow[]> {
 export async function ensureFresh(
   source: 'models.dev' | 'modelbench' | 'zeroeval',
   opts?: { force?: boolean },
-): Promise<{ ok: boolean; error?: string }> {
-  if (!opts?.force && !(await isStale(source))) return { ok: true };
+): Promise<{ ok: boolean; error?: string; count?: number }> {
+  if (!opts?.force && !(await isStale(source))) return { ok: true, count: 0 };
   if (source === 'models.dev') {
     const { fetchSync } = await import('./sync.js');
-    return fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    const res = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    return { ok: res.ok, error: res.error, count: res.count };
   }
   const { fetchBenchmarks } = await import('./benchmarks.js');
   return fetchBenchmarks(source, { force: true });
