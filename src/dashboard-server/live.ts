@@ -215,8 +215,12 @@ export class LiveHub {
   }
 
   private async finalizeRuns(): Promise<void> {
-    const running = (await listRuns()).filter((r) => r.status === 'running');
-    for (const rec of running) {
+    // 'stopped' runs are included: stopRun marks their per-model rows
+    // terminal, and a stopped run whose runner died would otherwise never
+    // finalize (no aggregation, no reservation release). finalizeCore's
+    // idempotency guard keeps this safe against the runner racing us.
+    const active = (await listRuns()).filter((r) => r.status === 'running' || r.status === 'stopped');
+    for (const rec of active) {
       try {
         if (await isRunCompleteByRunId(rec.runId)) {
           await finalizeRunByRunId(rec.runId, this.logger);
