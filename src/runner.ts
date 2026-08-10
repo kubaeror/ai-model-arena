@@ -385,6 +385,17 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
           taskCounted = true;
           tasksFailed.inc();
+          // The nack below dead-letters this attempt, so the model task just
+          // reached a terminal state. Mark the model row failed and finalize
+          // the run; without this the run stays wedged in 'running' forever
+          // (isRunCompleteByRunId never sees a terminal status).
+          try {
+            await transitionTaskState(runId, task!.model, 'failed', runnerId);
+          } catch (err: unknown) {
+            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+            logger.error('transitionTaskState to "failed" failed for missing model — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
+          }
+          void maybeFinalizeRun(runId, logger).catch(() => undefined);
         }
         await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
         continue;
@@ -401,14 +412,21 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           durationMs: 0, turnsUsed: 0, maxTurns: 0, totalToolCalls: 0, toolsCalled: [],
           tokenUsage: {}, stopReason: 'setup_error', errors: [msg], success: false,
         });
-        transitionTaskState(runId, task.model, 'failed', runnerId).catch(e =>
-          logger.warn('Failed to write failed state', { error: String(e) }),
-        );
+        // Awaited before maybeFinalizeRun below: on Postgres the pg.Pool
+        // spreads queries across connections, so a fire-and-forget UPDATE
+        // could lose the race against the isRunCompleteByRunId SELECT.
+        try {
+          await transitionTaskState(runId, task.model, 'failed', runnerId);
+        } catch (err: unknown) {
+          const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+          logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
+        }
         taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
         taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
         taskCounted = true;
         tasksFailed.inc();
         await queue.ack(task!._redisId ?? task!.taskId);
+        void maybeFinalizeRun(runId, logger).catch(() => undefined);
         continue;
       }
 

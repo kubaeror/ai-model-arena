@@ -128,6 +128,13 @@ test('runner dequeues and nacks an unresolvable model into the DLQ', async () =>
     globalThis.fetch = origFetch;
   }
 
+  await upsertRun({
+    runId: 'run-bad', scenario: 'express-rest', models: ['nope/nope'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{ model: 'nope/nope', runId: 'run-bad', status: 'running' } as never],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
   const queue = new InMemoryQueue();
   const ac = new AbortController();
   const runnerDone = startRunner({ queue, signal: ac.signal });
@@ -149,6 +156,16 @@ test('runner dequeues and nacks an unresolvable model into the DLQ', async () =>
     assert.equal(dlq[0]?.taskId, 'bad-model');
     assert.equal(dlq[0]?.attempts, 5, 'nack should have bumped attempts to the DLQ threshold');
     assert.equal(await tasksFailedValue(), 1, 'dead-lettered model-not-found must count as a terminal failure');
+    // The dead-lettered model task is terminal: the model row must reach a
+    // non-running status and the run must self-finalize (no dashboard watcher
+    // in this process) instead of staying wedged in 'running' forever.
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get('run-bad', 'nope/nope') as { status: string } | undefined;
+    assert.notEqual(row?.status, 'running', 'dead-lettered model-not-found must not stay running');
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    await waitFor(async () => (await getRunRecord('run-bad'))?.status === 'completed', 5000, 'run self-finalized');
+    const rec = await getRunRecord('run-bad');
+    assert.equal(rec?.status, 'completed', 'dead-lettered run must be finalized by the runner');
+    assert.notEqual(rec?.perModel[0]?.status, 'running', 'indexed model row must not stay running');
   } finally {
     ac.abort();
     await runnerDone;
@@ -283,10 +300,15 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
 
   try {
     await waitFor(async () => (await queue.size()) === 0, 8000, 'task acked');
-    await waitFor(() => {
-      const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get('run2', 'GPT-4o') as { status: string } | undefined;
-      return row?.status === 'failed';
-    }, 5000, 'run_models status failed');
+    // Fail-fast must self-finalize like every other terminal path — it must
+    // not depend on the dashboard watcher being up. (The transient 'failed'
+    // transition is rewritten by patchIndexAfterFinalize, so assert the
+    // post-finalize states.)
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    await waitFor(async () => (await getRunRecord('run2'))?.status === 'completed', 5000, 'fail-fast run self-finalized');
+    const rec = await getRunRecord('run2');
+    assert.equal(rec?.status, 'completed', 'missing-api-key run must be finalized by the runner');
+    assert.notEqual(rec?.perModel[0]?.status, 'running', 'per-model row must not stay running');
 
     const resultPath = path.join(outputs, 'GPT-4o', 'run2', 'result.json');
     assert.ok(fs.existsSync(resultPath), 'result.json should exist');
