@@ -146,13 +146,22 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   };
 }
 
-/** Register a run (status=running) in the index. */
+/** Register a run (status=running) in the index. Never clobbers a terminal
+ *  run or model: a fail-fast finalize may have written 'failed'/'stopped'
+ *  before this upsert lands (e.g. crash between finalize and register). */
 export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli', createdBy?: string): Promise<void> {
-  const perModel: RunIndexModelEntry[] = spec.models.map((m) => ({
-    model: m.model, runId: spec.runId, outputDir: m.outputDir,
-    sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
-    reportPath: m.reportPath, logFile: m.logFile, status: 'running',
-  }));
+  const existing = await getRunRecord(spec.runId);
+  if (existing && TERMINAL_STATUSES.has(existing.status)) return;
+  const perModel: RunIndexModelEntry[] = spec.models
+    .filter((m) => {
+      const ex = existing?.perModel.find((p) => p.model === m.model);
+      return !ex || !TERMINAL_STATUSES.has(ex.status);
+    })
+    .map((m) => ({
+      model: m.model, runId: spec.runId, outputDir: m.outputDir,
+      sandboxDir: m.sandboxDir, resultPath: m.resultPath, conversationPath: m.conversationPath,
+      reportPath: m.reportPath, logFile: m.logFile, status: 'running',
+    }));
   await upsertRun({
     runId: spec.runId, scenario: spec.scenario, models: spec.models.map((m) => m.model),
     startedAt: spec.startedAt, finishedAt: null, status: 'running', source, perModel,

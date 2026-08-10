@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
-import { stopRun } from '../../src/orchestrator/run-lifecycle.js';
+import { stopRun, registerRun, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
 
 const ORIG_ENV = { ...process.env };
 
@@ -60,6 +60,55 @@ test('stopRun on a completed run keeps terminal statuses intact', async () => {
     const rec = await getRunRecord('stop-2');
     assert.equal(rec?.status, 'stopped');
     assert.equal(rec?.perModel[0]?.status, 'completed', 'terminal model rows must not be regressed');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+function makeSpec(runId: string, model: string): RunSpec {
+  return {
+    runId,
+    scenario: 'smoke',
+    ts: 't',
+    startedAt: new Date().toISOString(),
+    models: [{
+      model,
+      providerId: 'openai',
+      outputDir: `/tmp/${runId}/out`,
+      sandboxDir: `/tmp/${runId}/out/files`,
+      resultPath: `/tmp/${runId}/out/result.json`,
+      conversationPath: `/tmp/${runId}/out/conversation.json`,
+      reportPath: `/tmp/${runId}/out/report.md`,
+      logFile: `/tmp/${runId}/out/runner.log`,
+    }],
+  };
+}
+
+test('registerRun does not clobber a terminal run', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-register-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    const spec = makeSpec('reg-1', 'gpt-4o');
+    await upsertRun({
+      runId: spec.runId, scenario: spec.scenario, models: [spec.models[0]!.model],
+      startedAt: spec.startedAt, finishedAt: new Date().toISOString(), status: 'stopped', source: 'cli',
+      perModel: [{ model: 'gpt-4o', runId: spec.runId, status: 'stopped' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    // A late registration (crash between finalize and register) must not
+    // resurrect the stopped run.
+    await registerRun(spec, 'cli');
+
+    const rec = await getRunRecord(spec.runId);
+    assert.equal(rec?.status, 'stopped', 'registerRun must not resurrect a terminal run');
+    assert.equal(rec?.perModel[0]?.status, 'stopped', 'per-model row must not be reset to running');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
