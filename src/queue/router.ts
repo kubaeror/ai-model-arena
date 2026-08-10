@@ -23,7 +23,7 @@ for (const d of BUILTIN_PROVIDERS) {
   providerFamilies.set(d.id, FAMILY_OVERRIDES[d.id] ?? d.adapter);
 }
 
-export function familyFor(provider: string): string {
+function familyFor(provider: string): string {
   return providerFamilies.get(provider) ?? provider;
 }
 

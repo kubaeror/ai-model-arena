@@ -434,7 +434,7 @@ export function releaseRunReservations(
   runId: string,
   entries: Array<{ model: string; result?: { costUsd?: number } | null }>,
   rootDir: string,
-  logger: Logger,
+  logger?: Logger,
 ): void {
   const state = budgetConfig ? loadBudgetState(budgetConfig, rootDir, logger) : null;
   const reserved = state?.runReservations?.[runId] ?? {};

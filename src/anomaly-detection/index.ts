@@ -12,7 +12,7 @@ import {
   type RunAnalysisInput,
 } from './detectors.js';
 import { extractToolCallsFromConversation, type ToolCallEntry } from '../logger/conversation-parser.js';
-import { insertAnomaly, listAnomaliesForRun, type AnomalyRecord, type NewAnomaly } from './db.js';
+import { insertAnomaly, type AnomalyRecord, type NewAnomaly } from './db.js';
 import { dispatchNotification, dispatchWebhooks, DispatchEventType } from '../notifications/index.js';
 
 const logger = createLogger('ai-arena:anomaly');
@@ -118,14 +118,5 @@ function readResultJsonSafe(resultPath: string): RunResult | null {
     return readResultJson(resultPath);
   } catch {
     return null;
-  }
-}
-
-/** Convenience: anomalies already stored for a run. */
-export async function anomaliesForRun(runId: string): Promise<AnomalyRecord[]> {
-  try {
-    return listAnomaliesForRun(runId);
-  } catch {
-    return [];
   }
 }

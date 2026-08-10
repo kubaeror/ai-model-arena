@@ -85,34 +85,6 @@ export function isOwnerAllowed(
   return ownerIsPresent && actor.sub === ownerId;
 }
 
-export function requireOwnership(
-  getOwnerId: (req: Request) => string | undefined,
-): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const owner = getOwnerId(req);
-    // Default-DENY: previously a missing owner (legacy/migrated resource)
-    // was treated as "allow" (the `if (!owner) return next()` branch), which
-    // let any authenticated viewer read/mutate another tenant's resources
-    // when createdBy was null. Now: a resource with no owner (undefined, null,
-    // or empty string) is only accessible to admins (who can reassign
-    // ownership or delete the orphan). An admin is always allowed. Otherwise
-    // the actor must match the owner exactly.
-    const actor = (req as UserRequest).user;
-    const allowed = isOwnerAllowed({ sub: actor?.sub, role: actor?.role }, owner);
-    if (!allowed) {
-      res.status(403).json({ error: 'forbidden: not the resource owner' });
-      return;
-    }
-    next();
-  };
-}
-
-let auditFailureCount = 0;
-
-export function getAuditFailureCount(): number {
-  return auditFailureCount;
-}
-
 export async function audit(
   actor: string,
   action: string,
@@ -138,7 +110,6 @@ export async function audit(
     // fired because `audit()` swallows internally. Log the failure HERE so
     // dropped audit records are observable regardless of the call site
     // (auditSafe fire-and-forget, awaited audit(), or a future caller).
-    auditFailureCount++;
     const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
     logger.error('audit: failed to persist audit entry', { actor, action, entity, ...detail });
     // Increment Prometheus counter if available (non-fatal if prom-client is not loaded)

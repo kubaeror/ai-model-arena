@@ -110,9 +110,6 @@ export class SandboxGit {
     }
   }
   
-  getInitialCommitHash(): string | null {
-    return this.initialCommitHash;
-  }
 }
 
 export async function writeDiffPatch(outputDir: string, diff: string, logger?: Logger): Promise<string | null> {

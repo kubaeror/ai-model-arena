@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BUILTIN_PROVIDERS } from '../../src/providers/index.js';
-import { isBlockedProviderHost } from '../../src/providers/url-validator.js';
+import { validateProviderUrl } from '../../src/providers/url-validator.js';
 
 /**
  * Descriptors whose apiBase contains a per-account/location template placeholder
@@ -102,8 +102,8 @@ test('builtin apiBase URLs parse as https with no blocked hosts', () => {
     if (!d.apiBase) continue;
     const url = new URL(d.apiBase); // throws if unparseable
     if (!LOCAL_ALLOWLIST.has(d.id)) {
-      assert.equal(url.protocol, 'https:', `${d.id}: apiBase must use https`);
-      assert.equal(isBlockedProviderHost(url.hostname), false, `${d.id}: hostname ${url.hostname} is blocked`);
+      const v = validateProviderUrl(d.apiBase);
+      assert.equal(v.ok, true, `${d.id}: apiBase must validate (host ${url.hostname} blocked?)`);
     }
     if (TEMPLATE_ALLOWLIST.has(d.id)) {
       assert.ok(d.apiBase.includes('{'), `${d.id}: apiBase must contain a template placeholder`);

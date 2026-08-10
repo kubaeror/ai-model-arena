@@ -7,7 +7,7 @@ import { initDb, closeDb, getDrizzleClient } from '../../src/db/client.js';
 import { pricing } from '../../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { fetchSync } from '../../src/catalog/sync.js';
-import { getModelPricing, getPricing, computeCost, formatCost, resetPricingCache } from '../../src/cost-tracking/pricing.js';
+import { getModelPricing, getPricing, computeCost, resetPricingCache } from '../../src/cost-tracking/pricing.js';
 import type { CostTokenUsage } from '../../src/cost-tracking/types.js';
 
 const MODELS_DEV = {
@@ -122,12 +122,6 @@ test('computeCost handles null usage fields', async () => {
     const c = await computeCost('openai/gpt-4o', {} as unknown as CostTokenUsage);
     assert.equal(c.total, 0);
   } finally { closeDb(); cleanup(); }
-});
-
-test('formatCost formats small/large amounts', () => {
-  assert.equal(formatCost(0.0005), '$0.000500');
-  assert.equal(formatCost(0.123456), '$0.1235');
-  assert.equal(formatCost(12.5), '$12.50');
 });
 
 test('over-200k output cost uses the tier output price, not the input fallback', async () => {

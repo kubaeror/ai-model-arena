@@ -62,6 +62,3 @@ export function loadYamlConfigSync<T>(opts: LoadYamlConfigOpts<T>): T {
   return result;
 }
 
-export function loadYamlConfig<T>(opts: LoadYamlConfigOpts<T>): Promise<T> {
-  return Promise.resolve(loadYamlConfigSync(opts));
-}

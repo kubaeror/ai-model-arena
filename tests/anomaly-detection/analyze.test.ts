@@ -6,7 +6,8 @@ import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
 import { upsertRun, type RunIndexRecord } from '../../src/db/runs.js';
 import { buildRunHistory, costStats } from '../../src/anomaly-detection/baselines.js';
-import { analyzeRun, anomaliesForRun } from '../../src/anomaly-detection/index.js';
+import { analyzeRun } from '../../src/anomaly-detection/index.js';
+import { listAnomaliesForRun } from '../../src/db/query.js';
 import { writeResultJson, type RunResult } from '../../src/logger/result-logger.js';
 
 function mkResult(runId: string, scenario: string, costUsd: number): RunResult {
@@ -76,7 +77,7 @@ test('analyzeRun on the same run twice inserts only one anomaly (dedup)', async 
     const second = await analyzeRun('r-dedup');
     assert.equal(first.length, 1);
     assert.equal(second.length, 1);
-    const stored = await anomaliesForRun('r-dedup');
+    const stored = await listAnomaliesForRun('r-dedup');
     assert.equal(stored.length, 1);
     assert.equal(stored[0]!.type, 'loop');
   } finally {

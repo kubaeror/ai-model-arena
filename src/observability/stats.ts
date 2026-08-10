@@ -67,7 +67,6 @@ export async function computeObservabilityStats(modelFilter?: string): Promise<O
         costsBy.set(`${pm.model}|${run.scenario}`, costArr);
         const errs = Array.isArray(result.errors) ? result.errors.length : 0;
         if (errs > 0) modelErrors.set(pm.model, (modelErrors.get(pm.model) ?? 0) + 1);
-        void result.success;
       }
       const meta: TraceMeta | null = readTraceMeta(pm.outputDir);
       if (meta) {

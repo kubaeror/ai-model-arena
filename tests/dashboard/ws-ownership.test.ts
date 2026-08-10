@@ -48,7 +48,7 @@ test('canSubscribeToRun default-denies ownerless runs to non-admins', async () =
       runId: 'legacy-run', scenario: 'smoke', models: ['gpt-4o'],
       startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
       perModel: [{ model: 'gpt-4o', runId: 'legacy-run', status: 'running' } as never],
-      comparisonMdPath: null, comparisonJsonPath: null, createdBy: null,
+      comparisonMdPath: null, comparisonJsonPath: null,
     });
 
     assert.equal(await canSubscribeToRun({ sub: 'alice', role: 'viewer' }, 'legacy-run'), false);

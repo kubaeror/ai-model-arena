@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { streamKey, dlqStreamKey, knownProviders, familyFor } from '../../src/queue/router.js';
+import { streamKey, dlqStreamKey, knownProviders } from '../../src/queue/router.js';
 import { BUILTIN_PROVIDERS } from '../../src/providers/index.js';
 
 test('streamKey routes openai to openai-compat family', () => {
@@ -52,13 +52,12 @@ test('bedrock routes to its own stream (IAM auth, no shared family)', () => {
 
 test('unknown/custom providers keep per-provider streams', () => {
   assert.equal(streamKey('arena:tasks', 'my-custom'), 'arena:tasks:my-custom');
-  assert.equal(familyFor('my-custom'), 'my-custom');
 });
 
 test('every builtin provider resolves to a family', () => {
   for (const d of BUILTIN_PROVIDERS) {
-    const family = familyFor(d.id);
-    assert.ok(family.length > 0, `family for ${d.id}`);
+    const key = streamKey('arena:tasks', d.id);
+    assert.ok(key.length > 0, `family for ${d.id}`);
   }
 });
 
