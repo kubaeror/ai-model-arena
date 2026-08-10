@@ -116,7 +116,7 @@ jobs:
       # Required by the SLSA generator's nested jobs — without it GitHub
       # rejects the whole workflow at parse time (startup_failure, 0 jobs).
       actions: read
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
     with:
       image: ${{ needs.build-and-deploy.outputs.image }}
       digest: ${{ needs.build-and-deploy.outputs.digest }}
