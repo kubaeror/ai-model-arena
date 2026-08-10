@@ -282,7 +282,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       activeTasks.inc();
 
       // Check per-run cancellation before starting execution
-      const runId = task.config.modelRunId as string ?? task.sessionId;
+      const modelRunId = String(task.config.modelRunId ?? task.sessionId);
+      const runId = modelRunId;
       if (await isRunCancelled(runId)) {
         logger.info('Run cancelled before execution', { runId, taskId: task.taskId });
         await clearRunCancelled(runId);
@@ -295,10 +296,15 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       logger.info('Task dequeued', { taskId: task.taskId, model: task.model, scenario: task.scenario });
 
-      // Transition task to 'claimed' state (persisted in DB)
-      transitionTaskState(runId, task.model, 'claimed', runnerId).catch(e =>
-        logger.warn('Failed to write claimed state', { error: String(e) }),
-      );
+      // Transition task to 'claimed' state (persisted in DB). Awaited so the
+      // ordering contract holds on Postgres (queries spread across pool
+      // connections): terminal writes must never land before the claimed/
+      // running transitions they follow.
+      try {
+        await transitionTaskState(runId, task.model, 'claimed', runnerId);
+      } catch (e) {
+        logger.warn('Failed to write claimed state', { error: String(e) });
+      }
 
       let initialTurn = 1;
       let session = await store.loadSession(task.sessionId);
@@ -315,7 +321,6 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         }
       }
 
-      const modelRunId = task.config.modelRunId as string ?? task.sessionId;
       const scenarioName = task.scenario;
       const modelName = task.model;
 
@@ -467,9 +472,11 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
 
       // Transition to 'running'
-      transitionTaskState(runId, task.model, 'running', runnerId).catch(e =>
-        logger.warn('Failed to write running state', { error: String(e) }),
-      );
+      try {
+        await transitionTaskState(runId, task.model, 'running', runnerId);
+      } catch (e) {
+        logger.warn('Failed to write running state', { error: String(e) });
+      }
 
       while (maxFallbackHops >= 0) {
         const breaker = CircuitBreaker.for(currentProvider, currentModel);
@@ -552,7 +559,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               }
             },
             onBudgetCheck: async (_turn: number, _tokenUsage: TokenUsage) => {
-              const cancelledRunId = task!.config.modelRunId as string ?? task!.sessionId;
+              const cancelledRunId = modelRunId;
               if (await isRunCancelled(cancelledRunId)) {
                 logger.info('Run cancelled during execution', { runId: cancelledRunId });
                 return false;
