@@ -57,6 +57,9 @@ kubectl -n ai-arena create secret generic webhook-secret \
 
 ```bash
 kubectl apply -k k8s/overlays/dev
+# Observability stack (collector, tempo, prometheus, loki, grafana):
+kubectl apply -k k8s/observability
+# ...or run scripts/k8s/deploy.sh, which does both (and waits for rollouts).
 ```
 
 ### Production (Argo CD)

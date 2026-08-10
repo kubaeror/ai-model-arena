@@ -8,6 +8,15 @@ docker build -t ghcr.io/kubaeror/ai-model-arena:latest .
 echo "=== Applying infra via kustomize (dev overlay) ==="
 kubectl apply -k k8s/overlays/dev
 
+echo "=== Deploying observability stack (collector, tempo, prometheus, loki, grafana) ==="
+if [ -d "$(dirname "$0")/../../k8s/observability" ]; then
+  kubectl apply -k "$(dirname "$0")/../../k8s/observability"
+  kubectl -n observability rollout status deploy/otel-collector --timeout=120s || true
+  kubectl -n observability rollout status deploy/grafana --timeout=120s || true
+else
+  echo "k8s/observability not found — skipping observability deploy"
+fi
+
 echo "=== Waiting for rollout ==="
 kubectl -n ai-arena wait --for=condition=ready pod -l app=postgres --timeout=120s
 kubectl -n ai-arena wait --for=condition=ready pod -l app=redis --timeout=60s

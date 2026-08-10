@@ -48,7 +48,7 @@ Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscalin
 ## Deployment
 
 - `docker compose up -d` — Local dev (Postgres + Redis + runner + dashboard)
-- `minikube start && bash scripts/k8s/bootstrap.sh && bash scripts/k8s/deploy.sh` — k8s deploy
+- `minikube start && bash scripts/k8s/bootstrap.sh && bash scripts/k8s/deploy.sh` — k8s deploy (includes the observability stack: Tempo/Prometheus/Loki/Grafana)
 - `minikube service dashboard -n ai-arena --url` — Access dashboard on minikube
 
 ## Code Conventions
