@@ -13,8 +13,8 @@ export const PRIVATE_IP_RANGES = [
   /^::1$/,                                     // IPv6 loopback
   /^::$/,                                      // IPv6 unspecified
   /^fe[89ab][0-9a-f]:/i,                      // IPv6 link-local (fe80::/10)
-  /^fc00:/i,                                   // IPv6 unique-local (fc00::/7)
-  /^fd[0-9a-f]{2}:/i,                         // IPv6 unique-local (fd00::/8)
+  /^f[cd][0-9a-f]{2}:/i,                      // IPv6 unique-local (fc00::/7, covers fc00::-fdff::)
+  /^fe[c-f][0-9a-f]:/i,                       // IPv6 site-local, deprecated (fec0::/10)
 ];
 
 export const METADATA_HOSTNAMES = new Set([

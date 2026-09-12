@@ -114,6 +114,21 @@ test('GET /api/models requires auth; POST /api/models registers a provider and l
   assert.ok(Array.isArray(createdBody.models) && createdBody.models.length > 0, 'POST returns the model list');
 });
 
+test('POST /api/models rejects provider URLs targeting blocked addresses', async (t) => {
+  const h = await boot(t);
+
+  for (const apiBase of ['http://127.0.0.1:11434/v1', 'https://[fd00::1]/v1', 'https://169.254.169.254/latest/meta-data']) {
+    const res = await postJson(h.base, h.adminToken, '/api/models', { name: 'Bad Provider', apiBase });
+    assert.equal(res.status, 400, `${apiBase} must be rejected`);
+  }
+
+  const publicRes = await postJson(h.base, h.adminToken, '/api/models', {
+    name: 'Public Provider',
+    apiBase: 'https://example.com/v1',
+  });
+  assert.equal(publicRes.status, 201);
+});
+
 test('POST /api/scenarios then GET /api/scenarios/:name round-trips a scenario YAML', async (t) => {
   const h = await boot(t);
 

@@ -87,6 +87,19 @@ describe('validateProviderUrl IPv6 and mapped literals', () => {
     assert.strictEqual(validateProviderUrl('https://[fe80::abcd]/v1').ok, false);
   });
 
+  it('blocks unique-local addresses across fc00::/7 [fc01::1] and [fcff::1]', () => {
+    assert.strictEqual(validateProviderUrl('https://[fc01::1]/v1').ok, false);
+    assert.strictEqual(validateProviderUrl('https://[fcff::1]/v1').ok, false);
+  });
+
+  it('blocks deprecated site-local [fec0::1]', () => {
+    assert.strictEqual(validateProviderUrl('https://[fec0::1]/v1').ok, false);
+  });
+
+  it('accepts a public IPv6 literal [2606:4700::1]', () => {
+    assert.strictEqual(validateProviderUrl('https://[2606:4700::1]/v1').ok, true);
+  });
+
   it('blocks IPv4-mapped loopback in hex form [::ffff:7f00:1]', () => {
     assert.strictEqual(validateProviderUrl('https://[::ffff:7f00:1]/v1').ok, false);
   });
