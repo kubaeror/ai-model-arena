@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { webFetch } from '../../src/tools/web.js';
+import { promises as dnsPromises } from 'node:dns';
+import { webFetch, webSearch } from '../../src/tools/web.js';
 import type { ToolExecutionContext } from '../../src/types.js';
 
 // H6: SSRF hardening — expanded private-IP / metadata-hostname / internal-DNS
@@ -138,3 +139,68 @@ test('rejects file: protocol', async () => {
 // manual redirect re-validation are integration-tested against a live HTTP
 // server in tests/tools/web.test.ts; the pure validation surface above covers
 // the expanded blocklist which is the primary regression target.
+
+// ── IPv4-mapped IPv6 normalization bypasses ─────────────────────────────────
+
+test('rejects IPv4-mapped IPv6 loopback in hex form [::ffff:7f00:1]', async () => {
+  const c = await fetchRejection('http://[::ffff:7f00:1]/secret');
+  assert.match(c, /private|blocked/i);
+});
+
+test('rejects IPv4-mapped IPv6 metadata in hex form [::ffff:a9fe:a9fe]', async () => {
+  const c = await fetchRejection('http://[::ffff:a9fe:a9fe]/latest/meta-data/');
+  assert.match(c, /private|blocked/i);
+});
+
+test('rejects IPv4-mapped IPv6 private 10.x in hex form [::ffff:a00:1]', async () => {
+  const c = await fetchRejection('http://[::ffff:a00:1]/');
+  assert.match(c, /private|blocked/i);
+});
+
+test('rejects IPv4-mapped IPv6 loopback in long form [0:0:0:0:0:ffff:7f00:1]', async () => {
+  const c = await fetchRejection('http://[0:0:0:0:0:ffff:7f00:1]/');
+  assert.match(c, /private|blocked/i);
+});
+
+// ── web_search custom backend (SEARCH_API_URL) ──────────────────────────────
+
+test('web_search rejects a private SEARCH_API_URL without fetching', async () => {
+  const prevUrl = process.env.SEARCH_API_URL;
+  process.env.SEARCH_API_URL = 'http://169.254.169.254/{query}';
+  const origFetch = globalThis.fetch;
+  let fetched = false;
+  globalThis.fetch = (async () => { fetched = true; return new Response('{}'); }) as typeof fetch;
+  try {
+    const r = await webSearch({ query: 'secret' }, makeCtx());
+    assert.equal(r.isError, true);
+    assert.match(r.content, /blocked|private/i);
+    assert.equal(fetched, false, 'must not fetch a private search backend');
+  } finally {
+    globalThis.fetch = origFetch;
+    if (prevUrl === undefined) delete process.env.SEARCH_API_URL;
+    else process.env.SEARCH_API_URL = prevUrl;
+  }
+});
+
+test('web_search validates a public SEARCH_API_URL and disables redirects', async () => {
+  const prevUrl = process.env.SEARCH_API_URL;
+  process.env.SEARCH_API_URL = 'https://search.example.test/?q={query}';
+  const origFetch = globalThis.fetch;
+  const origLookup = dnsPromises.lookup;
+  let redirectMode: RequestInit['redirect'];
+  (dnsPromises as { lookup: unknown }).lookup = async () => [{ address: '93.184.216.34', family: 4 }];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    redirectMode = init?.redirect;
+    return new Response('{"Answer":"ok"}', { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const r = await webSearch({ query: 'test' }, makeCtx());
+    assert.equal(r.isError, false);
+    assert.equal(redirectMode, 'error');
+  } finally {
+    globalThis.fetch = origFetch;
+    (dnsPromises as { lookup: unknown }).lookup = origLookup;
+    if (prevUrl === undefined) delete process.env.SEARCH_API_URL;
+    else process.env.SEARCH_API_URL = prevUrl;
+  }
+});

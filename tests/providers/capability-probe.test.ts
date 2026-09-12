@@ -22,7 +22,13 @@ function mockResponse(status = 200, body: unknown = {}): Response {
   } as unknown as Response;
 }
 
-interface CapturedRequest { url: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> }
+interface CapturedRequest { url: string; method: string; headers: Record<string, string>; body?: Record<string, unknown>; redirect?: RequestInit['redirect'] }
+
+const PUBLIC_LOOKUP = async () => [{ address: '93.184.216.34', family: 4 }];
+type ProbeOpts = NonNullable<Parameters<typeof probeProvider>[1]>;
+function probe(d: ProviderDescriptor, opts: ProbeOpts = {}): ReturnType<typeof probeProvider> {
+  return probeProvider(d, { lookup: PUBLIC_LOOKUP, ...opts });
+}
 
 function mockFetch(handler: (url: string, init?: RequestInit) => Promise<Response>): { restore: () => void; last: () => CapturedRequest } {
   const origFetch = globalThis.fetch;
@@ -37,6 +43,7 @@ function mockFetch(handler: (url: string, init?: RequestInit) => Promise<Respons
       method: init?.method ?? 'GET',
       headers,
       body: init?.body !== undefined ? JSON.parse(String(init.body)) : undefined,
+      redirect: init?.redirect,
     };
     return handler(String(input), init);
   }) as typeof fetch;
@@ -49,7 +56,7 @@ function mockFetch(handler: (url: string, init?: RequestInit) => Promise<Respons
 test('openai-compat: GET {apiBase}/models with bearer auth, true on 200', async () => {
   const fetchMock = mockFetch(async () => mockResponse(200, { data: [{ id: 'gpt-4o' }] }));
   try {
-    const result = await probeProvider(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
+    const result = await probe(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
     assert.equal(result.reachable, true);
     assert.equal(fetchMock.last().method, 'GET');
     assert.equal(fetchMock.last().url, `${API_BASE}/models`);
@@ -62,7 +69,7 @@ test('openai-compat: GET {apiBase}/models with bearer auth, true on 200', async 
 test('openai-compat: false on 500', async () => {
   const fetchMock = mockFetch(async () => mockResponse(500, { error: 'boom' }));
   try {
-    const result = await probeProvider(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
+    const result = await probe(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
     assert.equal(result.reachable, false);
     assert.ok(result.error, 'error message should be present');
   } finally {
@@ -73,7 +80,7 @@ test('openai-compat: false on 500', async () => {
 test('openai-compat: false on network error', async () => {
   const fetchMock = mockFetch(async () => { throw new Error('fetch failed'); });
   try {
-    const result = await probeProvider(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
+    const result = await probe(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
     assert.equal(result.reachable, false);
     assert.ok(result.error?.includes('fetch failed'));
   } finally {
@@ -84,7 +91,7 @@ test('openai-compat: false on network error', async () => {
 test('openai-compat: 204 (no body) counts as reachable', async () => {
   const fetchMock = mockFetch(async () => mockResponse(204));
   try {
-    const result = await probeProvider(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
+    const result = await probe(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
     assert.equal(result.reachable, true);
   } finally {
     fetchMock.restore();
@@ -94,7 +101,7 @@ test('openai-compat: 204 (no body) counts as reachable', async () => {
 test('anthropic: POST count_tokens with 1-token message, true on 200', async () => {
   const fetchMock = mockFetch(async () => mockResponse(200, { input_tokens: 1 }));
   try {
-    const result = await probeProvider(descriptor('anthropic', API_BASE), { apiKey: 'sk-ant-test' });
+    const result = await probe(descriptor('anthropic', API_BASE), { apiKey: 'sk-ant-test' });
     assert.equal(result.reachable, true);
     const last = fetchMock.last();
     assert.equal(last.method, 'POST');
@@ -111,7 +118,7 @@ test('anthropic: POST count_tokens with 1-token message, true on 200', async () 
 test('anthropic: honors explicit model via opts', async () => {
   const fetchMock = mockFetch(async () => mockResponse(200, { input_tokens: 1 }));
   try {
-    await probeProvider(descriptor('anthropic', API_BASE), { apiKey: 'sk-ant-test', model: 'claude-3-5-sonnet' });
+    await probe(descriptor('anthropic', API_BASE), { apiKey: 'sk-ant-test', model: 'claude-3-5-sonnet' });
     assert.equal(fetchMock.last().body?.model, 'claude-3-5-sonnet');
   } finally {
     fetchMock.restore();
@@ -121,7 +128,7 @@ test('anthropic: honors explicit model via opts', async () => {
 test('anthropic: false on 500', async () => {
   const fetchMock = mockFetch(async () => mockResponse(500));
   try {
-    const result = await probeProvider(descriptor('anthropic', API_BASE), { apiKey: 'sk-ant-test' });
+    const result = await probe(descriptor('anthropic', API_BASE), { apiKey: 'sk-ant-test' });
     assert.equal(result.reachable, false);
   } finally {
     fetchMock.restore();
@@ -131,7 +138,7 @@ test('anthropic: false on 500', async () => {
 test('anthropic: false on network error', async () => {
   const fetchMock = mockFetch(async () => { throw new Error('fetch failed'); });
   try {
-    const result = await probeProvider(descriptor('anthropic', API_BASE), { apiKey: 'sk-ant-test' });
+    const result = await probe(descriptor('anthropic', API_BASE), { apiKey: 'sk-ant-test' });
     assert.equal(result.reachable, false);
   } finally {
     fetchMock.restore();
@@ -141,7 +148,7 @@ test('anthropic: false on network error', async () => {
 test('google: GET {apiBase}/v1beta/models with x-goog-api-key, true on 200', async () => {
   const fetchMock = mockFetch(async () => mockResponse(200, { models: [{ name: 'models/gemini-2.5-pro' }] }));
   try {
-    const result = await probeProvider(descriptor('google', API_BASE), { apiKey: 'AIza-test' });
+    const result = await probe(descriptor('google', API_BASE), { apiKey: 'AIza-test' });
     assert.equal(result.reachable, true);
     const last = fetchMock.last();
     assert.equal(last.method, 'GET');
@@ -155,7 +162,7 @@ test('google: GET {apiBase}/v1beta/models with x-goog-api-key, true on 200', asy
 test('google: false on 500', async () => {
   const fetchMock = mockFetch(async () => mockResponse(500));
   try {
-    const result = await probeProvider(descriptor('google', API_BASE), { apiKey: 'AIza-test' });
+    const result = await probe(descriptor('google', API_BASE), { apiKey: 'AIza-test' });
     assert.equal(result.reachable, false);
   } finally {
     fetchMock.restore();
@@ -165,7 +172,7 @@ test('google: false on 500', async () => {
 test('google: false on network error', async () => {
   const fetchMock = mockFetch(async () => { throw new Error('fetch failed'); });
   try {
-    const result = await probeProvider(descriptor('google', API_BASE), { apiKey: 'AIza-test' });
+    const result = await probe(descriptor('google', API_BASE), { apiKey: 'AIza-test' });
     assert.equal(result.reachable, false);
   } finally {
     fetchMock.restore();
@@ -175,7 +182,7 @@ test('google: false on network error', async () => {
 test('bedrock gateway: GET {gateway}/health with bearer, true on 200', async () => {
   const fetchMock = mockFetch(async () => mockResponse(200, { status: 'ok' }));
   try {
-    const result = await probeProvider(descriptor('bedrock', API_BASE), { apiKey: 'gw-test' });
+    const result = await probe(descriptor('bedrock', API_BASE), { apiKey: 'gw-test' });
     assert.equal(result.reachable, true);
     const last = fetchMock.last();
     assert.equal(last.method, 'GET');
@@ -189,7 +196,7 @@ test('bedrock gateway: GET {gateway}/health with bearer, true on 200', async () 
 test('bedrock gateway: false on 500', async () => {
   const fetchMock = mockFetch(async () => mockResponse(500));
   try {
-    const result = await probeProvider(descriptor('bedrock', API_BASE), { apiKey: 'gw-test' });
+    const result = await probe(descriptor('bedrock', API_BASE), { apiKey: 'gw-test' });
     assert.equal(result.reachable, false);
   } finally {
     fetchMock.restore();
@@ -204,7 +211,7 @@ test('bedrock native (no gateway): reachable without any network call', async ()
   let fetchCalled = false;
   const fetchMock = mockFetch(async () => { fetchCalled = true; return mockResponse(200); });
   try {
-    const result = await probeProvider(descriptor('bedrock'));
+    const result = await probe(descriptor('bedrock'));
     assert.equal(result.reachable, true);
     assert.equal(fetchCalled, false);
   } finally {
@@ -218,7 +225,7 @@ test('unknown adapter kind: falls back to GET /models', async () => {
   const fetchMock = mockFetch(async () => mockResponse(200));
   try {
     const weird = { ...descriptor('openai-compat', API_BASE), adapter: 'mystery' } as unknown as ProviderDescriptor;
-    const result = await probeProvider(weird, { apiKey: 'sk-test' });
+    const result = await probe(weird, { apiKey: 'sk-test' });
     assert.equal(result.reachable, true);
     assert.equal(fetchMock.last().method, 'GET');
     assert.equal(fetchMock.last().url, `${API_BASE}/models`);
@@ -228,7 +235,53 @@ test('unknown adapter kind: falls back to GET /models', async () => {
 });
 
 test('missing apiBase (non-bedrock): unreachable with error', async () => {
-  const result = await probeProvider(descriptor('openai-compat'));
+  const result = await probe(descriptor('openai-compat'));
   assert.equal(result.reachable, false);
   assert.ok(result.error);
+});
+
+// ── SSRF hardening ──────────────────────────────────────────────────────────
+
+test('openai-compat: refuses a private literal apiBase before fetching', async () => {
+  let fetchCalled = false;
+  const fetchMock = mockFetch(async () => { fetchCalled = true; return mockResponse(200); });
+  try {
+    const result = await probeProvider(descriptor('openai-compat', 'http://169.254.169.254'), {
+      apiKey: 'sk-test',
+      lookup: PUBLIC_LOOKUP,
+    });
+    assert.equal(result.reachable, false);
+    assert.match(result.error ?? '', /blocked|private/i);
+    assert.equal(fetchCalled, false, 'must not fetch a blocked endpoint');
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test('openai-compat: refuses a hostname that resolves to a private address', async () => {
+  let fetchCalled = false;
+  const fetchMock = mockFetch(async () => { fetchCalled = true; return mockResponse(200); });
+  try {
+    const result = await probeProvider(descriptor('openai-compat', 'https://internal.example.test'), {
+      apiKey: 'sk-test',
+      lookup: async () => [{ address: '10.0.0.9', family: 4 }],
+    });
+    assert.equal(result.reachable, false);
+    assert.match(result.error ?? '', /blocked|private/i);
+    assert.equal(fetchCalled, false, 'must not fetch a host resolving to a private IP');
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test('openai-compat: sends redirect: error and caps the error body', async () => {
+  const fetchMock = mockFetch(async () => mockResponse(500, { error: 'x'.repeat(10_000) }));
+  try {
+    const result = await probe(descriptor('openai-compat', API_BASE), { apiKey: 'sk-test' });
+    assert.equal(result.reachable, false);
+    assert.equal(fetchMock.last().redirect, 'error');
+    assert.ok((result.error ?? '').length < 4200, `error body must be capped, got ${(result.error ?? '').length} chars`);
+  } finally {
+    fetchMock.restore();
+  }
 });
