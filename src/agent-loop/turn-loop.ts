@@ -9,7 +9,8 @@ import type {
   ModelResponse,
 } from '../types.js';
 import type { ModelAdapter, SendOpts } from '../providers/adapters/base.js';
-import { sanitizeToolResult } from '../security/prompt-injection.js';
+import { sanitizeToolResult, scanToolResult } from '../security/prompt-injection.js';
+import type { InjectionScan } from '../security/prompt-injection.js';
 
 /**
  * Per-caller error-text formatters. Defaults match the agent loop's historical
@@ -62,8 +63,12 @@ interface TurnLoopEvents {
   onToolStart?: (toolName: string) => void;
   /** Right after the executor call; `error` is set when the executor threw. */
   onToolEnd?: (toolName: string, error?: unknown) => void;
-  /** After the tool result is truncated, before it is appended to `messages`. */
-  onToolResult?: (turn: number, toolCallId: string, toolName: string, content: string, isError: boolean) => void;
+  /**
+   * After the tool result is truncated and hardened, before it is appended to
+   * `messages`. `scan` is the injection scan of the raw pre-sanitization result,
+   * since escaping neutralizes the markers the detector matches.
+   */
+  onToolResult?: (turn: number, toolCallId: string, toolName: string, content: string, isError: boolean, scan: InjectionScan) => void;
   /** When a model send fails. */
   onApiError?: (turn: number, message: string, error: unknown) => void;
   /** When the model replies with no tool calls (stopReason 'no_tool_calls' decided). */
@@ -217,10 +222,13 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
         }
 
         content = content.length <= maxToolResultChars ? content : content.slice(0, maxToolResultChars) + truncateSuffix;
+        // Scan before hardening: escaping neutralizes the markers the detector
+        // matches, which would hide flagged output from onToolResult observers.
+        const rawScan = scanToolResult(content);
         // Harden after truncation so the final appended content cannot break
         // out of its data envelope (escapes markers, marks flagged output).
         content = sanitizeToolResult(content);
-        events.onToolResult?.(turn, tc.id, tc.name, content, isError);
+        events.onToolResult?.(turn, tc.id, tc.name, content, isError, rawScan);
         messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content });
 
         // Track per-tool success/fail rates

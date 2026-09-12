@@ -9,7 +9,7 @@ import type {
 import type { ModelAdapter, SendOpts } from '../providers/adapters/base.js';
 import type { ConversationLogger } from '../logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../tools/schema.js';
-import { detectInjection, scanToolResult } from '../security/prompt-injection.js';
+import { detectInjection } from '../security/prompt-injection.js';
 import { startAgentSpan, startToolSpan, endSpan, setSpanAttributes } from '../observability/instrumentation-helpers.js';
 import type { Span } from '@opentelemetry/api';
 import { runTurnLoop, remapStopReason } from './turn-loop.js';
@@ -228,11 +228,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
         }
         activeToolSpan = undefined;
       },
-      onToolResult: (turn, toolCallId, toolName, content, isError) => {
+      onToolResult: (turn, toolCallId, toolName, content, isError, scan) => {
         conv.append({ type: 'tool_result', turn, toolCallId, toolName, toolResult: content, isError });
 
-        // Scan tool output for indirect prompt injection patterns
-        const scan = scanToolResult(content);
+        // Scan result comes from the raw tool output, before hardening escaped
+        // the markers the injection detector matches.
         if (scan.flagged) {
           logger.warn('Tool output flagged for injection patterns', {
             toolName,

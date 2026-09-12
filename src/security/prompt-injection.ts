@@ -19,6 +19,11 @@ const TOOL_OUTPUT_INJECTION = [
 
 export const UNTRUSTED_CONTENT_MARKER = '[untrusted content: injection pattern detected]';
 
+export interface InjectionScan {
+  flagged: boolean;
+  reasons?: string[];
+}
+
 /**
  * Control markers that would let DATA escape its envelope and re-enter the
  * prompt as trusted structure. Escaped visibly (`<\/arena_file>`) rather than
@@ -79,17 +84,21 @@ export function wrapFileContent(filePath: string, content: string): string {
 export function sanitizeToolResult(content: string): string {
   const data = unwrapFileContent(content);
   if (data !== undefined) {
-    if (content.includes(`${UNTRUSTED_CONTENT_MARKER}\n${data}`)) return content;
+    // A generic tool (shell/search/subagent) can forge a complete envelope, so
+    // never re-emit captured data verbatim: escape it or a raw control marker
+    // inside the payload would terminate the DATA block.
+    const escapedData = escapeControlMarkers(data);
+    if (escapedData === data && content.includes(`${UNTRUSTED_CONTENT_MARKER}\n${data}`)) return content;
     const path = envelopePath(content);
     const marker = scanToolResult(data).flagged ? `${UNTRUSTED_CONTENT_MARKER}\n` : '';
-    return `<arena_file path="${path}">\n${ENVELOPE_COMMENT}\n${marker}${data}\n</arena_file>`;
+    return `<arena_file path="${path}">\n${ENVELOPE_COMMENT}\n${marker}${escapedData}\n</arena_file>`;
   }
   const escaped = escapeControlMarkers(content);
   if (escaped.startsWith(UNTRUSTED_CONTENT_MARKER)) return escaped;
   return scanToolResult(content).flagged ? `${UNTRUSTED_CONTENT_MARKER}\n${escaped}` : escaped;
 }
 
-export function detectInjection(msg: { content?: string }): { flagged: boolean; reasons?: string[] } {
+export function detectInjection(msg: { content?: string }): InjectionScan {
   if (!msg.content) return { flagged: false };
   const reasons: string[] = [];
   for (const re of SUSPICIOUS) {
@@ -103,7 +112,7 @@ export function detectInjection(msg: { content?: string }): { flagged: boolean; 
  * Called after every tool call to catch indirect injection via generated
  * content, file reads, shell output, or search results.
  */
-export function scanToolResult(content: string): { flagged: boolean; reasons?: string[] } {
+export function scanToolResult(content: string): InjectionScan {
   const reasons: string[] = [];
 
   for (const re of TOOL_OUTPUT_INJECTION) {
