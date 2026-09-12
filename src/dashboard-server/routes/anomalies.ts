@@ -10,9 +10,9 @@ import {
   type AnomalySeverity,
   type AnomalyQuery,
 } from '../../db/query.js';
-import { getRunRecord } from '../../orchestrator/run-index.js';
+import { getRunRecord, listRuns } from '../../orchestrator/run-index.js';
 import { readTraceMeta } from '../../observability/trace-meta.js';
-import { allowIfRunOwner } from '../run-ownership.js';
+import { allowIfRunOwner, isAdminRequest, visibleRunsFor } from '../run-ownership.js';
 
 function parseBool(v: unknown): boolean | undefined {
   if (v === undefined) return undefined;
@@ -35,6 +35,11 @@ export function createAnomaliesRouter(): Router {
       limit: req.query.limit ? Math.min(500, Number(req.query.limit)) : undefined,
       offset: req.query.offset ? Number(req.query.offset) : undefined,
     };
+    // Non-admins only see anomalies whose run they own; anomalies with a
+    // missing/ownerless run record are default-denied (admin unchanged).
+    if (!isAdminRequest(req as AuthedRequest)) {
+      q.runIds = visibleRunsFor(req as AuthedRequest, await listRuns()).map((r) => r.runId);
+    }
     res.json({ anomalies: await listAnomalies(q) });
   }));
 

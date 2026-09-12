@@ -1,7 +1,7 @@
 import { getDrizzleDb } from '../index.js';
 import { anomalies } from '../schema.js';
 import type { DbAnomaly } from '../schema.js';
-import { eq, and, desc, sql, count, sum } from 'drizzle-orm';
+import { eq, and, desc, sql, count, sum, inArray } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 
 export type AnomalyType =
@@ -78,6 +78,8 @@ export interface AnomalyQuery {
   to?: string;
   limit?: number;
   offset?: number;
+  /** Restrict to anomalies whose run is in this set (ownership filter). */
+  runIds?: string[];
 }
 
 function rowToRecord(row: Record<string, unknown>): AnomalyRecord {
@@ -105,6 +107,11 @@ export async function listAnomalies(q: AnomalyQuery = {}): Promise<AnomalyRecord
   if (q.resolved !== undefined) conditions.push(eq(anomalies.resolved, q.resolved ? 1 : 0));
   if (q.from) conditions.push(sql`${anomalies.detected_at} >= ${q.from}`);
   if (q.to) conditions.push(sql`${anomalies.detected_at} <= ${q.to}`);
+  if (q.runIds) {
+    // Empty set must match nothing (drizzle's inArray on [] is dialect-dependent).
+    if (q.runIds.length === 0) return [];
+    conditions.push(inArray(anomalies.run_id, q.runIds));
+  }
   const rows = await db.select().from(anomalies)
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(anomalies.detected_at))

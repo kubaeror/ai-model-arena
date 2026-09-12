@@ -7,18 +7,22 @@ import { createSessionStore } from '../../session/store.js';
 import { requireRole, auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { notFound, parsePagination } from '../helpers.js';
-import { allowIfSessionOwner } from '../run-ownership.js';
+import { allowIfSessionOwner, sessionVisibilityFilter } from '../run-ownership.js';
+import { listRuns } from '../../orchestrator/run-index.js';
 
 export function createSessionsRouter(): Router {
   const router = Router();
 
-  // GET /api/sessions - list sessions, paginated + filterable
+  // GET /api/sessions - list sessions, paginated + filterable. Non-admins only
+  // see sessions whose resolved run they own (pagination describes that set).
   router.get('/', async (req, res) => {
     const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
     const model = typeof req.query.model === 'string' ? req.query.model : undefined;
 
-    const { sessions, total } = await listSessionsWithCounts({ status, model, limit, offset });
+    const isVisible = sessionVisibilityFilter(req as AuthedRequest, await listRuns());
+
+    const { sessions, total } = await listSessionsWithCounts({ status, model, limit, offset, isVisible });
 
     res.json({ sessions, total, limit, offset });
   });

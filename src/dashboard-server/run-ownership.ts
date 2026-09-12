@@ -1,7 +1,13 @@
 import type { Response } from 'express';
 import { getRunRecord, listRuns } from '../orchestrator/run-index.js';
+import type { RunIndexRecord } from '../orchestrator/run-index.js';
 import type { AuthedRequest } from './auth.js';
 import { isOwnerAllowed, apiKeyIsAdmin } from '../auth/rbac.js';
+
+/** True when the request is admin-equivalent (JWT role or ops:admin API key). */
+export function isAdminRequest(req: AuthedRequest): boolean {
+  return req.user?.role === 'admin' || apiKeyIsAdmin(req);
+}
 
 /**
  * Shared run-ownership gate (extracted from routes/runs.ts so every runId
@@ -43,8 +49,12 @@ export async function allowIfRunOwner(
 /**
  * Resolve the run a dashboard session belongs to. Session ids are minted as
  * `${runId}-${model}` (run-lifecycle), so the fast path strips the known model
- * suffix and verifies the run record exists. Sessions without a matching run
- * resolve to null; callers default-deny non-admins for those.
+ * suffix and verifies the run record exists AND actually ran that model. A
+ * missing run never falls through to prefix matching (that would hand the
+ * session to an unrelated run sharing its id prefix); a candidate that exists
+ * only owns the session when `perModel` lists the model, otherwise the
+ * longest-prefix fallback applies. Sessions without a matching run resolve to
+ * null; callers default-deny non-admins for those.
  */
 export async function resolveSessionRunId(
   sessionId: string,
@@ -53,17 +63,39 @@ export async function resolveSessionRunId(
   if (model) {
     const suffix = `-${model}`;
     if (sessionId.endsWith(suffix)) {
-      // Convention matched: the session belongs to this exact run or to no
-      // live run at all. Never fall through to prefix matching here, which
-      // could hand a session to an unrelated run that shares a prefix.
       const candidate = sessionId.slice(0, -suffix.length);
-      return candidate && (await getRunRecord(candidate)) ? candidate : null;
+      if (!candidate) return null;
+      const rec = await getRunRecord(candidate);
+      if (!rec) return null;
+      if (rec.perModel.some((pm) => pm.model === model)) return candidate;
     }
   }
-  // Fallback for sessions whose model column is missing/stale: the longest run
-  // id that prefixes `sessionId-` wins, so the most specific run owns it.
+  return resolveSessionRunIdFromRuns(sessionId, model, await listRuns());
+}
+
+/**
+ * Pure form of `resolveSessionRunId` for callers that already hold the run
+ * index (list filters). Keeps the exact same ownership semantics: the fast
+ * path requires `perModel` membership, and when it does not hold the longest
+ * run id that prefixes `sessionId-` (and ran the model) wins.
+ */
+export function resolveSessionRunIdFromRuns(
+  sessionId: string,
+  model: string | null | undefined,
+  runs: RunIndexRecord[],
+): string | null {
+  if (model) {
+    const suffix = `-${model}`;
+    if (sessionId.endsWith(suffix)) {
+      const candidate = sessionId.slice(0, -suffix.length);
+      if (!candidate) return null;
+      const rec = runs.find((r) => r.runId === candidate);
+      if (!rec) return null;
+      if (rec.perModel.some((pm) => pm.model === model)) return candidate;
+    }
+  }
   let match: string | null = null;
-  for (const rec of await listRuns()) {
+  for (const rec of runs) {
     if (!sessionId.startsWith(`${rec.runId}-`)) continue;
     if (model && !rec.perModel.some((pm) => pm.model === model)) continue;
     if (!match || rec.runId.length > match.length) match = rec.runId;
@@ -85,7 +117,7 @@ export async function allowIfSessionOwner(
 ): Promise<boolean> {
   const runId = await resolveSessionRunId(sessionId, model);
   if (runId) return allowIfRunOwner(req, res, runId, notFoundMsg);
-  if (req.user?.role === 'admin' || apiKeyIsAdmin(req)) return true;
+  if (isAdminRequest(req)) return true;
   res.status(403).json({ error: 'forbidden: not the session owner' });
   return false;
 }
@@ -100,7 +132,29 @@ export function visibleRunsFor<T extends { createdBy?: string | null }>(
   req: AuthedRequest,
   runs: T[],
 ): T[] {
-  if (req.user?.role === 'admin' || apiKeyIsAdmin(req)) return runs;
+  if (isAdminRequest(req)) return runs;
   const actor = req.user ?? {};
   return runs.filter((r) => isOwnerAllowed(actor, r.createdBy));
+}
+
+/**
+ * Build the per-session ownership predicate for list endpoints. Returns
+ * `undefined` for admins so the query keeps its unfiltered pagination fast
+ * path; for everyone else the predicate resolves each session's run with the
+ * same semantics as `allowIfSessionOwner` (ownerless/foreign/orphan sessions
+ * are hidden).
+ */
+export function sessionVisibilityFilter(
+  req: AuthedRequest,
+  runs: RunIndexRecord[],
+): ((session: { id: string; model: string | null }) => boolean) | undefined {
+  if (isAdminRequest(req)) return undefined;
+  const byId = new Map(runs.map((r) => [r.runId, r]));
+  const actor = { sub: req.user?.sub, role: req.user?.role };
+  return (session) => {
+    const runId = resolveSessionRunIdFromRuns(session.id, session.model, runs);
+    if (!runId) return false;
+    const rec = byId.get(runId);
+    return rec !== undefined && isOwnerAllowed(actor, rec.createdBy);
+  };
 }

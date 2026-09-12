@@ -566,3 +566,105 @@ test('anomaly detail checks run ownership before returning traces', async (t) =>
   const admin = await authedGet(h.base, h.adminToken, `/api/anomalies/${anomaly.id}`);
   assert.equal(admin.status, 200);
 });
+
+test('anomaly list filters to runs owned by the caller for non-admins', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  await upsertRun(runFixture('anomaly-list-viewer1', TEST_VIEWER.username, h.tmpDir));
+  await upsertRun(runFixture('anomaly-list-alice', 'alice', h.tmpDir));
+  await upsertRun(runFixture('anomaly-list-ownerless', undefined, h.tmpDir));
+  const owned = await insertAnomaly({
+    run_id: 'anomaly-list-viewer1', model: 'gpt-4o', type: 'latency', severity: 'low',
+    description: 'owned anomaly',
+  });
+  const foreign = await insertAnomaly({
+    run_id: 'anomaly-list-alice', model: 'gpt-4o', type: 'error_rate', severity: 'high',
+    description: 'foreign anomaly description',
+  });
+  const ownerless = await insertAnomaly({
+    run_id: 'anomaly-list-ownerless', model: 'gpt-4o', type: 'loop', severity: 'medium',
+    description: 'ownerless anomaly',
+  });
+  const orphan = await insertAnomaly({
+    run_id: 'anomaly-list-missing-run', model: 'gpt-4o', type: 'silent_failure', severity: 'high',
+    description: 'orphan anomaly',
+  });
+
+  const viewerRes = await authedGet(h.base, h.viewerToken!, '/api/anomalies');
+  assert.equal(viewerRes.status, 200);
+  const viewerBody = (await viewerRes.json()) as { anomalies: Array<{ id: number; run_id: string }> };
+  assert.deepEqual(viewerBody.anomalies.map((a) => a.id), [owned.id], 'viewer sees only owned anomalies');
+  const raw = JSON.stringify(viewerBody);
+  assert.ok(!raw.includes('foreign anomaly description'), 'foreign anomaly must not leak');
+  assert.ok(!raw.includes('ownerless anomaly'), 'ownerless run anomaly must not leak');
+  assert.ok(!raw.includes('orphan anomaly'), 'anomaly with no run record must not leak');
+
+  const adminRes = await authedGet(h.base, h.adminToken, '/api/anomalies');
+  assert.equal(adminRes.status, 200);
+  const adminIds = ((await adminRes.json()) as { anomalies: Array<{ id: number }> }).anomalies.map((a) => a.id);
+  for (const id of [owned.id, foreign.id, ownerless.id, orphan.id]) {
+    assert.ok(adminIds.includes(id), `admin must keep seeing anomaly ${id}`);
+  }
+});
+
+test('session list filters to sessions of owned runs and total reflects the filtered set', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  await upsertRun(runFixture('session-list-viewer1', TEST_VIEWER.username, h.tmpDir));
+  await upsertRun(runFixture('session-list-alice', 'alice', h.tmpDir));
+  await upsertRun(runFixture('session-list-ownerless', undefined, h.tmpDir));
+  const rows = [
+    { id: 'session-list-viewer1-gpt-4o', model: 'gpt-4o' },
+    { id: 'session-list-alice-gpt-4o', model: 'gpt-4o' },
+    { id: 'session-list-ownerless-gpt-4o', model: 'gpt-4o' },
+    { id: 'session-list-viewer1-ghost-model', model: 'ghost-model' },
+    { id: 'session-list-orphan-session', model: 'gpt-4o' },
+  ];
+  for (const row of rows) {
+    await db.insert(sessions).values({ id: row.id, model: row.model, status: 'active', created_at: now, updated_at: now });
+  }
+
+  const viewerRes = await authedGet(h.base, h.viewerToken!, '/api/sessions');
+  assert.equal(viewerRes.status, 200);
+  const viewerBody = (await viewerRes.json()) as { sessions: Array<{ id: string }>; total: number; limit: number; offset: number };
+  assert.deepEqual(viewerBody.sessions.map((s) => s.id), ['session-list-viewer1-gpt-4o']);
+  assert.equal(viewerBody.total, 1, 'total counts only the visible sessions');
+  const raw = JSON.stringify(viewerBody);
+  assert.ok(!raw.includes('session-list-alice'), 'foreign session must not leak');
+  assert.ok(!raw.includes('session-list-ownerless'), 'ownerless session must not leak');
+  assert.ok(!raw.includes('ghost-model'), 'session whose model is not in the run must not leak');
+  assert.ok(!raw.includes('session-list-orphan-session'), 'session with no run must not leak');
+
+  const viewerPage2 = await authedGet(h.base, h.viewerToken!, '/api/sessions?limit=1&offset=1');
+  const page2Body = (await viewerPage2.json()) as { sessions: unknown[]; total: number };
+  assert.equal(page2Body.sessions.length, 0, 'offset applies to the filtered set');
+  assert.equal(page2Body.total, 1);
+
+  const adminRes = await authedGet(h.base, h.adminToken, '/api/sessions');
+  assert.equal(adminRes.status, 200);
+  const adminBody = (await adminRes.json()) as { sessions: Array<{ id: string }>; total: number };
+  assert.equal(adminBody.total, rows.length, 'admin total stays unfiltered');
+  const adminIds = adminBody.sessions.map((s) => s.id);
+  for (const row of rows) {
+    assert.ok(adminIds.includes(row.id), `admin must keep seeing ${row.id}`);
+  }
+});
+
+test('session fast path requires the run to have actually run the session model', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  await upsertRun(runFixture('membership-run', 'alice', h.tmpDir));
+  await db.insert(sessions).values({
+    id: 'membership-run-claude-3', model: 'claude-3', status: 'active', created_at: now, updated_at: now,
+  });
+
+  const aliceToken = signToken(loadAuthConfig(), 'alice', 'viewer');
+  const denied = await authedGet(h.base, aliceToken, '/api/sessions/membership-run-claude-3');
+  assert.equal(denied.status, 403, 'a run must not own a session for a model it never ran');
+  assert.equal((await authedGet(h.base, h.adminToken, '/api/sessions/membership-run-claude-3')).status, 200);
+
+  const list = await authedGet(h.base, aliceToken, '/api/sessions');
+  const listBody = (await list.json()) as { sessions: Array<{ id: string }>; total: number };
+  assert.equal(listBody.total, 0, 'the mismatched session must not appear in the owner list');
+});
