@@ -12,6 +12,7 @@ import {
 } from '../../orchestrator/orchestrator.js';
 import type { RunSpec } from '../../orchestrator/run-lifecycle.js';
 import type { RunIndexModelEntry } from '../../orchestrator/run-index.js';
+import { isSafeId } from '../../paths.js';
 import { safeResolve } from '../../sandbox/sandbox.js';
 import { readDiffPatch } from '../../sandbox/git.js';
 import { walkFiles } from '../../fs/walk.js';
@@ -75,6 +76,10 @@ export function createRunsRouter(): Router {
       res.status(400).json({ error: 'body must include scenario (string) and models (non-empty string[])' });
       return;
     }
+    if (!isSafeId(scenario)) {
+      res.status(400).json({ error: 'scenario must be a bare name (letters, digits, "_" and "-" only)' });
+      return;
+    }
     const models: string[] = (rawModels as unknown[])
       .filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
       .map((m) => m.trim());
@@ -82,8 +87,8 @@ export function createRunsRouter(): Router {
       res.status(400).json({ error: 'models[] must contain at least one non-empty string' });
       return;
     }
-    if (models.some((m) => m.includes('/') || m.includes('\\') || m.includes('..'))) {
-      res.status(400).json({ error: 'model names must not contain path separators or ..' });
+    if (models.some((m) => !isSafeId(m))) {
+      res.status(400).json({ error: 'model names must be bare names (letters, digits, "_" and "-" only)' });
       return;
     }
     try {

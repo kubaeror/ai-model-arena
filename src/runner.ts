@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { outputRoot, dbPath, findProjectRoot } from './paths.js';
+import { outputRoot, dbPath, findProjectRoot, assertSafeId } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState, listModelCallsForSession, listMessagesBySession } from './db/query.js';
 import { getRunRecord } from './db/runs.js';
@@ -16,7 +16,7 @@ import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { writeReport } from './logger/report-logger.js';
 import { writeResultJson, type RunResult } from './logger/result-logger.js';
-import { Sandbox, sandboxEnv, resolveSeedDir } from './sandbox/sandbox.js';
+import { Sandbox, sandboxEnv, resolveSeedDir, isWithin } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
 import { generateManifest, writeManifest, buildProducedByTool } from './sandbox/artifact-manifest.js';
@@ -298,9 +298,22 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       taskStartedAt = new Date();
       activeTasks.inc();
 
-      // Check per-run cancellation before starting execution
+      // Queue tasks are untrusted input: every identifier that becomes a path
+      // must be a bare segment, and the run directory must stay under
+      // outputRoot() before any directory is created or artifact written.
       const modelRunId = String(task.config.modelRunId ?? task.sessionId);
       const runId = modelRunId;
+      const modelName = task.model;
+      assertSafeId(modelName);
+      assertSafeId(modelRunId);
+      const runOutputDir = path.join(outputRoot(), modelName, modelRunId);
+      const sandboxDir = path.join(runOutputDir, 'files');
+      if (!isWithin(outputRoot(), path.resolve(runOutputDir))) {
+        throw new Error(`Run output path escapes the output root: ${runOutputDir}`);
+      }
+      const startedAt = new Date();
+
+      // Check per-run cancellation before starting execution
       if (await isRunCancelled(runId)) {
         logger.info('Run cancelled before execution', { runId, taskId: task.taskId });
         await clearRunCancelled(runId);
@@ -349,10 +362,38 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
 
       const scenarioName = task.scenario;
-      const modelName = task.model;
-
       const scenarioDir = path.join(process.cwd(), 'configs', 'scenarios');
-      const scenario = loadScenario(resolveScenarioPath(scenarioDir, scenarioName));
+      const scenario = loadScenario(resolveScenarioPath(scenarioDir, scenarioName, {
+        allowPath: task.config.scenarioSource === 'cli',
+      }));
+
+      // Resolve the model before any fs write so a catalog miss cannot leave
+      // an output directory behind.
+      const resolved = await resolveModelForRun(modelName);
+      if (!resolved) {
+        logger.error('Model not found', { model: modelName });
+        // nack requeues below the DLQ threshold — count failed + duration
+        // only when the nack dead-letters (terminal).
+        if (isTerminalFailure(task!.attempts)) {
+          taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
+          taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
+          taskCounted = true;
+          tasksFailed.inc();
+          // The nack below dead-letters this attempt, so the model task just
+          // reached a terminal state. Mark the model row failed and finalize
+          // the run; without this the run stays wedged in 'running' forever
+          // (isRunCompleteByRunId never sees a terminal status).
+          try {
+            await transitionTaskState(runId, task!.model, 'failed', runnerId);
+          } catch (err: unknown) {
+            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+            logger.error('transitionTaskState to "failed" failed for missing model — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
+          }
+          void maybeFinalizeRun(runId, logger).catch(() => undefined);
+        }
+        await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
+        continue;
+      }
 
       // Fresh sessions persist the initial system+task as turn 0 so a later
       // resume can replay the full context.
@@ -365,12 +406,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         for (const m of turnZero) await store.appendMessage(session.id, m);
       }
 
-      const runOutputDir = path.join(outputRoot(), modelName, modelRunId);
-      const sandboxDir = path.join(runOutputDir, 'files');
       fs.mkdirSync(runOutputDir, { recursive: true });
       fs.mkdirSync(sandboxDir, { recursive: true });
-
-      const startedAt = new Date();
 
       // Ported from worker.ts: conversation.json is written so report.md can
       // be generated from it at the end of the run.
@@ -426,32 +463,6 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       // captures only agent-made changes relative to the starter state.
       const sandboxGit = new SandboxGit({ sandboxDir, modelName, logger });
       await sandboxGit.init();
-
-      const resolved = await resolveModelForRun(modelName);
-      if (!resolved) {
-        logger.error('Model not found', { model: modelName });
-        // nack requeues below the DLQ threshold — count failed + duration
-        // only when the nack dead-letters (terminal).
-        if (isTerminalFailure(task!.attempts)) {
-          taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-          taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
-          taskCounted = true;
-          tasksFailed.inc();
-          // The nack below dead-letters this attempt, so the model task just
-          // reached a terminal state. Mark the model row failed and finalize
-          // the run; without this the run stays wedged in 'running' forever
-          // (isRunCompleteByRunId never sees a terminal status).
-          try {
-            await transitionTaskState(runId, task!.model, 'failed', runnerId);
-          } catch (err: unknown) {
-            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
-            logger.error('transitionTaskState to "failed" failed for missing model — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
-          }
-          void maybeFinalizeRun(runId, logger).catch(() => undefined);
-        }
-        await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
-        continue;
-      }
 
       // Ported from worker.ts: fail fast on a missing API key instead of
       // letting the adapter surface a confusing auth error mid-loop.

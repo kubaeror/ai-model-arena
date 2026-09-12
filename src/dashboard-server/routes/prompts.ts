@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { z } from 'zod';
+import { isSafeId } from '../../paths.js';
 import { notFound, parseBody } from '../helpers.js';
 import {
   getPromptById, listPromptsWithLatestVersion, listPromptVersions,
@@ -163,6 +164,11 @@ export function createPromptsRouter(): Router {
     const parsed = parseBody(schema, req, res, 'promptId, models, and scenario are required');
     if (!parsed) return;
 
+    if (!isSafeId(parsed.scenario) || parsed.models.some((m) => !isSafeId(m))) {
+      res.status(400).json({ error: 'scenario and models must be bare names (letters, digits, "_" and "-" only)' });
+      return;
+    }
+
     const promptRow = await getPromptById(parsed.promptId);
     if (!promptRow) {
       notFound(res, 'Prompt', parsed.promptId);
@@ -186,7 +192,7 @@ export function createPromptsRouter(): Router {
         scenario: parsed.scenario,
         promptId: parsed.promptId,
         promptVersion: version,
-        config: {},
+        config: { scenarioSource: 'dashboard' },
         enqueuedAt: now(),
         attempts: 0,
       };

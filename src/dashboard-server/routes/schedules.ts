@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import path from 'node:path';
 import { requireRole } from '../../auth/rbac.js';
-import { findProjectRoot } from '../../paths.js';
+import { findProjectRoot, isSafeId } from '../../paths.js';
 import {
   loadSchedulesConfig,
   getSchedules,
@@ -65,12 +65,18 @@ export function createSchedulesRouter(): Router {
       res.status(400).json({ error: 'scenario (string), models (string[]), and cron (string) are required' });
       return;
     }
+    const scenarioName = String(scenario);
+    const modelList = models.filter((m: unknown): m is string => typeof m === 'string');
+    if (!isSafeId(scenarioName) || modelList.length === 0 || modelList.some((m) => !isSafeId(m))) {
+      res.status(400).json({ error: 'scenario and models must be bare names (letters, digits, "_" and "-" only)' });
+      return;
+    }
     try {
       const scheduleId = id || `schedule-${Date.now()}`;
       await addSchedule(configPath(), {
         id: scheduleId,
-        scenario: String(scenario),
-        models: models.filter((m: unknown): m is string => typeof m === 'string'),
+        scenario: scenarioName,
+        models: modelList,
         cron: String(cron),
         enabled: enabled !== false,
         options,

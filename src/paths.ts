@@ -31,3 +31,17 @@ export function outputRoot(): string {
 export function dbPath(): string {
   return process.env.ARENA_DB_PATH ?? path.join(outputRoot(), 'arena.db');
 }
+
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+/** True iff `name` is a bare identifier safe to use as a single path segment. */
+export function isSafeId(name: string): boolean {
+  return SAFE_ID_RE.test(name);
+}
+
+/** Throw unless `name` is a bare identifier safe to use as a single path segment. */
+export function assertSafeId(name: string): void {
+  if (!isSafeId(name)) {
+    throw new Error(`Invalid identifier "${name}": only letters, digits, "_" and "-" are allowed`);
+  }
+}

@@ -150,3 +150,51 @@ test('PATCH /api/schedules/:id toggles enabled, persists to YAML, and returns th
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('POST /api/schedules rejects traversal scenario and model identifiers', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-sched-routes-validate-'));
+  const configPath = path.join(dir, 'configs', 'schedules.yaml');
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, dump({ schedules: [] }));
+
+  process.env.AI_ARENA_ROOT = dir;
+  process.env.OUTPUT_ROOT = dir;
+  resetSchedulesCache();
+  initDb(path.join(dir, 'arena.db'));
+
+  const { createSchedulesRouter } = await import('../../src/dashboard-server/routes/schedules.js');
+
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as { user?: { sub: string; role: string } }).user = { sub: 'admin', role: 'admin' };
+    next();
+  });
+  app.use('/api/schedules', createSchedulesRouter());
+
+  const server: http.Server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  try {
+    const cases = [
+      { id: 'bad-scenario', scenario: '../../evil', models: ['gpt-4o'], cron: '0 3 * * *' },
+      { id: 'bad-model', scenario: 'express-rest', models: ['../../evil'], cron: '0 3 * * *' },
+    ];
+    for (const body of cases) {
+      const res = await fetch(`${base}/api/schedules`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(res.status, 400, `schedule creation must reject ${JSON.stringify(body)}`);
+    }
+    const { getSchedules } = await import('../../src/scheduler/manager.js');
+    assert.deepEqual(getSchedules(), [], 'rejected schedules must not be added to the config cache');
+  } finally {
+    server.close();
+    resetSchedulesCache();
+    await closeDb();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

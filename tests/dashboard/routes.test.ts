@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { AddressInfo } from 'node:net';
 import { boot, authedGet, postJson, TEST_ADMIN } from './route-test-harness.js';
 import { getDrizzleDb } from '../../src/db/index.js';
-import { insertAuditEntry } from '../../src/db/query.js';
-import { models, pricing, providers, run_models, runs, audit_log as auditLog, cost_ledger as costLedger } from '../../src/db/schema.js';
+import { insertAuditEntry, insertPrompt, insertPromptVersion } from '../../src/db/query.js';
+import { models, model_providers, pricing, providers, run_models, runs, audit_log as auditLog, cost_ledger as costLedger } from '../../src/db/schema.js';
 
 test('GET /api/cost exposes the cost ledger summary', async (t) => {
   const h = await boot(t);
@@ -284,4 +285,78 @@ test('GET /api/audit returns paginated audit entries', async (t) => {
   const clamped = await authedGet(h.base, h.adminToken, '/api/audit?limit=2000');
   const clampedBody = (await clamped.json()) as { limit: number };
   assert.equal(clampedBody.limit, 200, 'limit clamped to 200');
+});
+
+test('POST /api/runs rejects traversal scenario and model identifiers', async (t) => {
+  const h = await boot(t);
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  await db.insert(providers).values({
+    id: 'openai', name: 'OpenAI', auth_scheme: 'bearer', is_builtin: 1,
+    adapter: 'openai-compat', created_at: now, updated_at: now,
+  });
+  await db.insert(models).values({
+    id: 'gpt-4o', name: 'GPT-4o', provider_id: 'openai',
+    context_limit: 128000, output_limit: 8192, last_synced_at: now,
+  });
+  await db.insert(model_providers).values({ model_id: 'gpt-4o', provider_id: 'openai', api_model_id: 'gpt-4o' });
+  await db.insert(pricing).values({ model_id: 'gpt-4o', tier_size: 0, input: 2.5, output: 10, updated_at: now });
+
+  const badScenario = await postJson(h.base, h.adminToken, '/api/runs', {
+    scenario: '../../evil', models: ['gpt-4o'],
+  });
+  assert.equal(badScenario.status, 400, 'traversal scenario rejected');
+
+  for (const model of ['../../evil', 'nested/model', 'model.yaml']) {
+    const res = await postJson(h.base, h.adminToken, '/api/runs', { scenario: 'smoke', models: [model] });
+    assert.equal(res.status, 400, `traversal model ${model} rejected`);
+  }
+
+  assert.ok(
+    !fs.readdirSync(h.tmpDir).some((name) => name.startsWith('evil')),
+    'rejected run identifiers must not create directories',
+  );
+});
+
+test('POST /api/prompts/enqueue rejects traversal scenario and model identifiers', async (t) => {
+  await boot(t);
+  const now = new Date().toISOString();
+  await insertPrompt({ id: 'prompt-1', name: 'Prompt One', description: null, createdAt: now, updatedAt: now });
+  await insertPromptVersion({
+    id: 'version-1', promptId: 'prompt-1', version: 1,
+    systemPrompt: 'system', task: 'task', config: null, tag: null,
+    createdAt: now, createdBy: 'tester',
+  });
+
+  const express = (await import('express')).default;
+  const { createPromptsRouter } = await import('../../src/dashboard-server/routes/prompts.js');
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as { user?: { sub: string; role: string } }).user = { sub: 'tester', role: 'admin' };
+    next();
+  });
+  app.use('/api/prompts', createPromptsRouter());
+
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  try {
+    const cases = [
+      { promptId: 'prompt-1', models: ['gpt-4o'], scenario: '../../evil' },
+      { promptId: 'prompt-1', models: ['../../evil'], scenario: 'smoke' },
+    ];
+    for (const body of cases) {
+      const res = await fetch(`${base}/api/prompts/enqueue`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(res.status, 400, `enqueue must reject ${JSON.stringify(body)}`);
+    }
+  } finally {
+    server.close();
+    server.closeIdleConnections();
+  }
 });

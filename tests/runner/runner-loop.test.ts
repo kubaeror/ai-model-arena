@@ -357,7 +357,7 @@ test('runner keeps a mid-execution stopRun stopped: halts the loop and never com
   await queue.enqueue(makeTask({
     taskId: 'midstop-task', sessionId: 'midstop-session',
     model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
-    config: { modelRunId: runId, maxTurns: 5 },
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
     attempts: 0,
   }));
 
@@ -445,7 +445,7 @@ test('runner does not nack a finished session when queue.ack throws', { timeout:
   await queue.enqueue(makeTask({
     taskId: 'ack-fail-task', sessionId: 'ack-fail-session',
     model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
-    config: { modelRunId: runId, maxTurns: 5 },
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
     attempts: 0,
   }));
 
@@ -730,7 +730,7 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
   await queue.enqueue(makeTask({
     taskId: 'fb0', sessionId: 'fb0-session',
     model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
-    config: { modelRunId: 'run-fb0', maxTurns: 5 },
+    config: { modelRunId: 'run-fb0', maxTurns: 5, scenarioSource: 'cli' },
     attempts: 4,
   }));
 
@@ -757,6 +757,100 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
     await runnerDone;
     ProviderRegistry.prototype.createAdapter = origCreateAdapter;
     await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner rejects a traversal modelRunId before creating output directories', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-traversal-'));
+  const outputs = path.join(tmp, 'outputs');
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(process.env.ARENA_DB_PATH);
+
+  const queue = new NoRetryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'traversal-runid', sessionId: 'traversal-runid-session',
+    model: 'GPT-4o', provider: 'openai',
+    config: { modelRunId: '../../escaped', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 8000, 'task nacked');
+    assert.equal(queue.nacked[0]?.taskId, 'traversal-runid');
+    assert.ok(
+      !fs.existsSync(path.resolve(outputs, '..', 'escaped')),
+      'a traversal modelRunId must not create directories outside outputRoot()',
+    );
+    assert.ok(!fs.existsSync(path.join(outputs, 'GPT-4o')), 'no model output dir may be created');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner rejects an explicit scenario path unless the task is CLI-sourced', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-scenario-path-'));
+  const outputs = path.join(tmp, 'outputs');
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  delete process.env.OPENAI_API_KEY;
+  initDb(process.env.ARENA_DB_PATH);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const queue = new NoRetryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'dashboard-path', sessionId: 'dashboard-path-session',
+    model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: 'run-dashboard-path', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 8000, 'task nacked');
+    assert.equal(queue.nacked[0]?.taskId, 'dashboard-path');
+    assert.ok(!fs.existsSync(path.join(outputs, 'GPT-4o')), 'no output dir for a rejected scenario path');
+  } finally {
+    ac.abort();
+    await runnerDone;
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
     process.env = { ...ORIG_ENV };
@@ -826,7 +920,7 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
   await queue.enqueue(makeTask({
     taskId: 'fb3', sessionId: 'fb3-session',
     model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
-    config: { modelRunId: 'run-fb3', maxTurns: 5 },
+    config: { modelRunId: 'run-fb3', maxTurns: 5, scenarioSource: 'cli' },
     attempts: 0,
   }));
 

@@ -8,7 +8,8 @@ import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, compu
 import { projectRoot, timestamp } from './utils.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/index.js';
-import { outputRoot, dbPath } from '../paths.js';
+import { outputRoot, dbPath, assertSafeId } from '../paths.js';
+import { isWithin } from '../sandbox/sandbox.js';
 import { createQueue } from '../queue/index.js';
 import type { Task } from '../queue/types.js';
 import {
@@ -103,10 +104,28 @@ export interface PerModelStatus {
   online: boolean;
 }
 
+/**
+ * Run ids are built from the scenario reference. CLI callers may pass an
+ * explicit YAML path, so its basename stem becomes the (validated) run-id
+ * identifier; path segments never reach runId/outputDir.
+ */
+function scenarioIdFor(scenario: string, source: RunStartOptions['source']): string {
+  const explicitPath = path.isAbsolute(scenario) || scenario.endsWith('.yaml') || scenario.endsWith('.yml');
+  if (source === 'cli' && explicitPath) {
+    const stem = path.basename(scenario).replace(/\.(yaml|yml)$/i, '');
+    assertSafeId(stem);
+    return stem;
+  }
+  assertSafeId(scenario);
+  return scenario;
+}
+
 /** Validate models + compute all run paths (no PM2, no spawning). */
 export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   const root = projectRoot();
   const scenariosDir = opts.scenariosDir ?? path.join(root, 'configs', 'scenarios');
+  const scenarioId = scenarioIdFor(opts.scenario, opts.source);
+  for (const name of opts.models) assertSafeId(name);
   initDb(dbPath());
   for (const name of opts.models) {
     const resolved = await resolveModelForRun(name);
@@ -116,10 +135,13 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   }
 
   const ts = timestamp();
-  const runId = `${opts.scenario}_${ts}`;
+  const runId = `${scenarioId}_${ts}`;
   const perModel: PerModelSpec[] = await Promise.all(opts.models.map(async (model) => {
     const resolved = await resolveModelForRun(model);
     const outputDir = path.join(outputRoot(), model, runId);
+    if (!isWithin(outputRoot(), path.resolve(outputDir))) {
+      throw new Error(`Run output path escapes the output root: ${outputDir}`);
+    }
     const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
     fs.mkdirSync(pm2LogDir, { recursive: true });
     return {
@@ -259,6 +281,7 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
         modelRunId: runId,
         outputDir: m.outputDir,
         maxTurns: resolved?.maxTurns ?? 20,
+        scenarioSource: opts.source ?? 'cli',
       },
       enqueuedAt: new Date().toISOString(),
       attempts: 0,
@@ -429,6 +452,7 @@ export async function restartRun(runId: string): Promise<void> {
         modelRunId: runId,
         outputDir: m.outputDir,
         maxTurns: resolved?.maxTurns ?? 20,
+        scenarioSource: rec.source,
       },
       enqueuedAt: new Date().toISOString(),
       attempts: 0,

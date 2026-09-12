@@ -130,7 +130,7 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
     provider: 'openai',
     model: 'GPT-4o',
     scenario: scenarioPath,
-    config: { modelRunId: 'run15', maxTurns: 5 },
+    config: { modelRunId: 'run15', maxTurns: 5, scenarioSource: 'cli' },
     enqueuedAt: new Date().toISOString(),
     attempts: 0,
   };
@@ -285,7 +285,7 @@ test('runner finalizes its own run when the dashboard watcher is absent', { time
     provider: 'openai',
     model: 'GPT-4o',
     scenario: scenarioPath,
-    config: { modelRunId: runId, maxTurns: 5 },
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
     enqueuedAt: new Date().toISOString(),
     attempts: 0,
   };
