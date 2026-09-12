@@ -29,7 +29,7 @@ interface RunResult {
  * first recorded model_call of each model's session (sessions are keyed
  * `${runId}-${model}`); latency/TPS still come from trace-meta.json.
  */
-export async function writeRunStats(runId: string, root: string): Promise<void> {
+export async function writeRunStats(runId: string, _root: string): Promise<void> {
   const db = getDrizzleDb();
   const rec = await getRunRecord(runId);
   if (!rec || rec.perModel.length === 0) return;
@@ -46,6 +46,10 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
   const now = new Date().toISOString();
   for (const pm of rec.perModel) {
     if (!pm.resultPath || !fs.existsSync(pm.resultPath)) continue;
+    // No outputDir in the index means no trustworthy artifact directory: the
+    // raw model key is only correct for pre-upgrade runs, and those still carry
+    // their stored outputDir. Skip rather than guess.
+    if (!pm.outputDir) continue;
     const result = JSON.parse(fs.readFileSync(pm.resultPath, 'utf8')) as RunResult;
 
     let canonicalId: string | null = null;
@@ -61,7 +65,7 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
     const firstCall = sessionCalls[0];
     const ttftMs = firstCall?.ttft_ms ?? firstCall?.latency_ms ?? null;
 
-    const outputDir = pm.outputDir || path.join(root, 'outputs', pm.model, runId);
+    const outputDir = pm.outputDir;
     const tracePath = path.join(outputDir, 'trace-meta.json');
     const trace: TraceMeta = fs.existsSync(tracePath)
       ? JSON.parse(fs.readFileSync(tracePath, 'utf8')) as TraceMeta

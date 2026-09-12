@@ -228,13 +228,18 @@ export function listSavedSuiteResults(limit = 10, logger?: Logger): SuiteResult[
   return results.slice(0, clamped);
 }
 
+export interface CurrentRunEntry {
+  result: RunResult;
+  outputDir: string;
+}
+
 export async function runRegressionSuite(
   suiteName: string,
   models: string[],
   scenarios: string[],
   baselineDir: string,
   thresholds: { scoreDrop: number; tokenIncrease: number; timeIncrease: number },
-  getCurrentRunResult: (model: string, scenario: string) => Promise<RunResult | null>,
+  getCurrentRunResult: (model: string, scenario: string) => Promise<CurrentRunEntry | null>,
   logger?: Logger
 ): Promise<SuiteResult> {
   const suiteResult: SuiteResult = {
@@ -248,17 +253,21 @@ export async function runRegressionSuite(
   
   for (const model of models) {
     for (const scenario of scenarios) {
-      const currentResult = await getCurrentRunResult(model, scenario);
-      if (!currentResult) {
+      const entry = await getCurrentRunResult(model, scenario);
+      if (!entry) {
         logger?.warn('No current result for regression check', { model, scenario });
         continue;
       }
-      
-      const outputDir = path.join(outputRoot(), model, currentResult.runId);
+      const currentResult = entry.result;
+
       const baselinePath = getBaselinePath(baselineDir, model, scenario);
       const baseline = loadBaselineSnapshot(baselinePath);
-      
-      const judgeResult = readJudgeResult(outputDir);
+
+      // Judge artifacts live beside the run's result.json. The run index's
+      // stored outputDir is authoritative: legacy runs used the raw model key
+      // as the directory segment, newer runs sanitize it, so re-deriving from
+      // `model` would miss one layout or the other.
+      const judgeResult = entry.outputDir ? readJudgeResult(entry.outputDir) : null;
       
       const resultEntry: SuiteResult['scenarioResults'][number] = {
         scenario,

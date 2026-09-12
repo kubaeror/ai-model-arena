@@ -151,6 +151,44 @@ test('writeRunStats writes stats for BOTH models in a multi-model run from the r
   }
 });
 
+test('writeRunStats skips models whose run index entry has no outputDir', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-wb-'));
+  const dbPath = path.join(tmp, 'test.db');
+  initDb(dbPath);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = mockFetch({ 'models.dev/api.json': () => MODELS_DEV });
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+
+    const runId = 'scenario_2026-07-20T00_00_00Z';
+    seedRunOutputs(tmp, 'gpt-4o', runId);
+    await upsertRun({
+      runId, scenario: 'scenario', models: ['gpt-4o'],
+      startedAt: '2026-07-20T00:00:00.000Z', finishedAt: '2026-07-20T00:00:05.000Z',
+      status: 'completed', source: 'cli',
+      perModel: [{
+        model: 'gpt-4o', runId, outputDir: '',
+        sandboxDir: '', resultPath: path.join(tmp, 'outputs', 'gpt-4o', runId, 'result.json'),
+        conversationPath: '', reportPath: '', logFile: '',
+        status: 'completed' as const, success: true, durationMs: 5000,
+      }],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+    await seedModelCall(runId, 'gpt-4o', 100);
+
+    await writeRunStats(runId, tmp);
+
+    closeDb();
+    initDb(dbPath);
+    const rows = getDb().prepare('SELECT * FROM model_runtime_stats WHERE run_id = ?').all(runId);
+    assert.equal(rows.length, 0, 'empty outputDir must not be backfilled from the raw model name');
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('tool_call_stats.model stores the canonical model id matching model_runtime_stats.model_id', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-wb-'));
   const dbPath = path.join(tmp, 'test.db');
