@@ -65,18 +65,22 @@ export function compactMessages(messages: ChatMessage[], protectedTail: number):
   let total = messages.reduce((acc, m) => acc + (m.content?.length ?? 0), 0);
   if (total <= MAX_CONTEXT_CHARS || messages.length <= 2) return;
 
-  const keepHead = Math.min(2, messages.length - protectedTail);
+  const tail = Math.max(0, protectedTail);
+  const keepHead = Math.max(0, Math.min(2, messages.length - tail));
   const droppableStart = keepHead;
-  const droppableEnd = Math.max(keepHead, messages.length - protectedTail);
 
-  while (droppableEnd > droppableStart && total > MAX_CONTEXT_CHARS) {
+  while (total > MAX_CONTEXT_CHARS) {
+    const end = Math.max(droppableStart, messages.length - tail);
+    if (end <= droppableStart) break;
+
     let droppedChars = 0;
     let dropped = 0;
-    for (let i = droppableStart; i < droppableEnd; i++) {
+    for (let i = droppableStart; i < end; i++) {
       droppedChars += messages[i]?.content?.length ?? 0;
       dropped++;
       if (total - droppedChars <= MAX_CONTEXT_CHARS) break;
     }
+    if (dropped === 0 || droppedChars === 0) break;
     messages.splice(droppableStart, dropped);
     total -= droppedChars;
   }
