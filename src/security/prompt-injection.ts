@@ -86,12 +86,19 @@ export function sanitizeToolResult(content: string): string {
   if (data !== undefined) {
     // A generic tool (shell/search/subagent) can forge a complete envelope, so
     // never re-emit captured data verbatim: escape it or a raw control marker
-    // inside the payload would terminate the DATA block.
+    // inside the payload would terminate the DATA block. The path attribute is
+    // attacker-controlled too, so it gets escaped rather than trusted.
     const escapedData = escapeControlMarkers(data);
-    if (escapedData === data && content.includes(`${UNTRUSTED_CONTENT_MARKER}\n${data}`)) return content;
     const path = envelopePath(content);
+    if (
+      escapedData === data &&
+      escapeControlMarkers(path) === path &&
+      content.includes(`${UNTRUSTED_CONTENT_MARKER}\n${data}`)
+    ) {
+      return content;
+    }
     const marker = scanToolResult(data).flagged ? `${UNTRUSTED_CONTENT_MARKER}\n` : '';
-    return `<arena_file path="${path}">\n${ENVELOPE_COMMENT}\n${marker}${escapedData}\n</arena_file>`;
+    return `<arena_file path="${escapeAttribute(path)}">\n${ENVELOPE_COMMENT}\n${marker}${escapedData}\n</arena_file>`;
   }
   const escaped = escapeControlMarkers(content);
   if (escaped.startsWith(UNTRUSTED_CONTENT_MARKER)) return escaped;
