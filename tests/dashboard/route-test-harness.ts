@@ -155,6 +155,9 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   const { createAuditRouter } = await import(`../../src/dashboard-server/routes/audit.js${bust}`);
   const { createUsersRouter } = await import(`../../src/dashboard-server/routes/users.js${bust}`);
   const { createCostRouter } = await import(`../../src/dashboard-server/routes/cost.js${bust}`);
+  const { createSessionsRouter } = await import(`../../src/dashboard-server/routes/sessions.js${bust}`);
+  const { createExportRouter } = await import(`../../src/dashboard-server/routes/export.js${bust}`);
+  const { createAnomaliesRouter } = await import(`../../src/dashboard-server/routes/anomalies.js${bust}`);
   const { registerQueueRoutes } = await import(`../../src/dashboard-server/routes/queues.js${bust}`);
 
   app.use('/api/models', requireAuth(auth), requireRole('viewer'), createModelsRouter());
@@ -164,6 +167,9 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
   app.use('/api/users', requireAuth(auth), requireRole('admin'), createUsersRouter());
   app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
+  app.use('/api/sessions', requireAuth(auth), requireRole('viewer'), createSessionsRouter());
+  app.use('/api/export', requireAuth(auth), requireRole('viewer'), createExportRouter());
+  app.use('/api/anomalies', requireAuth(auth), requireRole('viewer'), createAnomaliesRouter());
   app.get('/api/roles', requireAuth(auth), requireRole('viewer'), async (_req, res) => {
     const { listRoles } = await import('../../src/db/query.js');
     res.json({ roles: await listRoles() });

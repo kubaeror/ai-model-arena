@@ -19,7 +19,7 @@ import { walkFiles } from '../../fs/walk.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { listJudgeScoresForRun } from '../../db/query.js';
 import type { AuthedRequest } from '../auth.js';
-import { allowIfRunOwner } from '../run-ownership.js';
+import { allowIfRunOwner, visibleRunsFor } from '../run-ownership.js';
 import { notFound } from '../helpers.js';
 
 async function getOwnedRunModelEntry(
@@ -63,9 +63,9 @@ async function readTail(filePath: string, lines = 400): Promise<string> {
 export function createRunsRouter(): Router {
   const router = Router();
 
-  // GET /api/runs — list all runs (from the index, no filesystem scan)
-  router.get('/', async (_req, res) => {
-    res.json({ runs: await listRuns() });
+  // GET /api/runs — list runs the caller may see (admin: all; others: owned)
+  router.get('/', async (req, res) => {
+    res.json({ runs: visibleRunsFor(req as AuthedRequest, await listRuns()) });
   });
 
   // POST /api/runs — trigger a new run (non-blocking; uses the orchestrator)

@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { getRunRecord } from '../orchestrator/run-index.js';
+import { getRunRecord, listRuns } from '../orchestrator/run-index.js';
 import type { AuthedRequest } from './auth.js';
 import { isOwnerAllowed, apiKeyIsAdmin } from '../auth/rbac.js';
 
@@ -38,4 +38,69 @@ export async function allowIfRunOwner(
     error: owner.status === 404 ? notFoundMsg : 'forbidden: not the run owner',
   });
   return false;
+}
+
+/**
+ * Resolve the run a dashboard session belongs to. Session ids are minted as
+ * `${runId}-${model}` (run-lifecycle), so the fast path strips the known model
+ * suffix and verifies the run record exists. Sessions without a matching run
+ * resolve to null; callers default-deny non-admins for those.
+ */
+export async function resolveSessionRunId(
+  sessionId: string,
+  model: string | null | undefined,
+): Promise<string | null> {
+  if (model) {
+    const suffix = `-${model}`;
+    if (sessionId.endsWith(suffix)) {
+      // Convention matched: the session belongs to this exact run or to no
+      // live run at all. Never fall through to prefix matching here, which
+      // could hand a session to an unrelated run that shares a prefix.
+      const candidate = sessionId.slice(0, -suffix.length);
+      return candidate && (await getRunRecord(candidate)) ? candidate : null;
+    }
+  }
+  // Fallback for sessions whose model column is missing/stale: the longest run
+  // id that prefixes `sessionId-` wins, so the most specific run owns it.
+  let match: string | null = null;
+  for (const rec of await listRuns()) {
+    if (!sessionId.startsWith(`${rec.runId}-`)) continue;
+    if (model && !rec.perModel.some((pm) => pm.model === model)) continue;
+    if (!match || rec.runId.length > match.length) match = rec.runId;
+  }
+  return match;
+}
+
+/**
+ * Session equivalent of `allowIfRunOwner`: resolves the owning run via
+ * `resolveSessionRunId` and applies the same predicate. Sessions with no
+ * resolvable run (legacy/migrated) are admin-only.
+ */
+export async function allowIfSessionOwner(
+  req: AuthedRequest,
+  res: Response,
+  sessionId: string,
+  model: string | null | undefined,
+  notFoundMsg: string = 'Session not found',
+): Promise<boolean> {
+  const runId = await resolveSessionRunId(sessionId, model);
+  if (runId) return allowIfRunOwner(req, res, runId, notFoundMsg);
+  if (req.user?.role === 'admin' || apiKeyIsAdmin(req)) return true;
+  res.status(403).json({ error: 'forbidden: not the session owner' });
+  return false;
+}
+
+/**
+ * Filter run-index rows to what the caller may see: admins (JWT or API key)
+ * keep everything, everyone else only runs they own. Ownerless legacy runs
+ * drop out for non-admins — the same default-deny predicate made by
+ * `allowIfRunOwner`, applied to list/export responses.
+ */
+export function visibleRunsFor<T extends { createdBy?: string | null }>(
+  req: AuthedRequest,
+  runs: T[],
+): T[] {
+  if (req.user?.role === 'admin' || apiKeyIsAdmin(req)) return runs;
+  const actor = req.user ?? {};
+  return runs.filter((r) => isOwnerAllowed(actor, r.createdBy));
 }

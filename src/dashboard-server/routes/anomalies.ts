@@ -12,6 +12,7 @@ import {
 } from '../../db/query.js';
 import { getRunRecord } from '../../orchestrator/run-index.js';
 import { readTraceMeta } from '../../observability/trace-meta.js';
+import { allowIfRunOwner } from '../run-ownership.js';
 
 function parseBool(v: unknown): boolean | undefined {
   if (v === undefined) return undefined;
@@ -48,6 +49,9 @@ export function createAnomaliesRouter(): Router {
       notFound(res, `Anomaly ${id}`, String(id));
       return;
     }
+    // Trace spans can carry captured prompts/completions; gate the whole
+    // detail response on ownership of the anomaly's run (default-deny).
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, anomaly.run_id, `Anomaly ${id} not found`))) return;
     let run = null;
     let trace = null;
     const rec = await getRunRecord(anomaly.run_id);

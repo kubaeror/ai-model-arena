@@ -7,6 +7,7 @@ import { createSessionStore } from '../../session/store.js';
 import { requireRole, auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { notFound, parsePagination } from '../helpers.js';
+import { allowIfSessionOwner } from '../run-ownership.js';
 
 export function createSessionsRouter(): Router {
   const router = Router();
@@ -29,6 +30,7 @@ export function createSessionsRouter(): Router {
       notFound(res, 'Session', req.params.id);
       return;
     }
+    if (!(await allowIfSessionOwner(req as AuthedRequest, res, session.id, session.model))) return;
     res.json(session);
   });
 
@@ -39,6 +41,7 @@ export function createSessionsRouter(): Router {
       notFound(res, 'Session', req.params.id);
       return;
     }
+    if (!(await allowIfSessionOwner(req as AuthedRequest, res, session.id, session.model))) return;
     const messages = await listMessagesBySession(req.params.id);
     res.json({ messages });
   });
@@ -50,6 +53,7 @@ export function createSessionsRouter(): Router {
       notFound(res, 'Session', req.params.id);
       return;
     }
+    if (!(await allowIfSessionOwner(req as AuthedRequest, res, session.id, session.model))) return;
     const calls = await listModelCallsForSession(req.params.id);
     res.json({ calls });
   });

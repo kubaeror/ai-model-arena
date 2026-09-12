@@ -3,13 +3,42 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { boot, authedGet, postJson, TEST_ADMIN } from './route-test-harness.js';
+import { boot, authedGet, postJson, TEST_ADMIN, TEST_VIEWER } from './route-test-harness.js';
 import { getDrizzleDb } from '../../src/db/index.js';
-import { insertAuditEntry, insertPrompt, insertPromptVersion } from '../../src/db/query.js';
-import { models, model_providers, pricing, providers, run_models, runs, audit_log as auditLog, cost_ledger as costLedger } from '../../src/db/schema.js';
+import { insertAnomaly, insertAuditEntry, insertPrompt, insertPromptVersion } from '../../src/db/query.js';
+import { messages, model_calls, models, model_providers, pricing, providers, run_models, runs, sessions, audit_log as auditLog, cost_ledger as costLedger } from '../../src/db/schema.js';
 import { outputRoot } from '../../src/paths.js';
 import { isWithin } from '../../src/sandbox/sandbox.js';
-import { getRunRecord } from '../../src/db/runs.js';
+import { getRunRecord, upsertRun } from '../../src/db/runs.js';
+import { loadAuthConfig, signToken } from '../../src/dashboard-server/auth.js';
+
+function runFixture(runId: string, createdBy: string | undefined, tmpDir: string): Parameters<typeof upsertRun>[0] {
+  const outputDir = path.join(tmpDir, runId);
+  fs.mkdirSync(outputDir, { recursive: true });
+  return {
+    runId,
+    scenario: 'scenario-ownership',
+    models: ['gpt-4o'],
+    startedAt: '2026-02-01T00:00:00.000Z',
+    finishedAt: '2026-02-01T00:01:00.000Z',
+    status: 'completed',
+    source: 'cli',
+    createdBy,
+    comparisonMdPath: null,
+    comparisonJsonPath: null,
+    perModel: [{
+      model: 'gpt-4o',
+      runId,
+      outputDir,
+      sandboxDir: path.join(outputDir, 'sandbox'),
+      resultPath: path.join(outputDir, 'result.json'),
+      conversationPath: path.join(outputDir, 'conversation.json'),
+      reportPath: path.join(outputDir, 'report.md'),
+      logFile: path.join(outputDir, 'run.log'),
+      status: 'completed',
+    }],
+  };
+}
 
 test('GET /api/cost exposes the cost ledger summary', async (t) => {
   const h = await boot(t);
@@ -401,4 +430,139 @@ test('POST /api/prompts/enqueue rejects traversal scenario and model identifiers
     server.close();
     server.closeIdleConnections();
   }
+});
+
+test('GET /api/runs only lists runs owned by the caller for non-admins', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  await upsertRun(runFixture('owned-by-viewer1', TEST_VIEWER.username, h.tmpDir));
+  await upsertRun(runFixture('owned-by-alice', 'alice', h.tmpDir));
+  await upsertRun(runFixture('legacy-ownerless', undefined, h.tmpDir));
+
+  const adminRes = await authedGet(h.base, h.adminToken, '/api/runs');
+  assert.equal(adminRes.status, 200);
+  const adminBody = (await adminRes.json()) as { runs: Array<{ runId: string }> };
+  const adminIds = adminBody.runs.map((r) => r.runId);
+  assert.ok(adminIds.includes('owned-by-viewer1') && adminIds.includes('owned-by-alice') && adminIds.includes('legacy-ownerless'));
+
+  const viewerRes = await authedGet(h.base, h.viewerToken!, '/api/runs');
+  assert.equal(viewerRes.status, 200);
+  const viewerBody = (await viewerRes.json()) as { runs: Array<{ runId: string }> };
+  assert.deepEqual(viewerBody.runs.map((r) => r.runId), ['owned-by-viewer1']);
+  const raw = JSON.stringify(viewerBody);
+  assert.ok(!raw.includes('owned-by-alice'), 'other owner run must not be listed');
+  assert.ok(!raw.includes('legacy-ownerless'), 'ownerless run must not be listed');
+  assert.ok(!raw.includes(path.join(h.tmpDir, 'owned-by-alice')), 'other owner absolute paths must not leak');
+});
+
+test('session detail endpoints enforce run ownership', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const db = getDrizzleDb();
+  await upsertRun(runFixture('session-run-alice', 'alice', h.tmpDir));
+  const sessionId = 'session-run-alice-gpt-4o';
+  const now = new Date().toISOString();
+  await db.insert(sessions).values({ id: sessionId, model: 'gpt-4o', status: 'active', created_at: now, updated_at: now });
+  await db.insert(messages).values({ id: 'msg-secret', session_id: sessionId, turn: 0, role: 'user', content: 'top secret prompt', created_at: now });
+  await db.insert(model_calls).values({
+    id: 'call-secret', session_id: sessionId, turn: 0, provider: 'openai', model: 'gpt-4o',
+    request_hash: 'hash', response_text: 'secret completion', created_at: now,
+  });
+
+  for (const p of [`/api/sessions/${sessionId}`, `/api/sessions/${sessionId}/messages`, `/api/sessions/${sessionId}/calls`]) {
+    const denied = await authedGet(h.base, h.viewerToken!, p);
+    assert.equal(denied.status, 403, `${p} must deny a non-owner viewer`);
+    assert.ok(!(await denied.text()).includes('secret'), `${p} must not leak session data`);
+  }
+
+  const aliceToken = signToken(loadAuthConfig(), 'alice', 'viewer');
+  const ownerMsgs = await authedGet(h.base, aliceToken, `/api/sessions/${sessionId}/messages`);
+  assert.equal(ownerMsgs.status, 200);
+  const ownerMsgsBody = (await ownerMsgs.json()) as { messages: Array<{ content: string }> };
+  assert.equal(ownerMsgsBody.messages[0]?.content, 'top secret prompt');
+
+  const adminDetail = await authedGet(h.base, h.adminToken, `/api/sessions/${sessionId}`);
+  assert.equal(adminDetail.status, 200);
+});
+
+test('sessions with no owning run are default-denied to non-admins', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  await db.insert(sessions).values({ id: 'orphan-session', model: 'gpt-4o', status: 'active', created_at: now, updated_at: now });
+  await upsertRun(runFixture('legacy-session-run', undefined, h.tmpDir));
+  await db.insert(sessions).values({
+    id: 'legacy-session-run-gpt-4o', model: 'gpt-4o', status: 'active', created_at: now, updated_at: now,
+  });
+  // A session whose run does not exist must not inherit ownership from a run
+  // that merely shares an id prefix, even for that run's owner.
+  await db.insert(sessions).values({
+    id: 'legacy-session-run-extra-gpt-4o', model: 'gpt-4o', status: 'active', created_at: now, updated_at: now,
+  });
+
+  for (const id of ['orphan-session', 'legacy-session-run-gpt-4o']) {
+    const denied = await authedGet(h.base, h.viewerToken!, `/api/sessions/${id}`);
+    assert.equal(denied.status, 403, `${id} must be denied to a viewer`);
+    const admin = await authedGet(h.base, h.adminToken, `/api/sessions/${id}`);
+    assert.equal(admin.status, 200, `${id} must stay visible to admins`);
+  }
+
+  const aliceToken = signToken(loadAuthConfig(), 'alice', 'viewer');
+  const prefixInheritance = await authedGet(h.base, aliceToken, '/api/sessions/legacy-session-run-extra-gpt-4o');
+  assert.equal(prefixInheritance.status, 403, 'a missing run must not inherit a prefix run owner');
+});
+
+test('session ownership falls back to run lookup when the model suffix is stale', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const db = getDrizzleDb();
+  await upsertRun(runFixture('fallback-run', 'alice', h.tmpDir));
+  const now = new Date().toISOString();
+  await db.insert(sessions).values({
+    id: 'fallback-run-gpt-4o-restart', model: 'gpt-4o', status: 'active', created_at: now, updated_at: now,
+  });
+
+  const aliceToken = signToken(loadAuthConfig(), 'alice', 'viewer');
+  assert.equal((await authedGet(h.base, aliceToken, '/api/sessions/fallback-run-gpt-4o-restart')).status, 200);
+  assert.equal((await authedGet(h.base, h.viewerToken!, '/api/sessions/fallback-run-gpt-4o-restart')).status, 403);
+  assert.equal((await authedGet(h.base, h.adminToken, '/api/sessions/fallback-run-gpt-4o-restart')).status, 200);
+});
+
+test('CSV export only includes runs owned by the caller for non-admins', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const result = JSON.stringify({ durationMs: 1000, turnsUsed: 2, success: true, tokenUsage: { prompt: 10, completion: 5 }, costUsd: 0.25 });
+  for (const run of [runFixture('csv-owned-by-viewer1', TEST_VIEWER.username, h.tmpDir), runFixture('csv-owned-by-alice', 'alice', h.tmpDir)]) {
+    fs.writeFileSync(run.perModel[0]!.resultPath, result);
+    await upsertRun(run);
+  }
+
+  const viewerRes = await authedGet(h.base, h.viewerToken!, '/api/export/csv');
+  assert.equal(viewerRes.status, 200);
+  const viewerCsv = await viewerRes.text();
+  assert.ok(viewerCsv.includes('csv-owned-by-viewer1'), 'owner run is exported');
+  assert.ok(!viewerCsv.includes('csv-owned-by-alice'), 'other owner run is not exported');
+
+  const adminRes = await authedGet(h.base, h.adminToken, '/api/export/csv');
+  assert.equal(adminRes.status, 200);
+  const adminCsv = await adminRes.text();
+  assert.ok(adminCsv.includes('csv-owned-by-viewer1') && adminCsv.includes('csv-owned-by-alice'), 'admin export keeps every run');
+});
+
+test('anomaly detail checks run ownership before returning traces', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  await upsertRun(runFixture('anomaly-run-alice', 'alice', h.tmpDir));
+  const anomaly = await insertAnomaly({
+    run_id: 'anomaly-run-alice', model: 'gpt-4o', type: 'error_rate', severity: 'high',
+    description: 'trace contains captured prompt',
+  });
+
+  const denied = await authedGet(h.base, h.viewerToken!, `/api/anomalies/${anomaly.id}`);
+  assert.equal(denied.status, 403);
+  assert.ok(!(await denied.text()).includes('captured prompt'), 'anomaly payload must not leak to non-owners');
+
+  const owner = await authedGet(h.base, signToken(loadAuthConfig(), 'alice', 'viewer'), `/api/anomalies/${anomaly.id}`);
+  assert.equal(owner.status, 200);
+  const ownerBody = (await owner.json()) as { anomaly: { id: number }; run: { runId: string } | null };
+  assert.equal(ownerBody.anomaly.id, anomaly.id);
+  assert.equal(ownerBody.run?.runId, 'anomaly-run-alice');
+
+  const admin = await authedGet(h.base, h.adminToken, `/api/anomalies/${anomaly.id}`);
+  assert.equal(admin.status, 200);
 });
