@@ -286,4 +286,104 @@ describe('globFiles', () => {
     const r = await globFiles({ pattern: '*.ts', path: 'nonexistent' }, ctx);
     assert.strictEqual(r.isError, true);
   });
+
+  it('rejects absolute glob patterns without leaking host paths', async () => {
+    const outsideAbs = path.join(tmp, 'glob-abs-outside.txt');
+    fs.writeFileSync(outsideAbs, 'classified');
+    const r = await globFiles({ pattern: outsideAbs }, ctx);
+    assert.strictEqual(r.isError, true, `absolute pattern must be rejected, got: ${r.content}`);
+    assert.ok(!r.content.includes(outsideAbs), `absolute path leaked: ${r.content}`);
+    const host = await globFiles({ pattern: '/etc/hostname' }, ctx);
+    assert.ok(!host.content.includes('/etc/hostname'), `host path leaked: ${host.content}`);
+  });
+
+  it('rejects .. traversal patterns without leaking outside files', async () => {
+    fs.writeFileSync(path.join(tmp, 'glob-outside-secret.txt'), 'classified');
+    const r = await globFiles({ pattern: '../glob-outside-secret.txt' }, ctx);
+    assert.strictEqual(r.isError, true, `traversal pattern must be rejected, got: ${r.content}`);
+    assert.ok(!r.content.includes('glob-outside-secret'), `outside match leaked: ${r.content}`);
+  });
+
+  it('rejects ~-prefixed patterns', async () => {
+    const r = await globFiles({ pattern: '~/*' }, ctx);
+    assert.strictEqual(r.isError, true, `home-relative pattern must be rejected, got: ${r.content}`);
+  });
+
+  it('filters brace-expanded traversal matches that resolve outside the sandbox', async () => {
+    fs.writeFileSync(path.join(tmp, 'glob-brace-outside.txt'), 'classified');
+    const r = await globFiles({ pattern: '{..,src}/glob-brace-outside.txt' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(!r.content.includes('glob-brace-outside'), `brace traversal leaked: ${r.content}`);
+  });
+
+  it('filters brace-expanded absolute matches that resolve outside the sandbox', async () => {
+    const outsideAbs = path.join(tmp, 'glob-brace-abs.txt');
+    fs.writeFileSync(outsideAbs, 'classified');
+    const r = await globFiles({ pattern: `{${outsideAbs},${outsideAbs}.missing}` }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(!r.content.includes('glob-brace-abs'), `brace absolute path leaked: ${r.content}`);
+  });
+
+  it('does not return files reached through an escaping symlinked directory', async () => {
+    const outsideDir = path.join(tmp, 'glob-outside-dir');
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, 'leak.txt'), 'classified');
+    fs.symlinkSync(outsideDir, path.join(sandbox, 'glob-escape-dir'), 'dir');
+    const r = await globFiles({ pattern: 'glob-escape-dir/*.txt' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(!r.content.includes('leak.txt'), `escaped match leaked: ${r.content}`);
+  });
+});
+
+// ── hardlink write containment ──────────────────────────────────────────────
+
+describe('hardlink write containment', () => {
+  before(() => {
+    fs.mkdirSync(tmp, { recursive: true });
+    fs.mkdirSync(sandbox, { recursive: true });
+  });
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('write_file rejects a hardlink to a file outside the sandbox and leaves it unchanged', async () => {
+    const outside = path.join(tmp, 'hardlink-write-outside.txt');
+    const linked = path.join(sandbox, 'hardlink-write.txt');
+    fs.writeFileSync(outside, 'original-outside');
+    fs.linkSync(outside, linked);
+
+    const r = await writeFile({ path: 'hardlink-write.txt', content: 'pwned' }, ctx);
+
+    assert.strictEqual(r.isError, true, `hardlink write must be rejected, got: ${r.content}`);
+    assert.match(r.content, /hardlink/i);
+    assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'original-outside');
+    assert.strictEqual(fs.readFileSync(linked, 'utf8'), 'original-outside');
+  });
+
+  it('edit_file rejects a hardlink to a file outside the sandbox and leaves it unchanged', async () => {
+    const outside = path.join(tmp, 'hardlink-edit-outside.txt');
+    const linked = path.join(sandbox, 'hardlink-edit.txt');
+    fs.writeFileSync(outside, 'original-outside');
+    fs.linkSync(outside, linked);
+
+    const r = await editFile({ path: 'hardlink-edit.txt', old_string: 'original', new_string: 'pwned' }, ctx);
+
+    assert.strictEqual(r.isError, true, `hardlink edit must be rejected, got: ${r.content}`);
+    assert.match(r.content, /hardlink/i);
+    assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'original-outside');
+    assert.strictEqual(fs.readFileSync(linked, 'utf8'), 'original-outside');
+  });
+
+  it('write_file still overwrites files it created inside the sandbox', async () => {
+    const first = await writeFile({ path: 'hardlink-created.txt', content: 'one' }, ctx);
+    assert.strictEqual(first.isError, false);
+    const second = await writeFile({ path: 'hardlink-created.txt', content: 'two' }, ctx);
+    assert.strictEqual(second.isError, false);
+    assert.strictEqual(fs.readFileSync(path.join(sandbox, 'hardlink-created.txt'), 'utf8'), 'two');
+  });
+
+  it('edit_file still edits files it created inside the sandbox', async () => {
+    fs.writeFileSync(path.join(sandbox, 'hardlink-edited.txt'), 'hello world');
+    const r = await editFile({ path: 'hardlink-edited.txt', old_string: 'hello', new_string: 'goodbye' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.strictEqual(fs.readFileSync(path.join(sandbox, 'hardlink-edited.txt'), 'utf8'), 'goodbye world');
+  });
 });

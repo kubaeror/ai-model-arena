@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { safeResolve, isWithin } from '../../src/sandbox/sandbox.js';
+import { safeResolve, isWithin, assertSafeWriteTarget } from '../../src/sandbox/sandbox.js';
 
 test('rejects .. traversal', () => {
   assert.throws(() => safeResolve('/sandbox', '../../etc/passwd'));
@@ -84,4 +84,43 @@ test('allows symlink that stays inside sandbox', () => {
   assert.match(resolved, /sandbox/);
 
   fs.rmSync(base, { recursive: true });
+});
+
+// ── Hardlink write containment ───────────────────────────────────────────
+// safeResolve cannot detect hardlinks: a link inside the sandbox to an inode
+// outside it is a regular file with nlink > 1. write_file/edit_file must
+// reject such targets or a write truncates the shared inode.
+
+test('assertSafeWriteTarget allows a brand-new file', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-hl-new-'));
+  try {
+    assert.doesNotThrow(() => assertSafeWriteTarget(path.join(base, 'new.txt')));
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('assertSafeWriteTarget allows an existing single-link file', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-hl-single-'));
+  try {
+    const file = path.join(base, 'single.txt');
+    fs.writeFileSync(file, 'ok');
+    assert.doesNotThrow(() => assertSafeWriteTarget(file));
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('assertSafeWriteTarget rejects an existing hardlinked file', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-hl-multi-'));
+  try {
+    const original = path.join(base, 'original.txt');
+    const alias = path.join(base, 'alias.txt');
+    fs.writeFileSync(original, 'shared inode');
+    fs.linkSync(original, alias);
+    assert.throws(() => assertSafeWriteTarget(alias), /hardlink/i);
+    assert.throws(() => assertSafeWriteTarget(original), /hardlink/i);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });

@@ -110,6 +110,32 @@ export function resolveSeedDir(sandboxRoot: string, starterFiles: string): strin
 }
 
 /**
+ * Reject writes to an existing inode that has multiple hardlinks. `safeResolve`
+ * only resolves symlinks, so a hardlink inside the sandbox to an outside inode
+ * looks like a regular file; truncating it would mutate the outside file.
+ * O_NOFOLLOW also refuses a symlink final component. Brand-new files are exempt
+ * (nothing is shared yet).
+ */
+export function assertSafeWriteTarget(absPath: string): void {
+  const flags = fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW || 0);
+  let fd: number;
+  try {
+    fd = fs.openSync(absPath, flags);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (stat.isFile() && stat.nlink > 1) {
+      throw new Error('Refusing to write to a hardlinked file (multiple links to the same inode).');
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
  * Sensitive environment variable names/prefixes stripped from sandboxed commands.
  *
  * Matching: `key === prefix` (exact) OR `key.startsWith(prefix)` (prefix).
@@ -118,6 +144,9 @@ export function resolveSeedDir(sandboxRoot: string, starterFiles: string): strin
  * ARENA_API_KEY_ (with trailing `_`) blocks ARENA_API_KEY_CI, ARENA_API_KEY_READONLY, etc.
  * DASHBOARD_JWT_SECRET and DASHBOARD_PASSWORD are exact names that also cover
  * any variable starting with those strings.
+ *
+ * In addition to this list, any key ending in `_API_KEY`, `_TOKEN`, `_SECRET`,
+ * or `_PASSWORD` (case-insensitive) is stripped — see isBlockedEnvKey.
  *
  * To add a new secret family, append the common prefix here.
  */
@@ -186,6 +215,11 @@ export const BLOCKED_ENV_PREFIXES = [
   // Dashboard secrets
   'DASHBOARD_JWT_SECRET',
   'DASHBOARD_PASSWORD',
+  'DASHBOARD_REDIS_URL',
+  'METRICS_TOKEN',
+  // Search and webhook secrets
+  'SEARCH_API_KEY',
+  'WEBHOOK_SECRET_KEY',
   // Arena API keys
   'ARENA_API_KEY_',
   // Generic patterns for custom secrets
@@ -195,16 +229,24 @@ export const BLOCKED_ENV_PREFIXES = [
 ];
 
 /**
+ * Secret suffixes that apply in any project: CUSTOM_API_KEY, my_token,
+ * Foo_Secret, DB_PASSWORD, etc. Case-insensitive and anchored to the end.
+ */
+const BLOCKED_ENV_SUFFIX_RE = /(_API_KEY|_TOKEN|_SECRET|_PASSWORD)$/i;
+
+function isBlockedEnvKey(key: string): boolean {
+  if (BLOCKED_ENV_SUFFIX_RE.test(key)) return true;
+  return BLOCKED_ENV_PREFIXES.some((prefix) => key === prefix || key.startsWith(prefix));
+}
+
+/**
  * Returns a copy of process.env with all sensitive credentials stripped.
  * Use this instead of process.env when spawning LLM-controlled subprocesses.
  */
 export function sandboxEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
-    const blocked = BLOCKED_ENV_PREFIXES.some(
-      (prefix) => key === prefix || key.startsWith(prefix),
-    );
-    if (!blocked) env[key] = value;
+    if (!isBlockedEnvKey(key)) env[key] = value;
   }
   return env;
 }

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { exec, execFile } from 'node:child_process';
 import { z } from 'zod/v4';
 import { validateArgs } from './util.js';
-import { safeResolve, sandboxEnv } from '../sandbox/sandbox.js';
+import { safeResolve, sandboxEnv, assertSafeWriteTarget, isWithin } from '../sandbox/sandbox.js';
 import { isShellCommandAllowed } from '../sandbox/shell-policy.js';
 import { walkFiles } from '../fs/walk.js';
 import { wrapFileContent } from '../security/prompt-injection.js';
@@ -75,6 +75,11 @@ export const writeFile: ToolExecutor = async (args, ctx) => {
     return { content: `Error: content is ${byteLen} bytes, exceeds max write size of ${MAX_WRITE_BYTES} bytes.`, isError: true };
   }
   const abs = safeResolve(ctx.sandboxDir, rel);
+  try {
+    assertSafeWriteTarget(abs);
+  } catch (e) {
+    return { content: `Error: ${(e as Error).message}`, isError: true };
+  }
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content, 'utf8');
   return { content: `Wrote ${byteLen} bytes to ${rel}`, isError: false };
@@ -287,6 +292,11 @@ export const editFile: ToolExecutor = async (args, ctx) => {
   const abs = safeResolve(ctx.sandboxDir, rel);
   if (!fs.existsSync(abs)) return { content: `Error: file not found: ${rel}`, isError: true };
   if (!fs.statSync(abs).isFile()) return { content: `Error: not a file: ${rel}`, isError: true };
+  try {
+    assertSafeWriteTarget(abs);
+  } catch (e) {
+    return { content: `Error: ${(e as Error).message}`, isError: true };
+  }
 
   const original = fs.readFileSync(abs, 'utf8');
 
@@ -334,11 +344,23 @@ const MAX_GLOB_FILES = 5000;
 /** Directories always excluded from glob results (mirrors IGNORE_DIRS). */
 const GLOB_EXCLUDE_PATTERNS = IGNORE_DIRS.map((name) => `**/${name}/**`);
 
+/**
+ * Patterns fs.globSync would resolve against the host filesystem instead of the
+ * sandbox cwd: absolute paths, `..` segments, and `~` home-relative forms.
+ */
+function escapesSandboxGlob(pattern: string): boolean {
+  if (path.isAbsolute(pattern) || pattern.startsWith('~')) return true;
+  return pattern.split(/[\\/]/).some((segment) => segment === '..');
+}
+
 export const globFiles: ToolExecutor = async (args, ctx) => {
   const v = validateArgs(GlobArgs, args);
   if (!v.ok) return { content: v.error, isError: true };
   const { pattern, path: relPath } = v.data;
   if (!pattern) return { content: 'Error: "pattern" is required.', isError: true };
+  if (escapesSandboxGlob(pattern)) {
+    return { content: 'Error: glob pattern must be relative and must not traverse outside the sandbox.', isError: true };
+  }
 
   let targetDir = relPath;
   if (!targetDir || targetDir === '') targetDir = '.';
@@ -355,9 +377,23 @@ export const globFiles: ToolExecutor = async (args, ctx) => {
 
   const matches: string[] = [];
   for (const relMatch of rawMatches) {
-    const abs = path.resolve(absDir, relMatch);
+    const candidate = path.resolve(absDir, relMatch);
+    let abs: string;
+    try {
+      abs = safeResolve(ctx.sandboxDir, candidate);
+    } catch {
+      // Match resolves outside the sandbox (e.g. via a symlinked directory).
+      continue;
+    }
+    if (!isWithin(ctx.sandboxDir, abs)) continue;
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(abs);
+    } catch {
+      continue;
+    }
     // Only regular files (not directories, not symlinks) — matches walkFiles semantics.
-    if (!fs.lstatSync(abs).isFile()) continue;
+    if (!stat.isFile()) continue;
     matches.push(toRel(ctx.sandboxDir, abs));
     if (matches.length >= MAX_GLOB_FILES) {
       matches.push('…[truncated, too many matches]');
