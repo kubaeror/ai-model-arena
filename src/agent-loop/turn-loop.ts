@@ -9,6 +9,7 @@ import type {
   ModelResponse,
 } from '../types.js';
 import type { ModelAdapter, SendOpts } from '../providers/adapters/base.js';
+import { sanitizeToolResult } from '../security/prompt-injection.js';
 
 /**
  * Per-caller error-text formatters. Defaults match the agent loop's historical
@@ -216,6 +217,9 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
         }
 
         content = content.length <= maxToolResultChars ? content : content.slice(0, maxToolResultChars) + truncateSuffix;
+        // Harden after truncation so the final appended content cannot break
+        // out of its data envelope (escapes markers, marks flagged output).
+        content = sanitizeToolResult(content);
         events.onToolResult?.(turn, tc.id, tc.name, content, isError);
         messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content });
 
