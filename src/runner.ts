@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { outputRoot, dbPath, findProjectRoot } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState, listModelCallsForSession, listMessagesBySession } from './db/query.js';
+import { getRunRecord } from './db/runs.js';
 import { resumeFrom } from './runner/checkpoint.js';
 import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS, isTerminalAttempt } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
@@ -679,13 +680,25 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         writeReport(path.join(runOutputDir, 'report.md'), runResult, convFile);
       } catch { /* best-effort */ }
 
+      // A run stopped mid-execution stays stopped: stopRun records the cancel
+      // signal and a terminal 'stopped' index row, and finalizeRunByRunId
+      // writes the index directly (bypassing transitionTaskState's terminal
+      // guard), so success finalization is skipped entirely below.
+      const runStopped = (await isRunCancelled(modelRunId))
+        || (await getRunRecord(modelRunId))?.status === 'stopped';
+
       // run_models.status reflects loop health, not the success-criteria result:
       // a clean loop whose criteria failed stays 'completed' (criteria is
       // recorded in result.json). Loop errors still map to 'failed'.
-      const finalStatus = result.errors.length > 0 ? 'failed' : 'completed';
-      transitionTaskState(runId, task.model, finalStatus, runnerId).catch(e =>
-        logger.warn('Failed to write final state', { error: String(e) }),
-      );
+      const finalStatus = runStopped ? 'stopped' : result.errors.length > 0 ? 'failed' : 'completed';
+      // Awaited before maybeFinalizeRun's completeness SELECT: on Postgres the
+      // pool spreads queries across connections, so a fire-and-forget UPDATE
+      // could lose the race and leave the run wedged in 'running'.
+      try {
+        await transitionTaskState(runId, task.model, finalStatus, runnerId);
+      } catch (e) {
+        logger.warn('Failed to write final state', { error: String(e) });
+      }
       try {
         const producedByTool = buildProducedByTool(conv.entries);
         const manifest = generateManifest(sandboxDir, modelRunId, modelName, producedByTool);
@@ -713,9 +726,21 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       taskCounted = true;
 
       logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed, success });
-      await store.updateSessionStatus(session.id, result.errors.length > 0 ? 'errored' : 'completed');
-      await queue.ack(task!._redisId ?? task!.taskId);
-      void maybeFinalizeRun(runId, logger).catch(() => undefined);
+      // Bookkeeping after a finished loop must never fall through to the task
+      // failure path: log and continue instead of nacking a completed session.
+      if (!runStopped) {
+        try {
+          await store.updateSessionStatus(session.id, result.errors.length > 0 ? 'errored' : 'completed');
+        } catch (e) {
+          logger.warn('Failed to update session status (non-fatal)', { sessionId: session.id, error: String(e) });
+        }
+      }
+      try {
+        await queue.ack(task!._redisId ?? task!.taskId);
+      } catch (e) {
+        logger.warn('Failed to ack finished task; it may be redelivered', { taskId: task!.taskId, error: String(e) });
+      }
+      if (!runStopped) void maybeFinalizeRun(runId, logger).catch(() => undefined);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Task failed', { taskId: task?.taskId, error: msg });

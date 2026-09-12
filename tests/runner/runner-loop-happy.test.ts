@@ -156,6 +156,11 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
     assert.equal(runRow.status, 'completed');
     assert.ok(runRow.completed_at, 'completed_at should be set');
 
+    // 2b. The runner self-finalizes the run index too (no dashboard watcher
+    //     in this process); the terminal UPDATE must land before finalize.
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    await waitFor(async () => (await getRunRecord('run15'))?.status === 'completed', 10000, 'run index finalized');
+
     // 3. result.json written with a successful task_complete outcome.
     const resultPath = path.join(outputs, 'GPT-4o', 'run15', 'result.json');
     assert.ok(fs.existsSync(resultPath), 'result.json should exist');

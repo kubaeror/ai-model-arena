@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
+import { transitionTaskState } from '../../src/db/query.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
 import { stopRun, registerRun, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
 
@@ -60,6 +61,49 @@ test('stopRun on a completed run keeps terminal statuses intact', async () => {
     const rec = await getRunRecord('stop-2');
     assert.equal(rec?.status, 'stopped');
     assert.equal(rec?.perModel[0]?.status, 'completed', 'terminal model rows must not be regressed');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('transitionTaskState never moves a terminal row to a conflicting terminal status', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-transition-guard-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    const mk = (runId: string, status: string) => upsertRun({
+      runId, scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+      perModel: [{ model: 'gpt-4o', runId, status } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+    await mk('guard-stopped', 'running');
+    await mk('guard-retry', 'running');
+
+    await transitionTaskState('guard-stopped', 'gpt-4o', 'stopped');
+    await transitionTaskState('guard-stopped', 'gpt-4o', 'completed');
+    let rec = await getRunRecord('guard-stopped');
+    assert.equal(rec?.perModel[0]?.status, 'stopped', 'stopped must never be overwritten by completed');
+
+    await transitionTaskState('guard-stopped', 'gpt-4o', 'failed');
+    rec = await getRunRecord('guard-stopped');
+    assert.equal(rec?.perModel[0]?.status, 'stopped', 'stopped must never be overwritten by failed');
+
+    await transitionTaskState('guard-retry', 'gpt-4o', 'failed');
+    await transitionTaskState('guard-retry', 'gpt-4o', 'completed');
+    rec = await getRunRecord('guard-retry');
+    assert.equal(rec?.perModel[0]?.status, 'failed', 'failed must never be overwritten by completed directly');
+
+    await transitionTaskState('guard-retry', 'gpt-4o', 'claimed');
+    await transitionTaskState('guard-retry', 'gpt-4o', 'running');
+    await transitionTaskState('guard-retry', 'gpt-4o', 'completed');
+    rec = await getRunRecord('guard-retry');
+    assert.equal(rec?.perModel[0]?.status, 'completed', 'retries must re-enter through claimed/running');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
