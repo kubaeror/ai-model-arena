@@ -236,7 +236,11 @@ const BLOCKED_ENV_SUFFIX_RE = /(_API_KEY|_TOKEN|_SECRET|_PASSWORD)$/i;
 
 function isBlockedEnvKey(key: string): boolean {
   if (BLOCKED_ENV_SUFFIX_RE.test(key)) return true;
-  return BLOCKED_ENV_PREFIXES.some((prefix) => key === prefix || key.startsWith(prefix));
+  const lower = key.toLowerCase();
+  return BLOCKED_ENV_PREFIXES.some((prefix) => {
+    const p = prefix.toLowerCase();
+    return lower === p || lower.startsWith(p);
+  });
 }
 
 /**

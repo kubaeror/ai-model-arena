@@ -294,6 +294,7 @@ describe('globFiles', () => {
     assert.strictEqual(r.isError, true, `absolute pattern must be rejected, got: ${r.content}`);
     assert.ok(!r.content.includes(outsideAbs), `absolute path leaked: ${r.content}`);
     const host = await globFiles({ pattern: '/etc/hostname' }, ctx);
+    assert.strictEqual(host.isError, true, `absolute host glob must be rejected, got: ${host.content}`);
     assert.ok(!host.content.includes('/etc/hostname'), `host path leaked: ${host.content}`);
   });
 

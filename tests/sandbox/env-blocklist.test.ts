@@ -59,6 +59,7 @@ const KNOWN_SECRET_KEYS = [
   'DASHBOARD_JWT_SECRET',
   'DASHBOARD_PASSWORD',
   'ARENA_API_KEY_CI',
+  'aws_access_key_id',
   'FEATURE_TOKEN',
   'MY_SECRET',
   'DB_PASSWORD',
