@@ -164,8 +164,11 @@ export function createPromptsRouter(): Router {
     const parsed = parseBody(schema, req, res, 'promptId, models, and scenario are required');
     if (!parsed) return;
 
-    if (!isSafeId(parsed.scenario) || parsed.models.some((m) => !isSafeId(m))) {
-      res.status(400).json({ error: 'scenario and models must be bare names (letters, digits, "_" and "-" only)' });
+    if (
+      !isSafeId(parsed.scenario)
+      || parsed.models.some((m) => m.includes('/') || m.includes('\\') || m.includes('..'))
+    ) {
+      res.status(400).json({ error: 'scenario must be a bare name; models must not contain path separators or ..' });
       return;
     }
 

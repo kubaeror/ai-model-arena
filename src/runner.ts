@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { outputRoot, dbPath, findProjectRoot, assertSafeId } from './paths.js';
+import { outputRoot, dbPath, findProjectRoot, modelDirSegment } from './paths.js';
 import { initDb } from './db/index.js';
 import { transitionTaskState, listModelCallsForSession, listMessagesBySession } from './db/query.js';
 import { getRunRecord } from './db/runs.js';
@@ -159,6 +159,20 @@ async function maybeFinalizeRun(runId: string, log: Logger): Promise<void> {
   }
 }
 
+/**
+ * True iff `id` cannot be used as a run-id directory segment. Dots are allowed
+ * (CLI scenario stems and timestamps may contain them); a path separator, NUL,
+ * or a "."/".." segment is not. The containment assert downstream is the
+ * actual boundary — this is the pre-fs-write rejection.
+ */
+function isUnsafeRunId(id: string): boolean {
+  return id.length === 0
+    || id === '.' || id === '..'
+    || /[\\/\0]/.test(id)
+    || path.isAbsolute(id)
+    || id.startsWith('~');
+}
+
 /** Sum of a session's prior model-call spend (for resume budget continuity). */
 export async function sumPriorRunSpend(sessionId: string, modelName: string): Promise<number> {
   let total = 0;
@@ -298,18 +312,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       taskStartedAt = new Date();
       activeTasks.inc();
 
-      // Queue tasks are untrusted input: every identifier that becomes a path
-      // must be a bare segment, and the run directory must stay under
-      // outputRoot() before any directory is created or artifact written.
+      // Queue tasks are untrusted input: the run-id segment is validated here
+      // and the run directory (derived from the resolved model below) must stay
+      // under outputRoot() before any directory is created or artifact written.
       const modelRunId = String(task.config.modelRunId ?? task.sessionId);
       const runId = modelRunId;
       const modelName = task.model;
-      assertSafeId(modelName);
-      assertSafeId(modelRunId);
-      const runOutputDir = path.join(outputRoot(), modelName, modelRunId);
-      const sandboxDir = path.join(runOutputDir, 'files');
-      if (!isWithin(outputRoot(), path.resolve(runOutputDir))) {
-        throw new Error(`Run output path escapes the output root: ${runOutputDir}`);
+      if (isUnsafeRunId(modelRunId)) {
+        throw new Error(`Invalid run id "${modelRunId}": path separators and parent references are not allowed`);
       }
       const startedAt = new Date();
 
@@ -393,6 +403,16 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         }
         await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
         continue;
+      }
+
+      // Derive the directory from the resolved canonical id (falling back to
+      // the lookup key) the same way createRunSpec does, so orchestrator and
+      // runner agree on outputDir without task.model ever reaching a path.
+      const modelDir = modelDirSegment(resolved.canonicalId || modelName);
+      const runOutputDir = path.join(outputRoot(), modelDir, modelRunId);
+      const sandboxDir = path.join(runOutputDir, 'files');
+      if (!isWithin(outputRoot(), path.resolve(runOutputDir))) {
+        throw new Error(`Run output path escapes the output root: ${runOutputDir}`);
       }
 
       // Fresh sessions persist the initial system+task as turn 0 so a later

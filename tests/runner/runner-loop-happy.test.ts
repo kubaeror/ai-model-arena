@@ -25,6 +25,10 @@ const MODELS_DEV = {
   } },
 };
 
+// modelDirSegment('openai/gpt-4o') — the runner derives the model directory
+// from the resolved canonical id, not the display name.
+const MODEL_DIR = 'openai_gpt-4o';
+
 const ORIG_ENV = { ...process.env };
 
 async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 10000, label = 'condition'): Promise<void> {
@@ -97,7 +101,7 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
   // Full per-model paths so the runner's self-finalize (finalizeRunByRunId)
   // can read the real result.json and keeps the model 'completed' instead of
   // marking it 'errored' from an unreadable result path.
-  const modelRunDir = path.join(outputs, 'GPT-4o', 'run15');
+  const modelRunDir = path.join(outputs, MODEL_DIR, 'run15');
   await upsertRun({
     runId: 'run15', scenario: 'smoke', models: ['GPT-4o'],
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
@@ -162,7 +166,7 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
     await waitFor(async () => (await getRunRecord('run15'))?.status === 'completed', 10000, 'run index finalized');
 
     // 3. result.json written with a successful task_complete outcome.
-    const resultPath = path.join(outputs, 'GPT-4o', 'run15', 'result.json');
+    const resultPath = path.join(outputs, MODEL_DIR, 'run15', 'result.json');
     assert.ok(fs.existsSync(resultPath), 'result.json should exist');
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as {
       success: boolean; stopReason: string; turnsUsed: number;
@@ -175,7 +179,7 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
     assert.deepEqual(result.toolsCalled, [{ name: 'task_complete', count: 1 }]);
     assert.deepEqual(result.errors, []);
     for (const artifact of ['conversation.json', 'report.md', 'artifact-manifest.json']) {
-      assert.ok(fs.existsSync(path.join(outputs, 'GPT-4o', 'run15', artifact)), `${artifact} should exist`);
+      assert.ok(fs.existsSync(path.join(outputs, MODEL_DIR, 'run15', artifact)), `${artifact} should exist`);
     }
 
     // 4. Session persisted: turn-0 system+task, turn-1 assistant + tool result,
@@ -253,7 +257,7 @@ test('runner finalizes its own run when the dashboard watcher is absent', { time
   // Register the run with full per-model paths so the self-finalize's
   // comparison aggregation reads the real result.json the runner writes.
   const runId = 'run-self-finalize';
-  const modelRunDir = path.join(outputs, 'GPT-4o', runId);
+  const modelRunDir = path.join(outputs, MODEL_DIR, runId);
   await upsertRun({
     runId, scenario: 'smoke', models: ['GPT-4o'],
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',

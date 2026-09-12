@@ -87,8 +87,8 @@ export function createRunsRouter(): Router {
       res.status(400).json({ error: 'models[] must contain at least one non-empty string' });
       return;
     }
-    if (models.some((m) => !isSafeId(m))) {
-      res.status(400).json({ error: 'model names must be bare names (letters, digits, "_" and "-" only)' });
+    if (models.some((m) => m.includes('/') || m.includes('\\') || m.includes('..'))) {
+      res.status(400).json({ error: 'model names must not contain path separators or ..' });
       return;
     }
     try {

@@ -7,7 +7,7 @@ import { initDb, closeDb } from '../../src/db/client.js';
 import { fetchSync } from '../../src/catalog/sync.js';
 import { dump } from 'js-yaml';
 import { resolveScenarioPath } from '../../src/config.js';
-import { outputRoot } from '../../src/paths.js';
+import { outputRoot, modelDirSegment } from '../../src/paths.js';
 import { isWithin } from '../../src/sandbox/sandbox.js';
 
 const MODELS_DEV = {
@@ -18,6 +18,22 @@ const MODELS_DEV = {
         attachment: true, reasoning: false, temperature: true, tool_call: true,
         cost: { input: 2.5, output: 10 },
         limit: { context: 128000, output: 16384 },
+      },
+    },
+  },
+  anthropic: {
+    id: 'anthropic', name: 'Anthropic', env: ['ANTHROPIC_API_KEY'], models: {
+      'claude-3-7-sonnet': {
+        id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet',
+        attachment: true, reasoning: true, temperature: true, tool_call: true,
+        cost: { input: 3, output: 15 },
+        limit: { context: 200000, output: 8192 },
+      },
+      'claude-3.7': {
+        id: 'claude-3.7', name: 'claude-3.7',
+        attachment: false, reasoning: false, temperature: true, tool_call: true,
+        cost: { input: 3, output: 15 },
+        limit: { context: 200000, output: 8192 },
       },
     },
   },
@@ -87,6 +103,27 @@ test('resolveScenarioPath enforces bare names and gates explicit paths on the ca
   }
 });
 
+test('modelDirSegment always yields one safe path segment', () => {
+  assert.equal(modelDirSegment('Claude 3.7 Sonnet'), 'Claude_3.7_Sonnet');
+  assert.equal(modelDirSegment('claude-3.7'), 'claude-3.7');
+  assert.equal(modelDirSegment('openai/gpt-4o'), 'openai_gpt-4o');
+  assert.equal(modelDirSegment('a..b'), 'a_b');
+  assert.equal(modelDirSegment('..'), '_');
+  assert.equal(modelDirSegment('.'), '_');
+  assert.equal(modelDirSegment(''), '_');
+
+  for (const input of ['../../etc/passwd', '..\\..\\evil', '~\0x', '...', ' . ']) {
+    const segment = modelDirSegment(input);
+    assert.ok(segment.length > 0, `empty segment for ${JSON.stringify(input)}`);
+    assert.notEqual(segment, '.', `dot segment for ${JSON.stringify(input)}`);
+    assert.notEqual(segment, '..', `parent segment for ${JSON.stringify(input)}`);
+    assert.ok(
+      !segment.includes('/') && !segment.includes('\\') && !segment.includes('\0'),
+      `unsafe segment ${segment} for ${JSON.stringify(input)}`,
+    );
+  }
+});
+
 test('startRun rejects traversal identifiers and keeps CLI path runs inside the output root', async () => {
   const tmp = freshDb();
   await seedCatalog();
@@ -117,6 +154,12 @@ test('startRun rejects traversal identifiers and keeps CLI path runs inside the 
       'non-CLI callers must not pass explicit scenario paths',
     );
 
+    await assert.rejects(
+      startRun({ scenario: scenarioFile, models: ['GPT-4o'] }),
+      /Invalid identifier/,
+      'a missing source must fail closed for explicit scenario paths',
+    );
+
     assert.ok(
       !fs.readdirSync(tmp).some((name) => name.startsWith('evil')),
       'rejected identifiers must not create directories outside outputRoot()',
@@ -131,7 +174,52 @@ test('startRun rejects traversal identifiers and keeps CLI path runs inside the 
         isWithin(outputRoot(), model.outputDir),
         `output dir ${model.outputDir} must stay within ${outputRoot()}`,
       );
-      assert.equal(model.outputDir, path.join(outputRoot(), 'GPT-4o', spec.runId));
+      assert.equal(model.outputDir, path.join(outputRoot(), modelDirSegment('openai/gpt-4o'), spec.runId));
+    }
+
+    // A dotted basename is sanitized into the run-id stem, not rejected.
+    const dottedScenario = path.join(tmp, 'smoke.test.yaml');
+    fs.writeFileSync(dottedScenario, dump({
+      name: 'smoke', systemPrompt: 'You are a test agent.', task: 'Finish immediately.',
+    }));
+    const dottedSpec = await startRun({ scenario: dottedScenario, models: ['GPT-4o'], source: 'cli' });
+    assert.match(dottedSpec.runId, /^smoke\.test_/, 'dotted CLI stems are sanitized, not rejected');
+    assert.ok(
+      !dottedSpec.runId.includes('/') && !dottedSpec.runId.includes('\\'),
+      'dotted runId must stay a single path segment',
+    );
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    restoreEnv();
+  }
+});
+
+test('startRun accepts display names, dotted names, and canonical ids with contained output dirs', async () => {
+  const tmp = freshDb();
+  await seedCatalog();
+
+  try {
+    const { startRun } = await import('../../src/orchestrator/run-lifecycle.js');
+    const cases = [
+      { lookup: 'Claude 3.7 Sonnet', canonicalId: 'anthropic/claude-3-7-sonnet' },
+      { lookup: 'claude-3.7', canonicalId: 'anthropic/claude-3.7' },
+      { lookup: 'openai/gpt-4o', canonicalId: 'openai/gpt-4o' },
+      { lookup: 'GPT-4o', canonicalId: 'openai/gpt-4o' },
+    ];
+    for (const { lookup, canonicalId } of cases) {
+      const spec = await startRun({ scenario: 'express-rest', models: [lookup], source: 'dashboard' });
+      const model = spec.models[0]!;
+      assert.equal(model.model, lookup, 'spec.models[].model keeps the original lookup key');
+      assert.equal(
+        model.outputDir,
+        path.join(outputRoot(), modelDirSegment(canonicalId), spec.runId),
+        `output dir for "${lookup}" derives from the resolved canonical id`,
+      );
+      assert.ok(
+        isWithin(outputRoot(), model.outputDir),
+        `output dir for "${lookup}" must stay within ${outputRoot()}`,
+      );
     }
   } finally {
     closeDb();

@@ -24,7 +24,25 @@ const MODELS_DEV = {
       limit: { context: 128000, output: 16384 },
     },
   } },
+  anthropic: { id: 'anthropic', name: 'Anthropic', env: ['ANTHROPIC_API_KEY'], models: {
+    'claude-3-7-sonnet': {
+      id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet',
+      attachment: true, reasoning: true, temperature: true, tool_call: true,
+      cost: { input: 3, output: 15 },
+      limit: { context: 200000, output: 8192 },
+    },
+    'claude-3.7': {
+      id: 'claude-3.7', name: 'claude-3.7',
+      attachment: false, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 3, output: 15 },
+      limit: { context: 200000, output: 8192 },
+    },
+  } },
 };
+
+// modelDirSegment('openai/gpt-4o') — the runner derives the model directory
+// from the resolved canonical id, not the display name.
+const MODEL_DIR = 'openai_gpt-4o';
 
 const ORIG_ENV = { ...process.env };
 
@@ -310,7 +328,7 @@ test('runner keeps a mid-execution stopRun stopped: halts the loop and never com
   }
 
   const runId = 'run-midstop';
-  const modelRunDir = path.join(outputs, 'GPT-4o', runId);
+  const modelRunDir = path.join(outputs, MODEL_DIR, runId);
   await upsertRun({
     runId, scenario: 'smoke', models: ['GPT-4o'],
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
@@ -416,7 +434,7 @@ test('runner does not nack a finished session when queue.ack throws', { timeout:
   }
 
   const runId = 'run-ack-fail';
-  const modelRunDir = path.join(outputs, 'GPT-4o', runId);
+  const modelRunDir = path.join(outputs, MODEL_DIR, runId);
   await upsertRun({
     runId, scenario: 'smoke', models: ['GPT-4o'],
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
@@ -527,7 +545,7 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
     assert.equal(rec?.status, 'completed', 'missing-api-key run must be finalized by the runner');
     assert.notEqual(rec?.perModel[0]?.status, 'running', 'per-model row must not stay running');
 
-    const resultPath = path.join(outputs, 'GPT-4o', 'run2', 'result.json');
+    const resultPath = path.join(outputs, MODEL_DIR, 'run2', 'result.json');
     assert.ok(fs.existsSync(resultPath), 'result.json should exist');
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
     assert.equal(result.success, false);
@@ -705,12 +723,12 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
     perModel: [{
       model: 'GPT-4o', runId: 'run-fb0', status: 'running',
-      outputDir: path.join(outputs, 'GPT-4o', 'run-fb0'),
-      sandboxDir: path.join(outputs, 'GPT-4o', 'run-fb0', 'files'),
-      resultPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'result.json'),
-      conversationPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'conversation.json'),
-      reportPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'report.md'),
-      logFile: path.join(outputs, 'GPT-4o', 'run-fb0', 'runner.log'),
+      outputDir: path.join(outputs, MODEL_DIR, 'run-fb0'),
+      sandboxDir: path.join(outputs, MODEL_DIR, 'run-fb0', 'files'),
+      resultPath: path.join(outputs, MODEL_DIR, 'run-fb0', 'result.json'),
+      conversationPath: path.join(outputs, MODEL_DIR, 'run-fb0', 'conversation.json'),
+      reportPath: path.join(outputs, MODEL_DIR, 'run-fb0', 'report.md'),
+      logFile: path.join(outputs, MODEL_DIR, 'run-fb0', 'runner.log'),
     }],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
@@ -792,7 +810,7 @@ test('runner rejects a traversal modelRunId before creating output directories',
       !fs.existsSync(path.resolve(outputs, '..', 'escaped')),
       'a traversal modelRunId must not create directories outside outputRoot()',
     );
-    assert.ok(!fs.existsSync(path.join(outputs, 'GPT-4o')), 'no model output dir may be created');
+    assert.ok(!fs.existsSync(path.join(outputs, MODEL_DIR)), 'no model output dir may be created');
   } finally {
     ac.abort();
     await runnerDone;
@@ -847,10 +865,113 @@ test('runner rejects an explicit scenario path unless the task is CLI-sourced', 
   try {
     await waitFor(() => queue.nacked.length === 1, 8000, 'task nacked');
     assert.equal(queue.nacked[0]?.taskId, 'dashboard-path');
-    assert.ok(!fs.existsSync(path.join(outputs, 'GPT-4o')), 'no output dir for a rejected scenario path');
+    assert.ok(!fs.existsSync(path.join(outputs, MODEL_DIR)), 'no output dir for a rejected scenario path');
   } finally {
     ac.abort();
     await runnerDone;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner accepts display, dotted, and canonical lookup keys and derives contained dirs', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-lookup-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  // openai/gpt-4o is used by the fallback tests above, which deliberately
+  // leave that breaker open; exercise the slash path with an anthropic
+  // canonical id whose breaker is untouched.
+  const cases = [
+    { lookup: 'Claude 3.7 Sonnet', provider: 'anthropic', runId: 'run-display-name', dir: 'anthropic_claude-3-7-sonnet' },
+    { lookup: 'claude-3.7', provider: 'anthropic', runId: 'run-dotted-name', dir: 'anthropic_claude-3.7' },
+    { lookup: 'anthropic/claude-3-7-sonnet', provider: 'anthropic', runId: 'run-canonical-id', dir: 'anthropic_claude-3-7-sonnet' },
+  ];
+
+  for (const c of cases) {
+    const modelRunDir = path.join(outputs, c.dir, c.runId);
+    await upsertRun({
+      runId: c.runId, scenario: 'smoke', models: [c.lookup],
+      startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+      perModel: [{
+        model: c.lookup, runId: c.runId, status: 'running',
+        outputDir: modelRunDir,
+        sandboxDir: path.join(modelRunDir, 'files'),
+        resultPath: path.join(modelRunDir, 'result.json'),
+        conversationPath: path.join(modelRunDir, 'conversation.json'),
+        reportPath: path.join(modelRunDir, 'report.md'),
+        logFile: path.join(modelRunDir, 'runner.log'),
+      }],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+  }
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  for (const c of cases) {
+    await queue.enqueue(makeTask({
+      taskId: `lookup-${c.runId}`, sessionId: `lookup-${c.runId}-session`,
+      model: c.lookup, provider: c.provider, scenario: scenarioPath,
+      config: { modelRunId: c.runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+  }
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 15000, 'lookup-key tasks acked');
+    assert.equal(await queue.deadLetterSize(), 0, 'valid lookup keys must ack, not nack');
+    assert.equal(fake.calls, cases.length, 'each lookup key must execute exactly one turn');
+
+    for (const c of cases) {
+      const resultPath = path.join(outputs, c.dir, c.runId, 'result.json');
+      assert.ok(fs.existsSync(resultPath), `result.json for "${c.lookup}" must exist at ${resultPath}`);
+      assert.ok(
+        !fs.existsSync(path.resolve(outputs, '..', c.dir)),
+        `"${c.lookup}" must not create directories outside outputRoot()`,
+      );
+    }
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
     process.env = { ...ORIG_ENV };
@@ -895,12 +1016,12 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
     perModel: [{
       model: 'GPT-4o', runId: 'run-fb3', status: 'running',
-      outputDir: path.join(outputs, 'GPT-4o', 'run-fb3'),
-      sandboxDir: path.join(outputs, 'GPT-4o', 'run-fb3', 'files'),
-      resultPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'result.json'),
-      conversationPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'conversation.json'),
-      reportPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'report.md'),
-      logFile: path.join(outputs, 'GPT-4o', 'run-fb3', 'runner.log'),
+      outputDir: path.join(outputs, MODEL_DIR, 'run-fb3'),
+      sandboxDir: path.join(outputs, MODEL_DIR, 'run-fb3', 'files'),
+      resultPath: path.join(outputs, MODEL_DIR, 'run-fb3', 'result.json'),
+      conversationPath: path.join(outputs, MODEL_DIR, 'run-fb3', 'conversation.json'),
+      reportPath: path.join(outputs, MODEL_DIR, 'run-fb3', 'report.md'),
+      logFile: path.join(outputs, MODEL_DIR, 'run-fb3', 'runner.log'),
     }],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
@@ -931,7 +1052,7 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
     const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
       .get('run-fb3', 'GPT-4o') as { status: string } | undefined;
     assert.equal(row?.status, 'completed', 'run should complete via the fallback provider');
-    const resultPath = path.join(outputs, 'GPT-4o', 'run-fb3', 'result.json');
+    const resultPath = path.join(outputs, MODEL_DIR, 'run-fb3', 'result.json');
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean };
     assert.equal(result.success, true);
   } finally {

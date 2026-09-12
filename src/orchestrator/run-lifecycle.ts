@@ -8,7 +8,7 @@ import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, compu
 import { projectRoot, timestamp } from './utils.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
 import { initDb } from '../db/index.js';
-import { outputRoot, dbPath, assertSafeId } from '../paths.js';
+import { outputRoot, dbPath, assertSafeId, modelDirSegment } from '../paths.js';
 import { isWithin } from '../sandbox/sandbox.js';
 import { createQueue } from '../queue/index.js';
 import type { Task } from '../queue/types.js';
@@ -106,18 +106,41 @@ export interface PerModelStatus {
 
 /**
  * Run ids are built from the scenario reference. CLI callers may pass an
- * explicit YAML path, so its basename stem becomes the (validated) run-id
- * identifier; path segments never reach runId/outputDir.
+ * explicit YAML path (whose dotted basename stem is sanitized, not rejected);
+ * every other caller — including a caller that omitted `source` — must pass a
+ * bare name, so a missing source can never unlock path scenarios.
  */
 function scenarioIdFor(scenario: string, source: RunStartOptions['source']): string {
   const explicitPath = path.isAbsolute(scenario) || scenario.endsWith('.yaml') || scenario.endsWith('.yml');
-  if (source === 'cli' && explicitPath) {
+  if (explicitPath) {
+    if (source !== 'cli') {
+      throw new Error(`Invalid identifier "${scenario}": scenario paths are only allowed for CLI-sourced runs`);
+    }
     const stem = path.basename(scenario).replace(/\.(yaml|yml)$/i, '');
-    assertSafeId(stem);
-    return stem;
+    return modelDirSegment(stem);
   }
   assertSafeId(scenario);
   return scenario;
+}
+
+/**
+ * Model lookup keys are catalog keys (display names or canonical
+ * `provider/id` ids), not paths, and the output directory segment is derived
+ * from the resolved model — never from the key. This check only runs when a
+ * key failed catalog resolution, so traversal-shaped input gets a clear
+ * rejection instead of a generic catalog miss.
+ */
+function assertUnresolvedModelKeyIsNotPathLike(name: string): void {
+  const pathLike = name.length === 0
+    || name.includes('\0')
+    || name.includes('/')
+    || name.includes('\\')
+    || name.includes('..')
+    || path.isAbsolute(name)
+    || name.startsWith('~');
+  if (pathLike) {
+    throw new Error(`Invalid identifier "${name}": model names must not contain path separators or ..`);
+  }
 }
 
 /** Validate models + compute all run paths (no PM2, no spawning). */
@@ -125,28 +148,32 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   const root = projectRoot();
   const scenariosDir = opts.scenariosDir ?? path.join(root, 'configs', 'scenarios');
   const scenarioId = scenarioIdFor(opts.scenario, opts.source);
-  for (const name of opts.models) assertSafeId(name);
   initDb(dbPath());
-  for (const name of opts.models) {
-    const resolved = await resolveModelForRun(name);
+  // Resolve every lookup key before deriving any directory: resolvable keys may
+  // legitimately contain spaces/dots or a `provider/id` slash, and only the
+  // resolved canonical id feeds modelDirSegment.
+  const resolvedModels = await Promise.all(opts.models.map(async (model) => {
+    const resolved = await resolveModelForRun(model);
     if (!resolved) {
-      throw new Error(`Model not found in catalog: ${name}. Run catalog sync first.`);
+      assertUnresolvedModelKeyIsNotPathLike(model);
+      throw new Error(`Model not found in catalog: ${model}. Run catalog sync first.`);
     }
-  }
+    return { model, resolved };
+  }));
 
   const ts = timestamp();
   const runId = `${scenarioId}_${ts}`;
-  const perModel: PerModelSpec[] = await Promise.all(opts.models.map(async (model) => {
-    const resolved = await resolveModelForRun(model);
-    const outputDir = path.join(outputRoot(), model, runId);
+  const perModel: PerModelSpec[] = resolvedModels.map(({ model, resolved }) => {
+    const modelDir = modelDirSegment(resolved.canonicalId || model);
+    const outputDir = path.join(outputRoot(), modelDir, runId);
     if (!isWithin(outputRoot(), path.resolve(outputDir))) {
       throw new Error(`Run output path escapes the output root: ${outputDir}`);
     }
-    const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
+    const pm2LogDir = path.join(outputRoot(), modelDir, 'pm2-logs');
     fs.mkdirSync(pm2LogDir, { recursive: true });
     return {
       model,
-      providerId: resolved?.providerId ?? 'unknown',
+      providerId: resolved.providerId,
       outputDir,
       sandboxDir: path.join(outputDir, 'files'),
       resultPath: path.join(outputDir, 'result.json'),
@@ -154,7 +181,7 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
       reportPath: path.join(outputDir, 'report.md'),
       logFile: path.join(pm2LogDir, `${runId}.log`),
     };
-  }));
+  });
   return {
     runId,
     scenario: opts.scenario,
@@ -281,7 +308,9 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
         modelRunId: runId,
         outputDir: m.outputDir,
         maxTurns: resolved?.maxTurns ?? 20,
-        scenarioSource: opts.source ?? 'cli',
+        // No 'cli' fallback: an omitted source must never unlock path scenarios
+        // in the runner (which gates path resolution on scenarioSource === 'cli').
+        scenarioSource: opts.source,
       },
       enqueuedAt: new Date().toISOString(),
       attempts: 0,

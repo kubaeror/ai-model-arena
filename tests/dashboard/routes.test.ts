@@ -7,6 +7,9 @@ import { boot, authedGet, postJson, TEST_ADMIN } from './route-test-harness.js';
 import { getDrizzleDb } from '../../src/db/index.js';
 import { insertAuditEntry, insertPrompt, insertPromptVersion } from '../../src/db/query.js';
 import { models, model_providers, pricing, providers, run_models, runs, audit_log as auditLog, cost_ledger as costLedger } from '../../src/db/schema.js';
+import { outputRoot } from '../../src/paths.js';
+import { isWithin } from '../../src/sandbox/sandbox.js';
+import { getRunRecord } from '../../src/db/runs.js';
 
 test('GET /api/cost exposes the cost ledger summary', async (t) => {
   const h = await boot(t);
@@ -316,6 +319,45 @@ test('POST /api/runs rejects traversal scenario and model identifiers', async (t
     !fs.readdirSync(h.tmpDir).some((name) => name.startsWith('evil')),
     'rejected run identifiers must not create directories',
   );
+});
+
+test('POST /api/runs launches catalog display names (Launcher payload)', async (t) => {
+  const h = await boot(t);
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  await db.insert(providers).values({
+    id: 'anthropic', name: 'Anthropic', auth_scheme: 'x-api-key', is_builtin: 1,
+    adapter: 'anthropic', created_at: now, updated_at: now,
+  });
+  for (const [id, name] of [['claude-3-7-sonnet', 'Claude 3.7 Sonnet'], ['claude-3.7', 'claude-3.7']] as const) {
+    const canonical = `anthropic/${id}`;
+    await db.insert(models).values({
+      id: canonical, name, provider_id: 'anthropic',
+      context_limit: 200000, output_limit: 8192, last_synced_at: now,
+    });
+    await db.insert(model_providers).values({ model_id: canonical, provider_id: 'anthropic', api_model_id: id });
+    await db.insert(pricing).values({ model_id: canonical, tier_size: 0, input: 3, output: 15, updated_at: now });
+  }
+
+  const res = await postJson(h.base, h.adminToken, '/api/runs', {
+    scenario: 'smoke', models: ['Claude 3.7 Sonnet', 'claude-3.7'],
+  });
+  assert.equal(res.status, 202, `display names must launch, got ${res.status}: ${await res.clone().text()}`);
+  const body = (await res.json()) as { runId: string; models: { model: string }[] };
+  assert.deepEqual(
+    body.models.map((m) => m.model),
+    ['Claude 3.7 Sonnet', 'claude-3.7'],
+    'the run response keeps the original lookup keys',
+  );
+
+  const rec = await getRunRecord(body.runId);
+  assert.ok(rec, 'run must be registered');
+  for (const model of rec.perModel) {
+    assert.ok(
+      isWithin(outputRoot(), model.outputDir),
+      `output dir for ${model.model} must stay within ${outputRoot()}`,
+    );
+  }
 });
 
 test('POST /api/prompts/enqueue rejects traversal scenario and model identifiers', async (t) => {

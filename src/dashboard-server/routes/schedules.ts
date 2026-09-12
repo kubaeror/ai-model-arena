@@ -67,8 +67,12 @@ export function createSchedulesRouter(): Router {
     }
     const scenarioName = String(scenario);
     const modelList = models.filter((m: unknown): m is string => typeof m === 'string');
-    if (!isSafeId(scenarioName) || modelList.length === 0 || modelList.some((m) => !isSafeId(m))) {
-      res.status(400).json({ error: 'scenario and models must be bare names (letters, digits, "_" and "-" only)' });
+    if (
+      !isSafeId(scenarioName)
+      || modelList.length === 0
+      || modelList.some((m) => m.includes('/') || m.includes('\\') || m.includes('..'))
+    ) {
+      res.status(400).json({ error: 'scenario must be a bare name; models must not contain path separators or ..' });
       return;
     }
     try {
