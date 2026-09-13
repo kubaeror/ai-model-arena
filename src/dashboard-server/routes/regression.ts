@@ -83,7 +83,7 @@ export function createRegressionRouter(): Router {
     res.json({ results: listSavedSuiteResults(limit) });
   });
 
-  router.post('/', requireRole('admin'), async (req, res) => {
+  router.post('/', requireRole('editor'), async (req, res) => {
     const { suite: suiteName, model: filterModel, updateBaseline } = req.body ?? {};
     if (!suiteName) {
       res.status(400).json({ error: 'suite name is required' });

@@ -23,7 +23,7 @@ const PERMISSION_TO_ROLE: Record<string, Role> = {
   'cache:write': 'editor',
   'anomalies:write': 'editor',
   'analytics:write': 'editor',
-  'regression:write': 'admin',
+  'regression:execute': 'editor',
   'schedules:write': 'admin',
   'prompts:write': 'admin',
   'output_mappings:write': 'admin',

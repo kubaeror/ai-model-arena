@@ -38,7 +38,7 @@ export function createSessionsRouter(): Router {
     res.json(session);
   });
 
-  // GET /api/sessions/:id/messages - all messages ordered by turn
+  // GET /api/sessions/:id/messages - messages ordered by turn, paginated
   router.get('/:id/messages', async (req, res) => {
     const session = await getSessionWithCounts(req.params.id);
     if (!session) {
@@ -46,11 +46,12 @@ export function createSessionsRouter(): Router {
       return;
     }
     if (!(await allowIfSessionOwner(req as AuthedRequest, res, session.id, session.model))) return;
-    const messages = await listMessagesBySession(req.params.id);
-    res.json({ messages });
+    const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
+    const messages = await listMessagesBySession(req.params.id, { limit, offset });
+    res.json({ messages, limit, offset });
   });
 
-  // GET /api/sessions/:id/calls - all model_calls ordered by turn
+  // GET /api/sessions/:id/calls - model_calls ordered by turn, paginated
   router.get('/:id/calls', async (req, res) => {
     const session = await getSessionWithCounts(req.params.id);
     if (!session) {
@@ -58,8 +59,9 @@ export function createSessionsRouter(): Router {
       return;
     }
     if (!(await allowIfSessionOwner(req as AuthedRequest, res, session.id, session.model))) return;
-    const calls = await listModelCallsForSession(req.params.id);
-    res.json({ calls });
+    const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
+    const calls = await listModelCallsForSession(req.params.id, { limit, offset });
+    res.json({ calls, limit, offset });
   });
 
   // DELETE /api/sessions/:id - delete session + cascade

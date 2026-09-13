@@ -102,8 +102,10 @@ export function createAnalyticsRouter(): Router {
 
     // ── File fallback: scan runs not in DB ────────────────────────────────
     const perModelMap = new Map<string, ModelToolStat>();
+    // Successful (run, model) pairs, keyed so the DB and file paths cannot
+    // count the same success twice (which previously drove failedRate < 0).
+    const successfulPairs = new Set<string>();
     let totalRuns = 0;
-    let successfulRuns = 0;
     let totalToolCalls = 0;
     const allLoops: LoopIncident[] = [];
 
@@ -116,7 +118,7 @@ export function createAnalyticsRouter(): Router {
 
         if (coveredRunIds.has(run.runId)) {
           const result = await readJsonFile<Record<string, unknown>>(perModel.resultPath);
-          if (result?.success === true) successfulRuns++;
+          if (result?.success === true) successfulPairs.add(`${run.runId}:${perModel.model}`);
           continue;
         }
 
@@ -129,7 +131,7 @@ export function createAnalyticsRouter(): Router {
         }
         const toolCalls = conv ? extractToolCallsFromConversation(conv) : [];
         const success = result?.success === true;
-        if (success) successfulRuns++;
+        if (success) successfulPairs.add(`${run.runId}:${perModel.model}`);
 
         for (const tc of toolCalls) {
           totalToolCalls++;
@@ -162,7 +164,7 @@ export function createAnalyticsRouter(): Router {
         .from(run_models)
         .where(inArray(run_models.run_id, coveredList));
       for (const row of successRows) {
-        if (row.success === 1) successfulRuns++;
+        if (row.success === 1) successfulPairs.add(`${row.run_id}:${row.model}`);
       }
     }
 
@@ -217,7 +219,8 @@ export function createAnalyticsRouter(): Router {
 
     const perModel = [...perModelMap.values()].sort((a, b) => b.total - a.total);
 
-    const failedRate = totalRuns > 0 ? (totalRuns - successfulRuns) / totalRuns : 0;
+    const successfulRuns = successfulPairs.size;
+    const failedRate = totalRuns > 0 ? Math.max(0, (totalRuns - successfulRuns) / totalRuns) : 0;
     const avgCallsPerSuccess = successfulRuns > 0 ? totalToolCalls / successfulRuns : 0;
 
     const response: ToolAnalyticsResponse = {

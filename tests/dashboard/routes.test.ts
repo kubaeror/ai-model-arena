@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { boot, authedGet, postJson, TEST_ADMIN, TEST_VIEWER } from './route-test-harness.js';
@@ -680,4 +681,136 @@ test('session fast path requires the run to have actually run the session model'
   const list = await authedGet(h.base, aliceToken, '/api/sessions');
   const listBody = (await list.json()) as { sessions: Array<{ id: string }>; total: number };
   assert.equal(listBody.total, 0, 'the mismatched session must not appear in the owner list');
+});
+
+test('GET /api/runs/:runId/models/:model/files/*filepath returns sandbox file contents', async (t) => {
+  const h = await boot(t);
+  const fixture = runFixture('file-read-run', TEST_ADMIN.username, h.tmpDir);
+  const sandboxDir = fixture.perModel[0]!.sandboxDir;
+  fs.mkdirSync(path.join(sandboxDir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(sandboxDir, 'src', 'index.ts'), 'export const answer = 42;\n');
+  await upsertRun(fixture);
+
+  const direct = await authedGet(h.base, h.adminToken, '/api/runs/file-read-run/models/gpt-4o/files/src/index.ts');
+  assert.equal(direct.status, 200, `file read must return 200, got ${direct.status}: ${await direct.clone().text()}`);
+  assert.equal(await direct.text(), 'export const answer = 42;\n');
+
+  const encoded = await authedGet(h.base, h.adminToken, '/api/runs/file-read-run/models/gpt-4o/files/src%2Findex.ts');
+  assert.equal(encoded.status, 200, 'a percent-encoded path resolves to the same file');
+  assert.equal(await encoded.text(), 'export const answer = 42;\n');
+
+  const outside = path.join(h.tmpDir, 'outside-secret.txt');
+  fs.writeFileSync(outside, 'top secret');
+  const escape = await authedGet(h.base, h.adminToken, '/api/runs/file-read-run/models/gpt-4o/files/..%2F..%2Foutside-secret.txt');
+  assert.equal(escape.status, 400, 'sandbox escapes must be rejected');
+  assert.ok(!(await escape.text()).includes('top secret'), 'outer file contents must not leak');
+});
+
+test('session messages and calls are paginated with a default cap', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const db = getDrizzleDb();
+  await upsertRun(runFixture('pagination-run', TEST_VIEWER.username, h.tmpDir));
+  const sessionId = 'pagination-run-gpt-4o';
+  const now = new Date().toISOString();
+  await db.insert(sessions).values({ id: sessionId, model: 'gpt-4o', status: 'active', created_at: now, updated_at: now });
+  await db.insert(messages).values(Array.from({ length: 55 }, (_, i) => ({
+    id: `pagination-msg-${i}`, session_id: sessionId, turn: i, role: 'user', content: `message ${i}`, created_at: now,
+  })));
+  await db.insert(model_calls).values(Array.from({ length: 55 }, (_, i) => ({
+    id: `pagination-call-${i}`, session_id: sessionId, turn: i, provider: 'openai', model: 'gpt-4o',
+    request_hash: `hash-${i}`, response_text: `response ${i}`, created_at: now,
+  })));
+
+  const messagesDefault = await authedGet(h.base, h.viewerToken!, `/api/sessions/${sessionId}/messages`);
+  assert.equal(messagesDefault.status, 200);
+  const messagesDefaultBody = (await messagesDefault.json()) as { messages: unknown[]; limit: number; offset: number };
+  assert.equal(messagesDefaultBody.messages.length, 50, 'default cap bounds an unbounded message list');
+  assert.equal(messagesDefaultBody.limit, 50);
+  assert.equal(messagesDefaultBody.offset, 0);
+
+  const messagesPage = await authedGet(h.base, h.viewerToken!, `/api/sessions/${sessionId}/messages?limit=10&offset=5`);
+  assert.equal(messagesPage.status, 200);
+  const messagesPageBody = (await messagesPage.json()) as { messages: Array<{ turn: number }>; limit: number; offset: number };
+  assert.equal(messagesPageBody.messages.length, 10);
+  assert.equal(messagesPageBody.limit, 10);
+  assert.equal(messagesPageBody.offset, 5);
+  assert.equal(messagesPageBody.messages[0]?.turn, 5, 'offset skips earlier turns');
+
+  const callsDefault = await authedGet(h.base, h.viewerToken!, `/api/sessions/${sessionId}/calls`);
+  assert.equal(callsDefault.status, 200);
+  const callsDefaultBody = (await callsDefault.json()) as { calls: unknown[]; limit: number; offset: number };
+  assert.equal(callsDefaultBody.calls.length, 50, 'default cap bounds an unbounded call list');
+  assert.equal(callsDefaultBody.limit, 50);
+  assert.equal(callsDefaultBody.offset, 0);
+
+  const callsPage = await authedGet(h.base, h.viewerToken!, `/api/sessions/${sessionId}/calls?limit=10&offset=50`);
+  assert.equal(callsPage.status, 200);
+  const callsPageBody = (await callsPage.json()) as { calls: Array<{ turn: number }>; limit: number; offset: number };
+  assert.equal(callsPageBody.calls.length, 5);
+  assert.equal(callsPageBody.calls[0]?.turn, 50, 'offset applies to the call list');
+});
+
+test('v1 API-key-created runs are readable by the same key and stay denied to others', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  await db.insert(providers).values({
+    id: 'openai', name: 'OpenAI', auth_scheme: 'bearer', is_builtin: 1,
+    adapter: 'openai-compat', created_at: now, updated_at: now,
+  });
+  await db.insert(models).values({
+    id: 'gpt-4o', name: 'GPT-4o', provider_id: 'openai',
+    context_limit: 128000, output_limit: 8192, last_synced_at: now,
+  });
+  await db.insert(model_providers).values({ model_id: 'gpt-4o', provider_id: 'openai', api_model_id: 'gpt-4o' });
+  await db.insert(pricing).values({ model_id: 'gpt-4o', tier_size: 0, input: 2.5, output: 10, updated_at: now });
+
+  const keysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-v1-keys-'));
+  const keysPath = path.join(keysDir, 'api-keys.yaml');
+  fs.writeFileSync(keysPath, [
+    'apiKeys:',
+    '  - name: key-a',
+    '    key: V1_KEY_A',
+    '    permissions: [runs:read, runs:write]',
+    '  - name: key-b',
+    '    key: V1_KEY_B',
+    '    permissions: [runs:read]',
+  ].join('\n'));
+
+  const { loadApiKeysConfig, requireApiKey } = await import('../../src/dashboard-server/auth-api.js');
+  loadApiKeysConfig(keysPath);
+  const { createRunsRouter } = await import('../../src/dashboard-server/routes/runs.js');
+  const express = (await import('express')).default;
+  const v1App = express();
+  v1App.use(express.json());
+  v1App.use('/api/v1/runs', requireApiKey(['runs:read']), createRunsRouter());
+  const server = v1App.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const v1Base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  try {
+    const created = await fetch(`${v1Base}/api/v1/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'V1_KEY_A' },
+      body: JSON.stringify({ scenario: 'smoke', models: ['gpt-4o'] }),
+    });
+    assert.equal(created.status, 202, `v1 run creation must succeed: ${await created.clone().text()}`);
+    const { runId } = (await created.json()) as { runId: string };
+
+    const rec = await getRunRecord(runId);
+    assert.equal(rec?.createdBy, 'key:key-a', 'v1 run creation records the creating key as owner');
+
+    const sameKey = await fetch(`${v1Base}/api/v1/runs/${runId}`, { headers: { 'x-api-key': 'V1_KEY_A' } });
+    assert.equal(sameKey.status, 200, 'the creating key can read its run');
+
+    const otherKey = await fetch(`${v1Base}/api/v1/runs/${runId}`, { headers: { 'x-api-key': 'V1_KEY_B' } });
+    assert.equal(otherKey.status, 403, 'a different non-admin key must not read the run');
+
+    const jwtViewer = await authedGet(h.base, h.viewerToken!, `/api/runs/${runId}`);
+    assert.equal(jwtViewer.status, 403, 'JWT ownership behavior is unchanged');
+  } finally {
+    server.close();
+    server.closeIdleConnections();
+    fs.rmSync(keysDir, { recursive: true, force: true });
+  }
 });

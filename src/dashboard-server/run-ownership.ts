@@ -2,11 +2,22 @@ import type { Response } from 'express';
 import { getRunRecord, listRuns } from '../orchestrator/run-index.js';
 import type { RunIndexRecord } from '../orchestrator/run-index.js';
 import type { AuthedRequest } from './auth.js';
+import type { ApiKeyRequest } from './auth-api-types.js';
 import { isOwnerAllowed, apiKeyIsAdmin } from '../auth/rbac.js';
 
 /** True when the request is admin-equivalent (JWT role or ops:admin API key). */
 export function isAdminRequest(req: AuthedRequest): boolean {
   return req.user?.role === 'admin' || apiKeyIsAdmin(req);
+}
+
+/**
+ * Identity string for the request actor: the JWT subject, or `key:<name>` for
+ * an API key (v1 run creation records the same string as `createdBy` so a key
+ * owns the runs it creates). JWT-only requests are unaffected.
+ */
+export function actorSubject(req: AuthedRequest): string | undefined {
+  const apiKey = (req as ApiKeyRequest).apiKey;
+  return req.user?.sub ?? (apiKey ? `key:${apiKey.keyName}` : undefined);
 }
 
 /**
@@ -23,7 +34,7 @@ async function checkRunOwnership(
 ): Promise<{ ok: true } | { ok: false; status: 404 | 403 }> {
   const rec = await getRunRecord(runId);
   if (!rec) return { ok: false, status: 404 };
-  const allowed = apiKeyIsAdmin(req) || isOwnerAllowed({ sub: req.user?.sub, role: req.user?.role }, rec.createdBy);
+  const allowed = apiKeyIsAdmin(req) || isOwnerAllowed({ sub: actorSubject(req), role: req.user?.role }, rec.createdBy);
   if (!allowed) return { ok: false, status: 403 };
   return { ok: true };
 }
@@ -133,7 +144,7 @@ export function visibleRunsFor<T extends { createdBy?: string | null }>(
   runs: T[],
 ): T[] {
   if (isAdminRequest(req)) return runs;
-  const actor = req.user ?? {};
+  const actor = { sub: actorSubject(req), role: req.user?.role };
   return runs.filter((r) => isOwnerAllowed(actor, r.createdBy));
 }
 
@@ -150,7 +161,7 @@ export function sessionVisibilityFilter(
 ): ((session: { id: string; model: string | null }) => boolean) | undefined {
   if (isAdminRequest(req)) return undefined;
   const byId = new Map(runs.map((r) => [r.runId, r]));
-  const actor = { sub: req.user?.sub, role: req.user?.role };
+  const actor = { sub: actorSubject(req), role: req.user?.role };
   return (session) => {
     const runId = resolveSessionRunIdFromRuns(session.id, session.model, runs);
     if (!runId) return false;

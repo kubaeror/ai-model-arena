@@ -19,7 +19,7 @@ import { walkFiles } from '../../fs/walk.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { listJudgeScoresForRun } from '../../db/query.js';
 import type { AuthedRequest } from '../auth.js';
-import { allowIfRunOwner, visibleRunsFor } from '../run-ownership.js';
+import { allowIfRunOwner, actorSubject, visibleRunsFor } from '../run-ownership.js';
 import { notFound } from '../helpers.js';
 
 async function getOwnedRunModelEntry(
@@ -92,7 +92,7 @@ export function createRunsRouter(): Router {
       return;
     }
     try {
-      const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard', createdBy: (req as AuthedRequest).user?.sub });
+      const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard', createdBy: actorSubject(req as AuthedRequest) });
       auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'run.create', { type: 'run', id: spec.runId }, undefined, { scenario, models });
       res.status(202).json({
         runId: spec.runId,
@@ -180,11 +180,14 @@ export function createRunsRouter(): Router {
     // secrets, prompts, and model-generated credentials.
     const entry = await getOwnedRunModelEntry(req as AuthedRequest, res, req.params.runId as string, req.params.model);
     if (!entry) return;
-    const prefix = `/api/runs/${req.params.runId as string}/models/${req.params.model}/files/`;
-    const relRaw = req.path.startsWith(prefix) ? req.path.slice(prefix.length) : '';
+    // Express 5 exposes the wildcard capture as an array of already-decoded
+    // segments; `req.path` excludes the mount prefix inside a router, so the
+    // old prefix-slice always produced '' and 400'd every read.
+    const rawFilepath: unknown = req.params.filepath;
+    const relRaw = Array.isArray(rawFilepath) ? rawFilepath.join('/') : String(rawFilepath ?? '');
     let abs: string;
     try {
-      abs = safeResolve(entry.sandboxDir, decodeURIComponent(relRaw));
+      abs = safeResolve(entry.sandboxDir, relRaw);
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
       return;
