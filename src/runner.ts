@@ -10,7 +10,7 @@ import { resumeFrom } from './runner/checkpoint.js';
 import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS, isTerminalAttempt } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
-import { resolveModelForRun } from './db/model-resolver.js';
+import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
 import { loadScenario, resolveScenarioPath, toSendOptsReasoning, type ScenarioConfig } from './config.js';
 import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
@@ -530,15 +530,18 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       // Scenario-configured reasoning plus the catalog sampling/output limits.
       // These must ride in sendOpts (not only as span attributes) so every
-      // adapter — and the subagent — receives them.
+      // adapter — and the subagent — receives them. Null capability fields
+      // mean "omit": unsupported temperature on reasoning-only models
+      // (o-series) and max_tokens with no known output limit both 400.
       const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
-      const temperature = (resolved.temperature as number) ?? 0;
-      const maxTokens = (resolved.maxTokens as number) ?? 0;
-      const sendOpts: SendOpts = {
-        temperature,
-        maxTokens,
-        ...(reasoningOpt ? { reasoning: reasoningOpt } : {}),
+      const buildSendOpts = (m: ResolvedModel | null): SendOpts => {
+        const opts: SendOpts = {};
+        if (m?.temperature != null) opts.temperature = m.temperature;
+        if (m?.maxTokens != null && !m.reasoningOnly) opts.maxTokens = m.maxTokens;
+        if (reasoningOpt) opts.reasoning = reasoningOpt;
+        return opts;
       };
+      let sendOpts = buildSendOpts(resolved);
 
       // Wire subagent support: strip recursive tools
       const subagentToolNames = new Set(['task', 'todo_read', 'todo_write']);
@@ -600,8 +603,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             initialTurn,
             provider: currentProvider,
             model: currentModel,
-            temperature,
-            maxTokens,
+            temperature: sendOpts.temperature,
+            maxTokens: sendOpts.maxTokens,
             sendOpts,
             scenario: scenarioName,
             runId: modelRunId,
@@ -696,6 +699,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               logger.warn('Falling back', { from: `${currentProvider}/${currentModel}`, to: `${next.provider}/${next.model}` });
               currentProvider = next.provider;
               currentModel = next.model;
+              // Rebuild sampling options from the hop's own catalog row so a
+              // fallback never inherits the primary's temperature/maxTokens
+              // (a lower output cap or a reasoning-only model would 400).
+              const hopResolved = await resolveModelForRun(currentModel, currentProvider);
+              sendOpts = buildSendOpts(hopResolved);
+              // The subagent shares the live adapter; keep its inherited
+              // options in sync with the hop as well.
+              if (toolCtx.subagent) toolCtx.subagent.sendOpts = sendOpts;
               const fallbackDescriptor = registry.get(currentProvider);
               const fallbackApiKey = fallbackDescriptor?.envVar ? secretStore.get(fallbackDescriptor.envVar) : undefined;
               adapter = registry.createAdapter(currentProvider, currentModel, { apiKey: fallbackApiKey, logger: logger.child('adapter') });

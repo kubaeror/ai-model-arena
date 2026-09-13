@@ -11,7 +11,7 @@ import { startRunner } from '../../src/runner.js';
 import { upsertRun } from '../../src/db/runs.js';
 import { ProviderRegistry } from '../../src/providers/index.js';
 import type { CreateAdapterOpts } from '../../src/providers/registry.js';
-import type { ModelAdapter } from '../../src/providers/adapters/base.js';
+import type { ModelAdapter, SendOpts } from '../../src/providers/adapters/base.js';
 import { CircuitBreaker } from '../../src/providers/circuit-breaker.js';
 import { tasksFailed, taskCounter } from '../../src/observability/metrics.js';
 import type { Task, TaskQueue } from '../../src/queue/types.js';
@@ -24,6 +24,12 @@ const MODELS_DEV = {
       cost: { input: 2.5, output: 10 },
       limit: { context: 128000, output: 16384 },
     },
+    'o3': {
+      id: 'o3', name: 'o3',
+      attachment: false, reasoning: true, temperature: false, tool_call: true,
+      cost: { input: 2, output: 8 },
+      limit: { context: 200000, output: 100000 },
+    },
   } },
   anthropic: { id: 'anthropic', name: 'Anthropic', env: ['ANTHROPIC_API_KEY'], models: {
     'claude-3-7-sonnet': {
@@ -35,6 +41,12 @@ const MODELS_DEV = {
     'claude-3.7': {
       id: 'claude-3.7', name: 'claude-3.7',
       attachment: false, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 3, output: 15 },
+      limit: { context: 200000, output: 8192 },
+    },
+    'claude-sonnet-4': {
+      id: 'claude-sonnet-4', name: 'Claude Sonnet 4',
+      attachment: true, reasoning: true, temperature: true, tool_call: true,
       cost: { input: 3, output: 15 },
       limit: { context: 200000, output: 8192 },
     },
@@ -756,9 +768,11 @@ test('runner does not count a requeued model-not-found nack as tasksFailed', asy
  */
 class FakeAdapter implements ModelAdapter {
   calls = 0;
+  lastOpts: SendOpts | undefined;
 
-  async sendMessage(): Promise<import('../../src/types.js').ModelResponse> {
+  async sendMessage(_messages: import('../../src/types.js').ChatMessage[], _tools: import('../../src/types.js').ToolDefinition[], opts?: SendOpts): Promise<import('../../src/types.js').ModelResponse> {
     this.calls++;
+    this.lastOpts = opts;
     return {
       text: 'I verified the work and I am done.',
       toolCalls: [{ id: 'fake-tc-1', name: 'task_complete', arguments: { summary: 'finished by fake adapter' } }],
@@ -1162,6 +1176,183 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
     const resultPath = path.join(outputs, MODEL_DIR, 'run-fb3', 'result.json');
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean };
     assert.equal(result.success, true);
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('fallback hop receives its own send options, not the primary model’s', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-fallback-opts-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
+  process.env.ARENA_MAX_FALLBACK_HOPS = '3';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  await upsertRun({
+    runId: 'run-fb-opts', scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'GPT-4o', runId: 'run-fb-opts', status: 'running',
+      outputDir: path.join(outputs, MODEL_DIR, 'run-fb-opts'),
+      sandboxDir: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'files'),
+      resultPath: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'result.json'),
+      conversationPath: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'conversation.json'),
+      reportPath: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'report.md'),
+      logFile: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const created: FakeAdapter[] = [];
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    const fake = new FakeAdapter();
+    created.push(fake);
+    return fake;
+  };
+
+  await seedOpenBreaker('openai', 'gpt-4o');
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal, fallbackChain: FALLBACK_CHAIN });
+
+  await queue.enqueue(makeTask({
+    taskId: 'fb-opts', sessionId: 'fb-opts-session',
+    model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: 'run-fb-opts', maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+    assert.equal(await queue.deadLetterSize(), 0, 'fallback run must ack, not nack');
+    assert.equal(created.length, 2, 'one primary adapter plus one fallback adapter');
+    assert.equal(created[0]!.calls, 0, 'the open primary circuit must skip the primary adapter');
+    assert.equal(created[1]!.calls, 1, 'the fallback adapter should run the loop');
+    // gpt-4o (primary) has output 16384; claude-sonnet-4 (fallback) has 8192.
+    // The hop must use its own catalog values, not the primary's.
+    assert.deepEqual(created[1]!.lastOpts, { temperature: 0.2, maxTokens: 8192 },
+      'fallback hop must receive its own temperature/maxTokens');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('reasoning-only models do not receive unsupported temperature or max_tokens', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-reasoning-only-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-reasoning-only';
+  const dir = modelDirSegment('openai/o3');
+  const modelRunDir = path.join(outputs, dir, runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: ['o3'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'o3', runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'reasoning-only-task', sessionId: 'reasoning-only-session',
+    model: 'o3', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+    assert.equal(fake.calls, 1, 'reasoning-only task should execute exactly one turn');
+    assert.ok(fake.lastOpts, 'adapter must receive send options');
+    // o3 rejects temperature and max_tokens (it needs max_completion_tokens):
+    // both must be omitted rather than inherited from defaults.
+    assert.ok(!('temperature' in fake.lastOpts), 'reasoning-only model must not receive temperature');
+    assert.ok(!('maxTokens' in fake.lastOpts), 'reasoning-only model must not receive max tokens');
   } finally {
     ac.abort();
     await runnerDone;
