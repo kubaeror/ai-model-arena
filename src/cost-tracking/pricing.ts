@@ -15,6 +15,7 @@ interface Over200kRow {
   input: number | null;
   output: number | null;
   cache_read: number | null;
+  cache_write: number | null;
 }
 
 const pricingCache = new Map<string, PricingRow>();
@@ -68,8 +69,8 @@ export async function getPricing(modelName: string): Promise<ModelPricing | unde
 }
 
 export async function computeCost(modelName: string, usage: CostTokenUsage): Promise<CostBreakdown> {
-  const pricingData = await getPricing(modelName);
-  if (!pricingData) {
+  const row = await getModelPricing(modelName);
+  if (!row) {
     return { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
   }
 
@@ -77,33 +78,38 @@ export async function computeCost(modelName: string, usage: CostTokenUsage): Pro
   const completionTokens = usage.completion ?? 0;
   const cachedTokens = usage.cached ?? 0;
   const cacheWriteTokens = usage.cacheWrite ?? 0;
-  // `prompt` counts every input token; cached tokens are billed at their own
-  // price, so only the remainder pays the input price. Clamped so a provider
-  // reporting cache tokens additively cannot drive the remainder negative.
-  const inputTokens = Math.max(0, promptTokens - cachedTokens - cacheWriteTokens);
 
   // Tier selection is per request, not per run: callers must pass one call's
   // usage (see computeTotalCost), or a run's calls would all pay the premium.
   const isOver200k = promptTokens + completionTokens > 200_000;
   const tieredPricing = isOver200k ? await getTieredPricing(modelName) : null;
 
-  const inputPrice = tieredPricing?.input ?? pricingData.input;
-  const outputPrice = tieredPricing?.output ?? pricingData.output;
-  const cachedPrice = tieredPricing?.cache_read ?? pricingData.cached;
-  // The catalog has no tiered cache-write price; fall back to the base write
-  // price, then to input pricing for providers that only bill input.
-  const cacheWritePrice = pricingData.cache_write && pricingData.cache_write > 0 ? pricingData.cache_write : inputPrice;
+  const inputPrice = tieredPricing?.input ?? row.input ?? 0;
+  const outputPrice = tieredPricing?.output ?? row.output ?? 0;
+  // Cache prices are optional in the catalog. A token category with no price
+  // (including no tier price) is billed as ordinary input rather than zeroed
+  // out by a defaulted cache price.
+  const cacheReadPrice = tieredPricing?.cache_read ?? row.cache_read ?? row.cache_write;
+  const cacheWritePrice = tieredPricing?.cache_write ?? row.cache_write;
+  // `prompt` counts every input token; priced cache tokens are billed at their
+  // own price, so only the remainder pays the input price. Clamped so a provider
+  // reporting cache tokens additively cannot drive the remainder negative.
+  const inputTokens = Math.max(0,
+    promptTokens
+    - (cacheReadPrice != null ? cachedTokens : 0)
+    - (cacheWritePrice != null ? cacheWriteTokens : 0));
 
   // Catalog prices are USD per 1M tokens (models.dev convention).
   const inputCost = (inputTokens / 1_000_000) * inputPrice;
   const outputCost = (completionTokens / 1_000_000) * outputPrice;
-  const cachedCost = (cachedTokens / 1_000_000) * cachedPrice + (cacheWriteTokens / 1_000_000) * cacheWritePrice;
+  const cachedCost = cacheReadPrice != null ? (cachedTokens / 1_000_000) * cacheReadPrice : 0;
+  const cacheWriteCost = cacheWritePrice != null ? (cacheWriteTokens / 1_000_000) * cacheWritePrice : 0;
 
   return {
     inputCost,
     outputCost,
-    cachedCost,
-    total: inputCost + outputCost + cachedCost,
+    cachedCost: cachedCost + cacheWriteCost,
+    total: inputCost + outputCost + cachedCost + cacheWriteCost,
   };
 }
 
@@ -139,13 +145,14 @@ export async function computeTotalCost(
   return total;
 }
 
-async function getTieredPricing(modelId: string): Promise<{ input: number; output: number; cache_read: number | null } | null> {
+async function getTieredPricing(modelId: string): Promise<{ input: number; output: number; cache_read: number | null; cache_write: number | null } | null> {
   try {
     const db = getDrizzleDb();
     const rows = await db.select({
       input: pricing.over_200k_input,
       output: pricing.over_200k_output,
       cache_read: pricing.over_200k_cache_read,
+      cache_write: pricing.over_200k_cache_write,
     }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.over_200k_input} IS NOT NULL`)).limit(1) as Over200kRow[];
     const row = rows[0];
     if (!row || row.input == null) return null;
@@ -163,6 +170,7 @@ async function getTieredPricing(modelId: string): Promise<{ input: number; outpu
       input: row.input,
       output: output ?? row.input,
       cache_read: row.cache_read,
+      cache_write: row.cache_write,
     };
   } catch {
     return null;

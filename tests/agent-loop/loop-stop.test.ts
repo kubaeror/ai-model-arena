@@ -67,6 +67,33 @@ test('resumed run continues turn numbering past lastCompletedTurn', async () => 
   assert.equal(result.turnsUsed, 2, 'turnsUsed is the absolute turn number');
 });
 
+test('resumed run aborted before its first turn reports the last completed turn', async () => {
+  const adapter = stubAdapter([]);
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, maxTurns: 5,
+    initialTurn: 3,
+    onBudgetCheck: async () => false,
+  });
+
+  assert.equal(result.stopReason, 'budget_exceeded');
+  assert.equal(result.turnsUsed, 2, 'a pre-turn abort must report the last completed turn, not 0');
+  assert.equal(adapter.sendCalls(), 0);
+});
+
+test('resumed run with startTurn past maxTurns reports the last completed turn', async () => {
+  const adapter = stubAdapter([]);
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, maxTurns: 3,
+    initialTurn: 5,
+  });
+
+  assert.equal(result.stopReason, 'max_turns');
+  assert.equal(result.turnsUsed, 4, 'no turn ran, so the last completed turn is startTurn - 1');
+  assert.equal(adapter.sendCalls(), 0);
+});
+
 test('stops on task_complete', async () => {
   const adapter = stubAdapter([
     { text: '', toolCalls: [{ id: '1', name: TASK_COMPLETE_TOOL, arguments: {} }], usage: { prompt: 10, completion: 5 }, stopReason: 'tool_call' },

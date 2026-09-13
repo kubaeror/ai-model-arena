@@ -151,7 +151,9 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
   const errors: string[] = [];
   let totalToolCalls = 0;
   let stopReason = 'unknown';
-  let turnsUsed = 0;
+  // startTurn is the first turn to run, so startTurn - 1 is the last completed
+  // turn: a resume that aborts before any send still reports the prior count.
+  let turnsUsed = startTurn - 1;
 
   for (let turn = startTurn; turn <= maxTurns; turn++) {
     if (hooks.onTurnStart) {

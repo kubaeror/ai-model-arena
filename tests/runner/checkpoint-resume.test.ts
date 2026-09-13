@@ -26,6 +26,34 @@ function stubToolCtx() {
   return { sandboxDir: '/tmp', logger: stubLogger(), shellTimeoutMs: 10000, maxShellOutputBytes: 524288 };
 }
 
+async function seedGpt4oPricing(cacheRead: number, cacheWrite: number) {
+  const { getDrizzleDb } = await import('../../src/db/index.js');
+  const { providers, models, pricing } = await import('../../src/db/schema.js');
+  const { resetPricingCache } = await import('../../src/cost-tracking/pricing.js');
+  const now = new Date().toISOString();
+  await getDrizzleDb().insert(providers).values({
+    id: 'openai', name: 'OpenAI', api_base: null, auth_scheme: 'bearer',
+    env_var: 'OPENAI_API_KEY', is_builtin: 1, adapter: 'openai-compat',
+    header_name: null, created_at: now, updated_at: now,
+  });
+  await getDrizzleDb().insert(models).values({
+    id: 'gpt-4o', name: 'gpt-4o', family: null, provider_id: 'openai',
+    release_date: null, attachment: 0, reasoning: 0, temperature: 0,
+    tool_call: 1, interleaved: null, status: 'active',
+    context_limit: 128000, input_limit: null, output_limit: 16384,
+    modalities: null, reasoning_options: null, source_json: null,
+    last_synced_at: now,
+  });
+  await getDrizzleDb().insert(pricing).values({
+    model_id: 'gpt-4o', tier_size: 0,
+    input: 2.5, output: 10, cache_read: cacheRead, cache_write: cacheWrite,
+    over_200k_input: null, over_200k_output: null,
+    over_200k_cache_read: null, over_200k_cache_write: null,
+    updated_at: now,
+  });
+  resetPricingCache();
+}
+
 test('resumeFrom returns empty messages + lastCompletedTurn -1 for fresh session', async () => {
   initDb(':memory:');
   const store = createSessionStore();
@@ -168,29 +196,7 @@ test('sumPriorRunSpend accumulates usage JSON across persisted model calls', asy
   const s = await store.createSession({ model: 'gpt-4o' });
 
   // computeCost reads pricing from the catalog DB — seed providers/models/pricing.
-  const { getDrizzleDb } = await import('../../src/db/index.js');
-  const { providers, models, pricing } = await import('../../src/db/schema.js');
-  const now = new Date().toISOString();
-  await getDrizzleDb().insert(providers).values({
-    id: 'openai', name: 'OpenAI', api_base: null, auth_scheme: 'bearer',
-    env_var: 'OPENAI_API_KEY', is_builtin: 1, adapter: 'openai-compat',
-    header_name: null, created_at: now, updated_at: now,
-  });
-  await getDrizzleDb().insert(models).values({
-    id: 'gpt-4o', name: 'gpt-4o', family: null, provider_id: 'openai',
-    release_date: null, attachment: 0, reasoning: 0, temperature: 0,
-    tool_call: 1, interleaved: null, status: 'active',
-    context_limit: 128000, input_limit: null, output_limit: 16384,
-    modalities: null, reasoning_options: null, source_json: null,
-    last_synced_at: now,
-  });
-  await getDrizzleDb().insert(pricing).values({
-    model_id: 'gpt-4o', tier_size: 0,
-    input: 2.5, output: 10, cache_read: 0, cache_write: 0,
-    over_200k_input: null, over_200k_output: null,
-    over_200k_cache_read: null, over_200k_cache_write: null,
-    updated_at: now,
-  });
+  await seedGpt4oPricing(0, 0);
 
   await store.recordModelCall({
     sessionId: s.id, turn: 0, provider: 'openai', model: 'gpt-4o',
@@ -209,6 +215,26 @@ test('sumPriorRunSpend accumulates usage JSON across persisted model calls', asy
   // = 0.0075, call2: 2.5*2000/1M + 10*1000/1M = 0.015. The helper mirrors the
   // loop's max-per-call convention, so the seed data yields exactly 0.015.
   assert.equal(total, 0.015, 'prior spend should equal the max per-call cost');
+  closeDb();
+});
+
+test('sumPriorRunSpend bills persisted cache tokens at their catalog prices', async () => {
+  initDb(':memory:');
+  const store = createSessionStore();
+  const s = await store.createSession({ model: 'gpt-4o' });
+  await seedGpt4oPricing(1.25, 3.75);
+
+  await store.recordModelCall({
+    sessionId: s.id, turn: 0, provider: 'openai', model: 'gpt-4o',
+    requestHash: 'h1', responseText: 'a',
+    usage: { prompt: 1000, completion: 100, total: 1100, cacheReadTokens: 400, cacheWriteTokens: 200 }, latencyMs: 10,
+  });
+
+  const { sumPriorRunSpend } = await import('../../src/runner.js');
+  const total = await sumPriorRunSpend(s.id, 'gpt-4o');
+  // Uncached 400 @ 2.5 + completion 100 @ 10 + cache read 400 @ 1.25 + cache write 200 @ 3.75.
+  const expected = (400 / 1e6) * 2.5 + (100 / 1e6) * 10 + (400 / 1e6) * 1.25 + (200 / 1e6) * 3.75;
+  assert.ok(Math.abs(total - expected) < 1e-12, `prior spend ${total} should equal ${expected}`);
   closeDb();
 });
 

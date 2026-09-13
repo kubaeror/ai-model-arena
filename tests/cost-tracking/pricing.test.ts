@@ -21,8 +21,14 @@ const MODELS_DEV = {
     'gpt-x': {
       id: 'gpt-x', name: 'GPT-X',
       attachment: false, reasoning: false, temperature: true, tool_call: true,
-      cost: { input: 2.5, output: 10, cache_read: 1.25, context_over_200k: { input: 1.5, output: 5, cache_read: 0.5 } },
+      cost: { input: 2.5, output: 10, cache_read: 1.25, cache_write: 3, context_over_200k: { input: 1.5, output: 5, cache_read: 0.5, cache_write: 0.75 } },
       limit: { context: 400000, output: 16384 },
+    },
+    'gpt-nocache': {
+      id: 'gpt-nocache', name: 'GPT-NoCache',
+      attachment: false, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 2, output: 8 },
+      limit: { context: 128000, output: 16384 },
     },
     'gpt-cw': {
       id: 'gpt-cw', name: 'GPT-CW',
@@ -116,6 +122,17 @@ test('computeCost uses over-200k tier when total tokens exceed 200k', async () =
   } finally { closeDb(); cleanup(); }
 });
 
+test('computeCost uses the over-200k cache-read price for cached tokens', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    const c = await computeCost('openai/gpt-x', { prompt: 250_000, completion: 0, cached: 2_000 });
+    assert.equal(c.inputCost, (248_000 / 1e6) * 1.5);
+    assert.equal(c.cachedCost, (2_000 / 1e6) * 0.5);
+    assert.ok(Math.abs(c.total - 0.373) < 1e-12);
+  } finally { closeDb(); cleanup(); }
+});
+
 test('computeCost handles null usage fields', async () => {
   const cleanup = freshDb();
   try {
@@ -146,6 +163,18 @@ test('over-200k output cost uses the tier output price, not the input fallback',
   } finally { closeDb(); cleanup(); }
 });
 
+test('computeCost uses the over-200k cache-write price for cache-write tokens', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    const c = await computeCost('openai/gpt-x', { prompt: 250_000, completion: 0, cacheWrite: 2_000 });
+    // Writes bill at the tier write price (0.75), not the base price (3) or the tier input price (1.5).
+    assert.equal(c.inputCost, (248_000 / 1e6) * 1.5);
+    assert.equal(c.cachedCost, (2_000 / 1e6) * 0.75);
+    assert.ok(Math.abs(c.total - 0.3735) < 1e-12);
+  } finally { closeDb(); cleanup(); }
+});
+
 test('getPricing exposes cache_write and computeCost uses it when cache_read is missing', async () => {
   const cleanup = freshDb();
   try {
@@ -165,6 +194,19 @@ test('computeCost bills cache-write tokens at the cache_write price', async () =
     const c = await computeCost('openai/gpt-cw', { prompt: 1000, completion: 0, cached: 200, cacheWrite: 100 });
     assert.equal(c.inputCost, (700 / 1e6) * 2);
     assert.equal(c.cachedCost, (200 / 1e6) * 0.75 + (100 / 1e6) * 0.75);
+  } finally { closeDb(); cleanup(); }
+});
+
+test('computeCost bills cached tokens at the input price when the catalog has no cache price', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    // gpt-nocache declares only input/output. Cached tokens must not vanish at a
+    // defaulted $0 cache price; with no cache price they stay in the input remainder.
+    const c = await computeCost('openai/gpt-nocache', { prompt: 1000, completion: 0, cached: 200, cacheWrite: 100 });
+    assert.equal(c.inputCost, (1000 / 1e6) * 2);
+    assert.equal(c.cachedCost, 0);
+    assert.ok(Math.abs(c.total - 0.002) < 1e-12);
   } finally { closeDb(); cleanup(); }
 });
 
