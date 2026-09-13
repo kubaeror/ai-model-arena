@@ -154,6 +154,7 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   const { createRunsRouter } = await import(`../../src/dashboard-server/routes/runs.js${bust}`);
   const { createSecretsRouter } = await import(`../../src/dashboard-server/routes/secrets.js${bust}`);
   const { createAuditRouter } = await import(`../../src/dashboard-server/routes/audit.js${bust}`);
+  const { createFilesRouter } = await import(`../../src/dashboard-server/routes/files.js${bust}`);
   const { createUsersRouter } = await import(`../../src/dashboard-server/routes/users.js${bust}`);
   const { createCostRouter } = await import(`../../src/dashboard-server/routes/cost.js${bust}`);
   const { createSessionsRouter } = await import(`../../src/dashboard-server/routes/sessions.js${bust}`);
@@ -168,6 +169,7 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   app.use('/api/runs', requireAuth(auth), requireRole('viewer'), createRunsRouter());
   app.use('/api/secrets', requireAuth(auth), requireRole('admin'), createSecretsRouter());
   app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
+  app.use('/api/files', requireAuth(auth), requireRole('viewer'), createFilesRouter());
   app.use('/api/users', requireAuth(auth), requireRole('admin'), createUsersRouter());
   app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
   app.use('/api/sessions', requireAuth(auth), requireRole('viewer'), createSessionsRouter());

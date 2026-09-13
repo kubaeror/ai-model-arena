@@ -47,6 +47,14 @@ test('readTail handles empty and missing files', async () => {
   assert.equal(await readTail(path.join(tmpDir(), 'missing.log'), 400), '');
 });
 
+test('readTail returns an empty string for lines <= 0', async () => {
+  const filePath = path.join(tmpDir(), 'zero.log');
+  fs.writeFileSync(filePath, 'alpha\nbeta\ngamma');
+
+  assert.equal(await readTail(filePath, 0), '', 'zero lines must not return the whole file');
+  assert.equal(await readTail(filePath, -5), '');
+});
+
 test('readTail does not corrupt multibyte characters split across read chunks', async () => {
   const filePath = path.join(tmpDir(), 'utf8.log');
   const lines = Array.from({ length: 4000 }, (_, i) => `行-${i}-${'あいうえお'.repeat(8)}`);

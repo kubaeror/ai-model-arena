@@ -25,7 +25,7 @@ export async function listMessagesBySession(
   const db = getDrizzleDb();
   const query = db.select().from(messages)
     .where(eq(messages.session_id, sessionId))
-    .orderBy(messages.turn, messages.created_at);
+    .orderBy(messages.turn, messages.created_at, messages.id);
   if (page?.limit === undefined) return query;
   return query.limit(page.limit).offset(page.offset ?? 0);
 }

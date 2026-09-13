@@ -266,6 +266,24 @@ test('computeTotalCost prices each call with its own tagged model', async () => 
   } finally { closeDb(); cleanup(); }
 });
 
+test('getPricing defaults missing cache prices to 0 (display-only) while computeCost bills them as input', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    // Pin the intentional divergence: getPricing is a display shape and zeroes
+    // absent cache prices, whereas computeCost is null-aware and bills cached
+    // tokens at the input price when the catalog has no cache price.
+    const p = await getPricing('openai/gpt-nocache');
+    assert.ok(p);
+    assert.equal(p.cached, 0, 'missing cache_read defaults to 0 for display');
+    assert.equal(p.cache_write, 0, 'missing cache_write defaults to 0 for display');
+
+    const c = await computeCost('openai/gpt-nocache', { prompt: 1000, completion: 0, cached: 200, cacheWrite: 100 });
+    assert.equal(c.inputCost, (1000 / 1e6) * 2, 'computeCost keeps cached tokens in the input remainder');
+    assert.equal(c.cachedCost, 0);
+  } finally { closeDb(); cleanup(); }
+});
+
 test('resetPricingCache clears the pricing cache and re-lookup re-fetches', async () => {
   const cleanup = freshDb();
   try {

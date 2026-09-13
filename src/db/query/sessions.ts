@@ -72,7 +72,7 @@ export async function listSessionsWithCounts(opts: {
       status: sessions.status,
       created_at: sessions.created_at,
       updated_at: sessions.updated_at,
-    }).from(sessions).where(where).orderBy(desc(sessions.created_at)) as SessionBaseRow[];
+    }).from(sessions).where(where).orderBy(desc(sessions.created_at), desc(sessions.id)) as SessionBaseRow[];
     const visible = all.filter(opts.isVisible);
     total = visible.length;
     rows = visible.slice(opts.offset, opts.offset + opts.limit);
@@ -86,6 +86,7 @@ export async function listSessionsWithCounts(opts: {
     }, {
       orderBy: 'created_at',
       dir: 'desc',
+      tiebreakBy: 'id',
       pageSize: opts.limit,
       offset: opts.offset,
       where,

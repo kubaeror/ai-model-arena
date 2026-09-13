@@ -34,6 +34,7 @@ export function createFilesRouter(): Router {
       where: conds.length ? and(...conds) : undefined,
       orderBy: 'produced_at',
       dir: 'desc',
+      tiebreakBy: 'id',
       pageSize: limit,
       offset,
     });

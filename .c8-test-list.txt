@@ -45,6 +45,7 @@ tests/dashboard/secrets-envvar-validation.test.ts
 tests/dashboard/secrets-merge-patch.test.ts
 tests/dashboard/webhooks-routes.test.ts
 tests/dashboard/ws-ownership.test.ts
+tests/db/chunked-in.test.ts
 tests/db/judge-scores.test.ts
 tests/db/migrations.test.ts
 tests/db/models.test.ts
@@ -55,6 +56,7 @@ tests/db/runs.test.ts
 tests/db/schedules.test.ts
 tests/db/schema-pg-types.test.ts
 tests/db/sessions.test.ts
+tests/db/stable-order.test.ts
 tests/env/required.test.ts
 tests/evaluation/judge-config.test.ts
 tests/evaluation/judge.test.ts
@@ -73,6 +75,7 @@ tests/notifications/outbox.test.ts
 tests/notifications/retry.test.ts
 tests/notifications/webhooks-dispatch.test.ts
 tests/orchestrator/budget-integration.test.ts
+tests/orchestrator/cli-timeout-gate.test.ts
 tests/orchestrator/cost-estimate.test.ts
 tests/orchestrator/finalize-merge.test.ts
 tests/orchestrator/run-paths.test.ts

@@ -1,8 +1,9 @@
 import { getDrizzleDb } from '../index.js';
 import { anomalies } from '../schema.js';
 import type { DbAnomaly } from '../schema.js';
-import { eq, and, desc, sql, count, sum, inArray } from 'drizzle-orm';
+import { eq, and, desc, sql, count, sum } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
+import { chunkedIn } from './chunked.js';
 
 export type AnomalyType =
   | 'latency'
@@ -108,9 +109,9 @@ export async function listAnomalies(q: AnomalyQuery = {}): Promise<AnomalyRecord
   if (q.from) conditions.push(sql`${anomalies.detected_at} >= ${q.from}`);
   if (q.to) conditions.push(sql`${anomalies.detected_at} <= ${q.to}`);
   if (q.runIds) {
-    // Empty set must match nothing (drizzle's inArray on [] is dialect-dependent).
-    if (q.runIds.length === 0) return [];
-    conditions.push(inArray(anomalies.run_id, q.runIds));
+    // chunkedIn keeps the bound-variable count bounded and maps an empty set
+    // to a match-nothing predicate (drizzle's inArray on [] is dialect-dependent).
+    conditions.push(chunkedIn(anomalies.run_id, q.runIds));
   }
   const rows = await db.select().from(anomalies)
     .where(conditions.length ? and(...conditions) : undefined)

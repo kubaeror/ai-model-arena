@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { boot, authedGet, postJson, TEST_ADMIN, TEST_VIEWER } from './route-test-harness.js';
-import { getDrizzleDb } from '../../src/db/index.js';
-import { insertAnomaly, insertAuditEntry, insertPrompt, insertPromptVersion, getAnomaly } from '../../src/db/query.js';
+import { getDb, getDrizzleDb } from '../../src/db/index.js';
+import { insertAnomaly, insertAuditEntry, insertFile, insertPrompt, insertPromptVersion, getAnomaly } from '../../src/db/query.js';
 import { messages, model_calls, models, model_providers, pricing, providers, run_models, runs, sessions, audit_log as auditLog, cost_ledger as costLedger } from '../../src/db/schema.js';
 import { outputRoot } from '../../src/paths.js';
 import { isWithin } from '../../src/sandbox/sandbox.js';
@@ -353,6 +353,39 @@ test('GET /api/audit returns paginated audit entries', async (t) => {
   const clamped = await authedGet(h.base, h.adminToken, '/api/audit?limit=2000');
   const clampedBody = (await clamped.json()) as { limit: number };
   assert.equal(clampedBody.limit, 200, 'limit clamped to 200');
+});
+
+test('GET /api/audit breaks identical timestamps by id across offset pages', async (t) => {
+  const h = await boot(t);
+  // Drop the `at` index so a reverse index scan (at DESC, rowid DESC) cannot
+  // mask a missing explicit tiebreaker; the query must order by id itself.
+  getDb().exec('DROP INDEX IF EXISTS idx_audit_at');
+  const at = '2026-02-01T00:00:00.000Z';
+  for (const action of ['a', 'b', 'c', 'd', 'e']) {
+    await insertAuditEntry({ actor: 'tester', action, entityType: 'model', entityId: action, at });
+  }
+
+  const pages = await Promise.all([0, 2, 4].map(
+    async (offset) => (await (await authedGet(h.base, h.adminToken, `/api/audit?limit=2&offset=${offset}`)).json()) as {
+      entries: Array<{ action: string }>;
+    },
+  ));
+  assert.deepEqual(pages.flatMap((p) => p.entries.map((e) => e.action)), ['e', 'd', 'c', 'b', 'a']);
+});
+
+test('GET /api/files breaks identical produced_at timestamps by id across offset pages', async (t) => {
+  const h = await boot(t);
+  const at = '2026-02-01T00:00:00.000Z';
+  for (const id of ['f-002', 'f-000', 'f-004', 'f-001', 'f-003']) {
+    await insertFile({ id, runId: 'run-1', path: `/out/${id}.json`, model: 'gpt-4o', producedAt: at });
+  }
+
+  const pages = await Promise.all([0, 2, 4].map(
+    async (offset) => (await (await authedGet(h.base, h.adminToken, `/api/files?limit=2&offset=${offset}`)).json()) as {
+      files: Array<{ id: string }>;
+    },
+  ));
+  assert.deepEqual(pages.flatMap((p) => p.files.map((f) => f.id)), ['f-004', 'f-003', 'f-002', 'f-001', 'f-000']);
 });
 
 test('POST /api/runs rejects traversal scenario and model identifiers', async (t) => {

@@ -43,6 +43,10 @@ function resolveOrderBy(
  * `orderBy` is whitelisted against `columns` (no raw identifiers in SQL).
  * `offset` takes precedence over `page` when both are provided (route callers
  * speak limit/offset; tests speak page/pageSize).
+ *
+ * `tiebreakBy` appends a second, direction-matched sort column (usually the
+ * primary key) so ties on the primary sort key cannot reorder between offset
+ * pages and make a pager skip or duplicate rows.
  */
 export async function paginate<T extends Record<string, unknown>>(
   table: object,
@@ -53,6 +57,7 @@ export async function paginate<T extends Record<string, unknown>>(
     offset?: number;
     orderBy?: string;
     dir?: 'asc' | 'desc';
+    tiebreakBy?: string;
     where?: SQL;
   },
 ): Promise<{ rows: T[]; total: number }> {
@@ -64,6 +69,7 @@ export async function paginate<T extends Record<string, unknown>>(
   const countRows = await db.select({ count: count() }).from(table).where(conds);
   const total = (countRows[0]?.count ?? 0) as number;
   const order = resolveOrderBy(columns, q.orderBy, q.dir);
+  if (q.tiebreakBy) order.push(...resolveOrderBy(columns, q.tiebreakBy, q.dir));
   const rows = await db.select()
     .from(table)
     .where(conds)

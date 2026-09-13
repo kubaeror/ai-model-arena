@@ -95,7 +95,23 @@ export async function runScenarioForModels(opts: CliRunOptions): Promise<void> {
     }
     await sleep(1500);
   }
-  if (!done) logger.warn('Timeout reached while waiting for workers; proceeding with partial results.');
+  if (!done) {
+    // The stop gate stays authoritative on timeout: a stopped run whose cancel
+    // signal is still live inside the grace window is owned by a runner that
+    // may yet ack, so force-finalizing it here would settle it while sibling
+    // models still execute (or strand it with non-terminal rows).
+    if (await prepareRunFinalization(spec.runId)) {
+      done = true;
+    } else {
+      const rec = await getRunRecord(spec.runId);
+      if (rec && isStopAwaitingRunner(rec, await isRunCancelled(spec.runId))) {
+        logger.warn('Timeout reached but the run is stopped with a live cancel signal; skipping finalization', { runId: spec.runId });
+        console.log('Run is stopped and awaiting runner acknowledgements; skipping finalization (check `status` once the runners stop).');
+        return;
+      }
+      logger.warn('Timeout reached while waiting for workers; proceeding with partial results.');
+    }
+  }
 
   const { entries } = await finalizeRun(spec, logger);
   printComparisonTable(entries);

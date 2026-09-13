@@ -10,6 +10,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { ErrorState } from '../components/ui/ErrorState';
 import { Button } from '../components/ui/Button';
 import { listSessions, type SessionRow } from '../lib/api';
+import { dedupeById } from '../lib/dedupe';
 
 const STATUS_TIER: Record<string, 'status' | 'success' | 'failure' | 'neutral'> = {
   active: 'status',
@@ -33,18 +34,6 @@ const columns: Column<SessionRow>[] = [
 ];
 
 const PAGE = 50;
-
-/** Keep the first occurrence of each row id so overlapping offset pages never render duplicates. */
-function dedupeById(rows: SessionRow[]): SessionRow[] {
-  const seen = new Set<string>();
-  const out: SessionRow[] = [];
-  for (const row of rows) {
-    if (seen.has(row.id)) continue;
-    seen.add(row.id);
-    out.push(row);
-  }
-  return out;
-}
 
 export function Sessions() {
   const navigate = useNavigate();

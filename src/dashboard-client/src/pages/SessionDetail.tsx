@@ -11,6 +11,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import {
   getSession, getSessionMessages, getSessionCalls, deleteSession,
 } from '../lib/api';
+import { dedupeById } from '../lib/dedupe';
 
 const TAB_ITEMS = [
   { id: 'messages', label: 'Messages' },
@@ -19,19 +20,6 @@ const TAB_ITEMS = [
 
 const PAGE_SIZE = 200;
 type TranscriptRow = Record<string, unknown>;
-
-/** Keep the first occurrence of each row id so overlapping offset pages never render duplicates. */
-function dedupeById(rows: TranscriptRow[]): TranscriptRow[] {
-  const seen = new Set<unknown>();
-  const out: TranscriptRow[] = [];
-  for (const row of rows) {
-    const id = row.id;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push(row);
-  }
-  return out;
-}
 
 function jsonOrText(v: unknown): string {
   if (v === null || v === undefined) return '';
@@ -91,8 +79,8 @@ export function SessionDetail() {
     return <PageShell title="Session"><EmptyState title="Session not found" /></PageShell>;
   }
   const session = sessionQuery.data;
-  const messages = dedupeById(messagesQuery.data?.pages.flat() ?? []);
-  const calls = dedupeById(callsQuery.data?.pages.flat() ?? []);
+  const messages = dedupeById<TranscriptRow>(messagesQuery.data?.pages.flat() ?? []);
+  const calls = dedupeById<TranscriptRow>(callsQuery.data?.pages.flat() ?? []);
 
   return (
     <PageShell

@@ -60,10 +60,8 @@ const TAIL_CHUNK_BYTES = 64 * 1024;
  * does not load the whole file (report/log tails can be tens of MB).
  */
 export async function readTail(filePath: string, lines = 400): Promise<string> {
-  if (lines <= 0) {
-    const content = await fsp.readFile(filePath, 'utf8').catch(() => '');
-    return content.split(/\r?\n/).slice(-lines).join('\n');
-  }
+  // `slice(-0)` would return the whole file; a non-positive request means none.
+  if (lines <= 0) return '';
   let fd: Awaited<ReturnType<typeof fsp.open>> | null = null;
   try {
     fd = await fsp.open(filePath, 'r');

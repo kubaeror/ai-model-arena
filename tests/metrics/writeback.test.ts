@@ -9,6 +9,7 @@ import { writeRunStats } from '../../src/metrics/writeback.js';
 import { upsertRun } from '../../src/db/runs.js';
 import { createSessionStore } from '../../src/session/store.js';
 import type { FetchInput } from '../helpers/fetch-types.js';
+import type { Logger } from '../../src/types.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -182,6 +183,68 @@ test('writeRunStats skips models whose run index entry has no outputDir', async 
     initDb(dbPath);
     const rows = getDb().prepare('SELECT * FROM model_runtime_stats WHERE run_id = ?').all(runId);
     assert.equal(rows.length, 0, 'empty outputDir must not be backfilled from the raw model name');
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('writeRunStats warns once with the count of empty-outputDir skips and still writes valid rows', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-wb-'));
+  const dbPath = path.join(tmp, 'test.db');
+  initDb(dbPath);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = mockFetch({ 'models.dev/api.json': () => MODELS_DEV });
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+
+    const runId = 'scenario_2026-07-20T00_00_00Z';
+    seedRunOutputs(tmp, 'gpt-4o', runId);
+    seedRunOutputs(tmp, 'claude-3-5-sonnet', runId);
+    await upsertRun({
+      runId, scenario: 'scenario', models: ['gpt-4o', 'claude-3-5-sonnet'],
+      startedAt: '2026-07-20T00:00:00.000Z', finishedAt: '2026-07-20T00:00:05.000Z',
+      status: 'completed', source: 'cli',
+      perModel: [
+        {
+          model: 'gpt-4o', runId, outputDir: '',
+          sandboxDir: '', resultPath: path.join(tmp, 'outputs', 'gpt-4o', runId, 'result.json'),
+          conversationPath: '', reportPath: '', logFile: '',
+          status: 'completed' as const, success: true, durationMs: 5000,
+        },
+        {
+          model: 'claude-3-5-sonnet', runId,
+          outputDir: modelRunDir(tmp, 'claude-3-5-sonnet', runId),
+          sandboxDir: '', resultPath: path.join(modelRunDir(tmp, 'claude-3-5-sonnet', runId), 'result.json'),
+          conversationPath: '', reportPath: '', logFile: '',
+          status: 'completed' as const, success: true, durationMs: 5000,
+        },
+      ],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+    await seedModelCall(runId, 'claude-3-5-sonnet', 250);
+
+    const warnings: Array<{ msg: string; data?: unknown }> = [];
+    const logger: Logger = {
+      info: () => {},
+      warn: (msg, data) => { warnings.push({ msg, data }); },
+      error: () => {},
+      debug: () => {},
+      child: () => logger,
+    };
+
+    await writeRunStats(runId, tmp, logger);
+
+    closeDb();
+    initDb(dbPath);
+    const rows = getDb().prepare('SELECT * FROM model_runtime_stats WHERE run_id = ?').all(runId) as Array<Record<string, unknown>>;
+    assert.equal(rows.length, 1, 'the valid row must still be written');
+    assert.equal(rows[0]!.model_id, 'anthropic/claude-3-5-sonnet');
+
+    const skipWarnings = warnings.filter((w) => /outputdir/i.test(w.msg));
+    assert.equal(skipWarnings.length, 1, 'one warn per sweep');
+    assert.equal((skipWarnings[0]!.data as { count?: number }).count, 1, 'warn carries the skipped row count');
   } finally {
     globalThis.fetch = origFetch;
     closeDb();

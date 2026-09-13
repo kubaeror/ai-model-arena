@@ -8,6 +8,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { ErrorState } from '../components/ui/ErrorState';
 import { Button } from '../components/ui/Button';
 import { listAudit, type AuditEntry } from '../lib/api';
+import { dedupeById } from '../lib/dedupe';
 
 function summarize(v: unknown, max = 200): string {
   if (v === null || v === undefined) return '';
@@ -26,18 +27,6 @@ const columns: Column<AuditEntry>[] = [
 ];
 
 const PAGE = 50;
-
-/** Keep the first occurrence of each row id so overlapping offset pages never render duplicates. */
-function dedupeById(rows: AuditEntry[]): AuditEntry[] {
-  const seen = new Set<number>();
-  const out: AuditEntry[] = [];
-  for (const row of rows) {
-    if (seen.has(row.id)) continue;
-    seen.add(row.id);
-    out.push(row);
-  }
-  return out;
-}
 
 export function Audit() {
   const [actor, setActor] = useState<string>('');

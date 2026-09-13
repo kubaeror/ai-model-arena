@@ -9,6 +9,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { ErrorState } from '../components/ui/ErrorState';
 import { Button } from '../components/ui/Button';
 import { listFiles, type FileRow } from '../lib/api';
+import { dedupeById } from '../lib/dedupe';
 
 const columns: Column<FileRow>[] = [
   { key: 'path', header: 'Path', render: (r) => <span className="font-mono text-12">{r.path}</span> },
@@ -28,18 +29,6 @@ const columns: Column<FileRow>[] = [
 ];
 
 const PAGE = 50;
-
-/** Keep the first occurrence of each row id so overlapping offset pages never render duplicates. */
-function dedupeById(rows: FileRow[]): FileRow[] {
-  const seen = new Set<number>();
-  const out: FileRow[] = [];
-  for (const row of rows) {
-    if (seen.has(row.id)) continue;
-    seen.add(row.id);
-    out.push(row);
-  }
-  return out;
-}
 
 export function Files() {
   const navigate = useNavigate();

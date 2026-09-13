@@ -64,6 +64,12 @@ async function queryModelPricing(modelId: string): Promise<ResolvedPricingRow | 
   return row ? { ...row, resolvedModelId: canonicalId } : null;
 }
 
+/**
+ * Display-only pricing shape: absent cache prices default to 0 so dashboards
+ * can render "no cache pricing". This intentionally diverges from billing:
+ * `computeCost` is null-aware and bills cached tokens at the input price when
+ * the catalog has no cache price. No production billing caller may use this.
+ */
 export async function getPricing(modelName: string): Promise<ModelPricing | undefined> {
   const p = await getModelPricing(modelName);
   if (!p) return undefined;

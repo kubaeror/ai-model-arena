@@ -2,6 +2,7 @@ import { getDrizzleDb } from './index.js';
 import { runs, run_models } from './schema.js';
 import type { DbRun, DbRunModel } from './schema.js';
 import { eq, desc, gte, inArray, or } from 'drizzle-orm';
+import { chunkedIn } from './query/chunked.js';
 
 export interface RunIndexModelEntry {
   model: string;
@@ -109,7 +110,7 @@ export async function listLiveRuns(recentWindowMs: number = LIVE_RUN_WINDOW_MS):
     .orderBy(desc(runs.started_at));
   if (rows.length === 0) return [];
   const runIds = rows.map((r: DbRun) => String(r.run_id));
-  const allPm: DbRunModel[] = await db.select().from(run_models).where(inArray(run_models.run_id, runIds));
+  const allPm: DbRunModel[] = await db.select().from(run_models).where(chunkedIn(run_models.run_id, runIds));
   const pmByRun = groupPerModel(allPm);
   return rows.map((r: DbRun) => toRunRecord(r, pmByRun.get(String(r.run_id)) ?? []));
 }
