@@ -10,7 +10,7 @@ import { resolveModelForRun } from '../db/model-resolver.js';
 import { getSessionById } from '../db/query.js';
 import { initDb, getDrizzleDb } from '../db/index.js';
 import { runs, run_models } from '../db/schema.js';
-import { and, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, eq, notInArray } from 'drizzle-orm';
 import { outputRoot, dbPath, assertSafeId, modelDirSegment } from '../paths.js';
 import { isWithin } from '../sandbox/sandbox.js';
 import { createQueue } from '../queue/index.js';
@@ -394,10 +394,12 @@ export const STOP_FINALIZE_GRACE_MS = 10 * 60 * 1000;
 
 /**
  * True while a stopped run must not be finalized because its runner still owns
- * it. The cancel signal is the runner's acknowledgement channel: stopRun marks
- * the run and model rows terminal immediately, so without this gate the watcher
- * would finalize mid-turn (errored models, lost actual spend, stale artifacts).
- * A missing/unparsable stop timestamp means there is no live owner to wait for.
+ * it. The cancel signal is the runner's acknowledgement channel. Each runner
+ * writes its own model row 'stopped' when it observes cancellation and only the
+ * last ack clears the signal, so a still-set signal inside the grace window
+ * means a sibling (or this runner) may still be executing. A signal past the
+ * grace window — or a missing/unparsable stop timestamp, which means there is
+ * no live owner to wait for — releases the run for recovery.
  */
 export function isStopAwaitingRunner(
   run: { status: string; finishedAt: string | null },
@@ -407,6 +409,54 @@ export function isStopAwaitingRunner(
   if (run.status !== 'stopped' || !cancelSignalActive) return false;
   const stoppedAt = run.finishedAt ? Date.parse(run.finishedAt) : NaN;
   return Number.isFinite(stoppedAt) && now - stoppedAt < STOP_FINALIZE_GRACE_MS;
+}
+
+/**
+ * True once a stopped run is old enough that no live runner can still own it.
+ * A missing stop timestamp counts as elapsed (no owner to wait for); runs that
+ * are not stopped are never in grace.
+ */
+export function isStopGraceElapsed(
+  run: { status: string; finishedAt: string | null },
+  now = Date.now(),
+): boolean {
+  if (run.status !== 'stopped') return false;
+  const stoppedAt = run.finishedAt ? Date.parse(run.finishedAt) : NaN;
+  return !Number.isFinite(stoppedAt) || now - stoppedAt >= STOP_FINALIZE_GRACE_MS;
+}
+
+/**
+ * Dead-runner recovery: force every non-terminal model row of `runId` to
+ * 'stopped'. Only safe once the stop grace has elapsed (the runners are
+ * presumed dead). A late runner cannot overwrite the row afterwards because
+ * 'stopped' is terminal in the transition guard.
+ */
+export async function forceStopNonTerminalModels(runId: string): Promise<void> {
+  const db = getDrizzleDb();
+  await db.update(run_models)
+    .set({ status: 'stopped' })
+    .where(and(eq(run_models.run_id, runId), notInArray(run_models.status, [...TERMINAL_STATUSES])));
+}
+
+/**
+ * Shared finalize gate for the watcher, CLI waiter, and runner self-finalize.
+ * A stopped run may only finalize when every per-model row is terminal and the
+ * cancel signal is absent (or the grace window elapsed): rows are the per-model
+ * acks, so a single runner clearing the signal early must not release the run
+ * while a sibling is still executing. Past the grace window, non-terminal rows
+ * are force-stopped so a dead runner's run can still finalize. Returns true when
+ * the caller may attempt finalization.
+ */
+export async function prepareRunFinalization(runId: string): Promise<boolean> {
+  const rec = await getRunRecord(runId);
+  if (!rec) return false;
+  if (isStopAwaitingRunner(rec, await isRunCancelledSignal(runId))) return false;
+  if (await isRunCompleteByRunId(runId)) return true;
+  if (rec.status === 'stopped' && isStopGraceElapsed(rec)) {
+    await forceStopNonTerminalModels(runId);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -557,18 +607,20 @@ export function isRunCancelled(runId: string): Promise<boolean> { return isRunCa
 export function clearRunCancelled(runId: string): Promise<void> { return clearRunCancelledSignal(runId); }
 
 /** Stop a run (marks as stopped in the index and signals cancellation).
- *  A single conditional UPDATE gates the transition: 'completed' is terminal
- *  and 'finalizing' holds the finalization claim, so neither may be regressed
- *  to 'stopped' (which would let the watcher finalize again — duplicate ledger
- *  rows/notifications). When the UPDATE matches no row nothing is written.
- *  Every non-terminal model row — including a task claimed but not yet running
- *  — is terminalized, so a stop during the claimed window cannot wedge the run
- *  on isRunCompleteByRunId. */
+ *  A single conditional UPDATE gates the transition: terminal statuses
+ *  ('completed' included) and 'finalizing' hold finalization state, so neither
+ *  may be regressed to 'stopped' (which would let the watcher finalize again —
+ *  duplicate ledger rows/notifications). When the UPDATE matches no row nothing
+ *  is written.
+ *  Per-model execution rows are deliberately NOT terminalized here: each runner
+ *  owns its model row and writes 'stopped' when it observes the cancel signal
+ *  (rows are the per-model acknowledgements). A runner that dies mid-stop is
+ *  recovered by the finalize grace window, which force-stops stale rows. */
 export async function stopRun(runId: string): Promise<void> {
   const db = getDrizzleDb();
   const stopped = await db.update(runs)
     .set({ status: 'stopped', finished_at: new Date().toISOString() })
-    .where(and(eq(runs.run_id, runId), notInArray(runs.status, ['completed', 'finalizing'])))
+    .where(and(eq(runs.run_id, runId), notInArray(runs.status, [...TERMINAL_STATUSES, 'finalizing'])))
     .returning({ run_id: runs.run_id });
   if (stopped.length === 0) {
     const rec = await getRunRecord(runId);
@@ -576,9 +628,6 @@ export async function stopRun(runId: string): Promise<void> {
     return;
   }
   await markRunCancelledSignal(runId);
-  await db.update(run_models)
-    .set({ status: 'stopped' })
-    .where(and(eq(run_models.run_id, runId), inArray(run_models.status, ['running', 'unknown', 'claimed'])));
 }
 
 /** Restart a run by re-enqueuing tasks. */

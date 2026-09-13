@@ -16,6 +16,7 @@ import {
   shouldAttemptFinalize,
   isStopAwaitingRunner,
   STOP_FINALIZE_GRACE_MS,
+  prepareRunFinalization,
   finalizeRunByRunId,
   stopRun,
   restartRun,
@@ -37,6 +38,7 @@ export {
   shouldAttemptFinalize,
   isStopAwaitingRunner,
   STOP_FINALIZE_GRACE_MS,
+  prepareRunFinalization,
   finalizeRun,
   finalizeRunByRunId,
   stopRun,
@@ -78,7 +80,10 @@ export async function runScenarioForModels(opts: CliRunOptions): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let done = false;
   while (Date.now() < deadline) {
-    if (await isRunComplete(spec)) {
+    // Same gate as the watcher: a stopped run only finalizes after every model
+    // row is terminal (rows are the per-model acks) and the cancel signal is
+    // absent, unless the grace window elapsed and stale rows were force-stopped.
+    if (await prepareRunFinalization(spec.runId)) {
       done = true;
       break;
     }

@@ -12,7 +12,7 @@ import { stopRun, restartRun, registerRun, isRunCancelled, type RunSpec } from '
 
 const ORIG_ENV = { ...process.env };
 
-test('stopRun marks per-model rows terminal', async () => {
+test('stopRun marks the run stopped and leaves model rows for the runners to ack', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stoprun-'));
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
   process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
@@ -32,10 +32,47 @@ test('stopRun marks per-model rows terminal', async () => {
     const rec = await getRunRecord('stop-1');
     assert.equal(rec?.status, 'stopped');
     assert.ok(rec?.finishedAt, 'finishedAt should be set');
-    for (const m of rec?.perModel ?? []) {
-      assert.notEqual(m.status, 'running', `model ${m.model} must not stay running`);
-      assert.equal(m.status, 'stopped', `model ${m.model} should be stopped`);
-    }
+    assert.equal(await isRunCancelled('stop-1'), true, 'stop must set the cancel signal');
+    // Rows are the per-model acknowledgements: stopRun must leave them for each
+    // runner to terminalize once it observes the cancellation.
+    assert.equal(rec?.perModel[0]?.status, 'running', 'stopRun must not force-terminalize an executing row');
+
+    // The terminal guard must let the runner ack running -> stopped.
+    await transitionTaskState('stop-1', 'gpt-4o', 'stopped');
+    assert.equal((await getRunRecord('stop-1'))?.perModel[0]?.status, 'stopped', 'running -> stopped must be permitted');
+
+    // Called again on the now-stopped (terminal) run it must not move the stop
+    // timestamp that anchors the finalize grace window.
+    const finishedAt = (await getRunRecord('stop-1'))?.finishedAt;
+    await stopRun('stop-1');
+    assert.equal((await getRunRecord('stop-1'))?.finishedAt, finishedAt, 'a second stop is a no-op');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('stopRun leaves a claimed row and the runner can ack claimed -> stopped', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stoprun-claimed-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'stop-claimed', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+      perModel: [{ model: 'gpt-4o', runId: 'stop-claimed', status: 'claimed' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    await stopRun('stop-claimed');
+    assert.equal((await getRunRecord('stop-claimed'))?.perModel[0]?.status, 'claimed', 'stopRun must not touch claimed rows');
+
+    await transitionTaskState('stop-claimed', 'gpt-4o', 'stopped');
+    assert.equal((await getRunRecord('stop-claimed'))?.perModel[0]?.status, 'stopped', 'claimed -> stopped must be permitted');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });

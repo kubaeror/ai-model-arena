@@ -5,11 +5,9 @@ import { promises as fsp } from 'node:fs';
 import {
   listLiveRuns,
   getRunRecord,
-  isRunCompleteByRunId,
   finalizeRunByRunId,
   shouldAttemptFinalize,
-  isRunCancelled,
-  isStopAwaitingRunner,
+  prepareRunFinalization,
   type RunIndexRecord,
 } from '../orchestrator/orchestrator.js';
 import { type AuthConfig } from './auth.js';
@@ -83,20 +81,18 @@ export async function readLogAppend(
 }
 
 /**
- * One watcher tick for a single run. A stopped run whose cancel signal is
- * still set is owned by its runner: stopRun marks the run and model rows
- * terminal immediately, so without this gate the watcher would finalize
- * mid-turn (errored models, lost actual spend, stale artifacts). The runner
- * clears the signal after writing result.json/report.md and the terminal row;
- * a signal still set past STOP_FINALIZE_GRACE_MS means the runner died.
+ * One watcher tick for a single run, gated by prepareRunFinalization: a stopped
+ * run may finalize only when every per-model row is terminal (rows are the
+ * per-model acks, so one runner clearing the cancel signal early must not
+ * release the run) and the signal is absent or the grace window elapsed. Past
+ * the grace window stale rows are force-stopped for dead-runner recovery.
  * Returns true only when this tick won the finalization claim.
  */
 export async function attemptFinalizeCandidate(
   run: Pick<RunIndexRecord, 'runId' | 'status' | 'finishedAt'>,
   logger: Logger,
 ): Promise<boolean> {
-  if (isStopAwaitingRunner(run, await isRunCancelled(run.runId))) return false;
-  if (!(await isRunCompleteByRunId(run.runId))) return false;
+  if (!(await prepareRunFinalization(run.runId))) return false;
   return finalizeRunByRunId(run.runId, logger);
 }
 
@@ -311,11 +307,13 @@ export class LiveHub {
   }
 
   private async finalizeRuns(): Promise<void> {
-    // 'stopped' runs are included: stopRun marks their per-model rows
-    // terminal, and a stopped run whose runner died would otherwise never
-    // finalize (no aggregation, no reservation release). A stopped run whose
-    // cancel signal is still live is skipped — the runner has not finished its
-    // teardown yet (see attemptFinalizeCandidate). Stale 'finalizing' runs are
+    // 'stopped' runs are included: each runner writes its own model row
+    // 'stopped' when it observes the stop, and a stopped run whose runner died
+    // would otherwise never finalize (no aggregation, no reservation release).
+    // A stopped run whose rows are still non-terminal, or whose cancel signal
+    // is still live inside the grace window, is held (see
+    // attemptFinalizeCandidate); past the grace window its stale rows are
+    // force-stopped so the run can finalize. Stale 'finalizing' runs are
     // also included so a crash after the claim (aggregation/ledger/
     // notification) is retried instead of stranding the run; shouldAttemptFinalize
     // only admits a finalizing run whose claim exceeded FINALIZE_STALE_MS, so

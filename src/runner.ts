@@ -150,15 +150,35 @@ export async function runSuccessCriteria(
  * Queue-driven runs previously depended on the dashboard watcher polling
  * every 3s; if the dashboard was down they never finalized. finalizeRunByRunId
  * is idempotent (skips already-completed runs), so racing the watcher or a
- * CLI finalize is safe.
+ * CLI finalize is safe. prepareRunFinalization applies the shared stop gate:
+ * while a stop awaits sibling runners (non-terminal row or live signal inside
+ * the grace window) this returns false instead of finalizing mid-turn.
  */
 async function maybeFinalizeRun(runId: string, log: Logger): Promise<void> {
   try {
-    const { isRunCompleteByRunId, finalizeRunByRunId } = await import('./orchestrator/run-lifecycle.js');
-    if (!(await isRunCompleteByRunId(runId))) return;
+    const { prepareRunFinalization, finalizeRunByRunId } = await import('./orchestrator/run-lifecycle.js');
+    if (!(await prepareRunFinalization(runId))) return;
     await finalizeRunByRunId(runId, log);
   } catch (err) {
     log.warn('Self-finalize failed (non-fatal)', { runId, error: String(err) });
+  }
+}
+
+/**
+ * Per-model stop acknowledgement: rows are the acks. The cancel signal stays
+ * set until every model row is terminal, so sibling runners keep observing the
+ * stop and the watcher/CLI keep holding the run; the runner that writes the
+ * last terminal row clears it. Idempotent, and a no-op for a run without a
+ * live cancel signal.
+ */
+async function acknowledgeStop(runId: string, log: Logger): Promise<void> {
+  try {
+    if (!(await isRunCancelled(runId))) return;
+    const { isRunCompleteByRunId } = await import('./orchestrator/run-lifecycle.js');
+    if (!(await isRunCompleteByRunId(runId))) return;
+    await clearRunCancelled(runId);
+  } catch (err) {
+    log.warn('Failed to acknowledge stop (non-fatal)', { runId, error: String(err) });
   }
 }
 
@@ -329,10 +349,17 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
       const startedAt = new Date();
 
-      // Check per-run cancellation before starting execution
+      // Check per-run cancellation before starting execution. The runner owns
+      // its model row: ack the stop by writing its own terminal state, then
+      // release the cancel signal only if every sibling has also acked.
       if (await isRunCancelled(runId)) {
         logger.info('Run cancelled before execution', { runId, taskId: task.taskId });
-        await clearRunCancelled(runId);
+        try {
+          await transitionTaskState(runId, task.model, 'stopped', runnerId);
+        } catch (e) {
+          logger.warn('Failed to write stopped state for cancelled task', { error: String(e) });
+        }
+        await acknowledgeStop(runId, logger);
         await queue.ack(task._redisId ?? task.taskId);
         continue;
       }
@@ -426,6 +453,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
             logger.error('transitionTaskState to "failed" failed for missing model — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
           }
+          // A failed terminal row is this model's stop ack too: if it was the
+          // last non-terminal sibling, clear the signal so the run can finalize.
+          await acknowledgeStop(runId, logger);
           void maybeFinalizeRun(runId, logger).catch(() => undefined);
         }
         await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
@@ -539,6 +569,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
         taskCounted = true;
         tasksFailed.inc();
+        await acknowledgeStop(runId, logger);
         await queue.ack(task!._redisId ?? task!.taskId);
         void maybeFinalizeRun(runId, logger).catch(() => undefined);
         continue;
@@ -799,9 +830,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       } catch { /* best-effort */ }
 
       // A run stopped mid-execution stays stopped: stopRun records the cancel
-      // signal and a terminal 'stopped' index row, and finalizeRunByRunId
-      // writes the index directly (bypassing transitionTaskState's terminal
-      // guard), so success finalization is skipped entirely below.
+      // signal, this runner records its own terminal row, and finalization is
+      // gated until every model row is terminal, so success completion is
+      // skipped entirely below.
       const runStopped = (await isRunCancelled(modelRunId))
         || (await getRunRecord(modelRunId))?.status === 'stopped';
 
@@ -839,12 +870,12 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           { error: manifestErr instanceof Error ? manifestErr.message : String(manifestErr) });
       }
 
-      // Runner ownership acknowledgement for the dashboard watcher: it holds a
-      // stopped run while the cancel signal is set, so clear the signal only
-      // now — after the terminal 'stopped' row and result.json/report.md/
-      // manifest are durable — never mid-teardown.
+      // Per-model stop acknowledgement: the 'stopped' row and its artifacts are
+      // durable now, so release the cancel signal if this was the last
+      // non-terminal model. Until then it stays set so the watcher, CLI, and
+      // sibling runners keep treating the stop as in flight.
       if (runStopped) {
-        await clearRunCancelled(modelRunId);
+        await acknowledgeStop(modelRunId, logger);
       }
 
       taskCounter.inc({ model: modelName, scenario: scenarioName, status: finalStatus });
@@ -893,6 +924,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
           logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: failedTask.taskId, modelRunId: failedRunId, ...detail });
         }
+        // A terminated model is a stop ack even on failure: if it was the last
+        // sibling, clear the signal so the run is not held to the grace window.
+        await acknowledgeStop(failedRunId, logger);
         // nack requeues below the DLQ threshold — count failed + duration
         // only when the nack dead-letters (terminal).
         if (!taskCounted && isTerminalFailure(failedTask.attempts)) {
