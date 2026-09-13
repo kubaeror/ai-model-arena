@@ -1,6 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import http from 'node:http';
+import { promises as dnsPromises } from 'node:dns';
 import type { AddressInfo } from 'node:net';
 import { webFetch, webSearch } from '../../src/tools/web.js';
 import type { ToolExecutionContext } from '../../src/types.js';
@@ -129,5 +130,88 @@ describe('web content processing', () => {
     const r = await webFetch({ url: 'http://10.0.0.1/admin' }, makeCtx());
     assert.strictEqual(r.isError, true);
     assert.ok(r.content.includes('blocked'));
+  });
+});
+
+// ── bounded response reads ──────────────────────────────────────────────────
+
+function streamingResponse(totalChunks: number, chunk: string, contentType: string) {
+  let pulls = 0;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulls >= totalChunks) {
+        controller.close();
+        return;
+      }
+      pulls += 1;
+      controller.enqueue(encoder.encode(chunk));
+    },
+  });
+  return {
+    response: new Response(stream, { status: 200, headers: { 'content-type': contentType } }),
+    pulls: () => pulls,
+  };
+}
+
+function stubPublicDns(): () => void {
+  const orig = dnsPromises.lookup;
+  (dnsPromises as { lookup: unknown }).lookup = async () => [{ address: '93.184.216.34', family: 4 }];
+  return () => { (dnsPromises as { lookup: unknown }).lookup = orig; };
+}
+
+describe('bounded response reads', () => {
+  it('caps an oversized JSON body without reading it fully', async () => {
+    const origFetch = globalThis.fetch;
+    const { response, pulls } = streamingResponse(100, 'x'.repeat(10_000), 'application/json');
+    globalThis.fetch = (async () => response) as typeof fetch;
+    const restoreDns = stubPublicDns();
+    try {
+      const r = await webFetch({ url: 'https://example.test/data', maxBytes: 20_000 }, makeCtx());
+      assert.strictEqual(r.isError, false);
+      assert.ok(pulls() < 100, `must stop reading at the cap (pulled ${pulls()} of 100 chunks)`);
+      assert.ok(r.content.length < 25_000, `content must stay near the cap, got ${r.content.length}`);
+      assert.match(r.content, /truncated/);
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreDns();
+    }
+  });
+
+  it('caps an oversized HTML body without reading it fully', async () => {
+    const origFetch = globalThis.fetch;
+    const { response, pulls } = streamingResponse(100, `<p>${'h'.repeat(9_990)}</p>`, 'text/html');
+    globalThis.fetch = (async () => response) as typeof fetch;
+    const restoreDns = stubPublicDns();
+    try {
+      const r = await webFetch({ url: 'https://example.test/page', maxBytes: 20_000 }, makeCtx());
+      assert.strictEqual(r.isError, false);
+      assert.ok(pulls() < 100, `must stop reading at the cap (pulled ${pulls()} of 100 chunks)`);
+      assert.ok(r.content.length < 25_000, `content must stay near the cap, got ${r.content.length}`);
+      assert.match(r.content, /truncated/);
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreDns();
+    }
+  });
+
+  it('caps an oversized custom search backend body', async () => {
+    const prevUrl = process.env.SEARCH_API_URL;
+    process.env.SEARCH_API_URL = 'https://search.example.test/?q={query}';
+    const origFetch = globalThis.fetch;
+    const { response, pulls } = streamingResponse(100, 'y'.repeat(1_000), 'text/plain');
+    globalThis.fetch = (async () => response) as typeof fetch;
+    const restoreDns = stubPublicDns();
+    try {
+      const r = await webSearch({ query: 'test' }, makeCtx());
+      assert.strictEqual(r.isError, false);
+      assert.ok(pulls() < 100, `must stop reading at the cap (pulled ${pulls()} of 100 chunks)`);
+      assert.match(r.content, /truncated/);
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreDns();
+      if (prevUrl === undefined) delete process.env.SEARCH_API_URL;
+      else process.env.SEARCH_API_URL = prevUrl;
+    }
   });
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { readFile, writeFile, listFiles, runShellCommand, editFile, globFiles } from '../../src/tools/executors.js';
+import { readFile, writeFile, listFiles, runShellCommand, editFile, globFiles, buildToolExecutors } from '../../src/tools/executors.js';
 import type { ToolExecutionContext } from '../../src/types.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-exec-'));
@@ -386,5 +386,97 @@ describe('hardlink write containment', () => {
     const r = await editFile({ path: 'hardlink-edited.txt', old_string: 'hello', new_string: 'goodbye' }, ctx);
     assert.strictEqual(r.isError, false);
     assert.strictEqual(fs.readFileSync(path.join(sandbox, 'hardlink-edited.txt'), 'utf8'), 'goodbye world');
+  });
+});
+
+// ── run_shell_command timeout & maxBuffer observability ─────────────────────
+
+describe('runShellCommand resource limits', () => {
+  before(() => fs.mkdirSync(sandbox, { recursive: true }));
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  function limitedCtx(policy: 'strict' | 'permissive', maxShellOutputBytes = ctx.maxShellOutputBytes): ToolExecutionContext {
+    return { ...ctx, shellTimeoutMs: 250, maxShellOutputBytes, shellPolicy: policy };
+  }
+
+  it('reports a timed-out command as an error (strict/execFile)', async () => {
+    const started = Date.now();
+    const r = await runShellCommand({ command: 'sleep 5' }, limitedCtx('strict'));
+    const elapsed = Date.now() - started;
+    assert.strictEqual(r.isError, true, `timeout must be an error, got: ${r.content}`);
+    assert.match(r.content, /timed out after 250ms/);
+    assert.ok(elapsed < 5000, `must not wait for the command to finish (${elapsed}ms)`);
+  });
+
+  it('reports a timed-out command as an error (permissive/exec)', async () => {
+    const started = Date.now();
+    const r = await runShellCommand({ command: 'sleep 5' }, limitedCtx('permissive'));
+    const elapsed = Date.now() - started;
+    assert.strictEqual(r.isError, true, `timeout must be an error, got: ${r.content}`);
+    assert.match(r.content, /timed out after 250ms/);
+    assert.ok(elapsed < 5000, `must not wait for the command to finish (${elapsed}ms)`);
+  });
+
+  it('returns truncated output instead of failing when maxBuffer is exceeded', async () => {
+    const r = await runShellCommand(
+      { command: `${process.execPath} -e "process.stdout.write('x'.repeat(200000))"` },
+      limitedCtx('permissive', 4096),
+    );
+    assert.strictEqual(r.isError, false, `maxBuffer overflow is a truncated success, got: ${r.content}`);
+    assert.match(r.content, /\(output truncated at 4096 bytes\)/);
+  });
+});
+
+// ── search_code resource bounds ─────────────────────────────────────────────
+
+describe('search_code', () => {
+  const search = buildToolExecutors()['search_code']!;
+
+  before(() => {
+    fs.mkdirSync(sandbox, { recursive: true });
+    fs.writeFileSync(path.join(sandbox, 'search-basic.txt'), 'alpha\nBeta\nneedle here\ngamma needle\n');
+  });
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('finds plain substring matches with line numbers', async () => {
+    const r = await search({ query: 'needle' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.match(r.content, /search-basic\.txt:3: needle here/);
+    assert.match(r.content, /search-basic\.txt:4: gamma needle/);
+  });
+
+  it('still supports safe regular expressions', async () => {
+    const r = await search({ query: 'n(e+)dle', regex: true }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.match(r.content, /needle/);
+  });
+
+  it('rejects a catastrophic nested-quantifier regex instead of hanging', async () => {
+    fs.writeFileSync(path.join(sandbox, 'search-redos.txt'), `${'a'.repeat(40)}!\n`);
+    const started = Date.now();
+    const r = await search({ query: '(a+)+$', regex: true }, ctx);
+    const elapsed = Date.now() - started;
+    assert.strictEqual(r.isError, true, `pathological regex must be rejected, got: ${r.content}`);
+    assert.match(r.content, /catastrophic|backtracking/i);
+    assert.ok(elapsed < 5000, `must return promptly, took ${elapsed}ms`);
+  });
+
+  it('aborts a regex search when the wall-clock budget is exceeded', async () => {
+    // Deterministic budget trip: force the clock past the deadline without
+    // depending on machine speed. The search runs synchronously, so the patch
+    // cannot affect unrelated work.
+    const realNow = Date.now;
+    let calls = 0;
+    Date.now = () => {
+      calls += 1;
+      return realNow() + (calls > 1 ? 60_000 : 0);
+    };
+    try {
+      const r = await search({ query: 'needle', regex: true }, ctx);
+      assert.strictEqual(r.isError, true, `budget must abort the search, got: ${r.content}`);
+      assert.match(r.content, /budget/i);
+    } finally {
+      Date.now = realNow;
+    }
   });
 });

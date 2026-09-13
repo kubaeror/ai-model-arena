@@ -7,6 +7,7 @@ import type { ToolExecutor } from '../types.js';
 const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_FETCH_BYTES = 100_000;
 const MAX_FETCH_BYTES = 1_048_576; // 1 MiB hard cap
+const MAX_SEARCH_BODY_BYTES = 64 * 1024;
 
 // ── argument schemas ─────────────────────────────────────────────────────────
 
@@ -55,6 +56,44 @@ function stripHtml(html: string): string {
     .replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^\s+|\s+$/g, '');
+}
+
+interface CappedBody {
+  text: string;
+  truncated: boolean;
+}
+
+/**
+ * Read at most `maxBytes` from a Response body, then cancel the stream. Keeps
+ * the byte count bounded before any char-level truncation runs.
+ */
+async function readCapped(response: Response, maxBytes: number): Promise<CappedBody> {
+  const body = response.body;
+  if (!body) return { text: '', truncated: false };
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let read = 0;
+  let truncated = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      if (read + value.byteLength > maxBytes) {
+        const keep = Math.max(0, maxBytes - read);
+        text += decoder.decode(value.subarray(0, keep), { stream: true });
+        truncated = true;
+        break;
+      }
+      read += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return { text, truncated };
 }
 
 /**
@@ -184,15 +223,10 @@ export const webFetch: ToolExecutor = async (args, ctx) => {
   }
 
   const contentType = response.headers.get('content-type') ?? '';
-  let body: string;
-
-  if (contentType.includes('application/json')) {
-    body = await response.text();
-    if (body.length > maxToRead) body = body.slice(0, maxToRead) + '\n…[truncated]';
-  } else {
-    const raw = await response.text();
-    body = stripHtml(raw);
-    if (body.length > maxToRead) body = body.slice(0, maxToRead) + '\n…[truncated]';
+  const { text: raw, truncated } = await readCapped(response, maxToRead);
+  let body = contentType.includes('application/json') ? raw : stripHtml(raw);
+  if (truncated || body.length > maxToRead) {
+    body = body.slice(0, maxToRead) + '\n…[truncated]';
   }
 
   const header = `[HTTP ${response.status} ${response.statusText}] ${urlCheck.url.toString()}`;
@@ -246,8 +280,9 @@ export const webSearch: ToolExecutor = async (args, ctx) => {
       } finally {
         clearTimeout(timer);
       }
-      const body = await response.text();
-      return { content: `[HTTP ${response.status}] ${url}\n${body.length > 5000 ? body.slice(0, 5000) + '\n…[truncated]' : body}`, isError: !response.ok };
+      const { text: body, truncated } = await readCapped(response, MAX_SEARCH_BODY_BYTES);
+      const out = truncated || body.length > 5000 ? body.slice(0, 5000) + '\n…[truncated]' : body;
+      return { content: `[HTTP ${response.status}] ${url}\n${out}`, isError: !response.ok };
     } catch (err) {
       return { content: `Search API error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
     }
@@ -257,7 +292,8 @@ export const webSearch: ToolExecutor = async (args, ctx) => {
   const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
   try {
     const response = await ssrfSafeFetch(new URL(ddgUrl), DEFAULT_FETCH_TIMEOUT_MS);
-    const json: Record<string, unknown> = await response.json() as Record<string, unknown>;
+    const { text: rawJson } = await readCapped(response, MAX_FETCH_BYTES);
+    const json: Record<string, unknown> = JSON.parse(rawJson) as Record<string, unknown>;
 
     const lines: string[] = [];
 

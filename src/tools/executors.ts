@@ -16,6 +16,7 @@ import type { ToolExecutor, ToolExecutorMap } from '../types.js';
 const MAX_READ_BYTES = 200 * 1024; // 200 KB per read
 const MAX_LIST_FILES = 5000;
 const MAX_SEARCH_MATCHES = 200;
+const SEARCH_REGEX_BUDGET_MS = 2000;
 const MAX_WRITE_BYTES = 5 * 1024 * 1024; // 5 MB per write
 
 // Tool argument Zod schemas
@@ -166,20 +167,57 @@ const spawnCmd = (): ReturnType<typeof exec> => {
     const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
       let stdout = '';
       let stderr = '';
-      proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      proc.on('close', (code) => {
-        if (code === 0) resolve({ stdout, stderr });
-        else reject(Object.assign(new Error(`exit code ${code}`), { stdout, stderr, code }));
-      });
-      proc.on('error', reject);
-      const timer = setTimeout(() => {
-        // Kill entire process tree on timeout — send SIGKILL to process group
+      let outputBytes = 0;
+      let maxBufferExceeded = false;
+      let timedOut = false;
+
+      const killGroup = (): void => {
         try {
           if (proc.pid) process.kill(-proc.pid, 'SIGKILL');
         } catch { /* already dead */ }
+      };
+
+      const collect = (chunk: Buffer, toStderr: boolean): void => {
+        if (maxBufferExceeded) return;
+        outputBytes += chunk.length;
+        if (outputBytes > ctx.maxShellOutputBytes) {
+          // Stop accumulating and kill the tree: Node's own maxBuffer kill is
+          // indistinguishable from a timeout at the ChildProcess level, so the
+          // byte counter is the source of truth for the maxBuffer branch.
+          maxBufferExceeded = true;
+          killGroup();
+          return;
+        }
+        if (toStderr) stderr += chunk.toString();
+        else stdout += chunk.toString();
+      };
+
+      proc.stdout?.on('data', (d: Buffer) => collect(d, false));
+      proc.stderr?.on('data', (d: Buffer) => collect(d, true));
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        killGroup();
       }, ctx.shellTimeoutMs);
-      proc.on('close', () => clearTimeout(timer));
+
+      proc.on('close', (code, signal) => {
+        clearTimeout(timer);
+        if (maxBufferExceeded) {
+          reject(Object.assign(new Error('output exceeded maxBuffer'), {
+            stdout, stderr, code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', signal,
+          }));
+        } else if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(Object.assign(new Error(`exit code ${code}`), {
+            stdout, stderr, code, signal,
+            // `proc.killed` is only set by Node's own kill (timeout / maxBuffer);
+            // `timedOut` covers our process-group kill.
+            killed: proc.killed === true || timedOut || signal === 'SIGKILL',
+          }));
+        }
+      });
+      proc.on('error', reject);
     });
     return { content: formatShell(stdout, stderr, 0, ctx.maxShellOutputBytes), isError: false };
   } catch (err) {
@@ -191,21 +229,21 @@ const spawnCmd = (): ReturnType<typeof exec> => {
       signal?: string;
     };
 
-    // Command exceeded the time limit.
-    if (e.killed || e.signal === 'SIGTERM') {
-      return {
-        content: `Error: command timed out after ${ctx.shellTimeoutMs}ms.\n` +
-          formatShell(e.stdout ?? '', e.stderr ?? '', null, ctx.maxShellOutputBytes),
-        isError: true,
-      };
-    }
-
     // Output exceeded maxBuffer — return what we have, it's still useful.
     if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
       return {
         content: `(output truncated at ${ctx.maxShellOutputBytes} bytes)\n` +
           formatShell(e.stdout ?? '', e.stderr ?? '', 'maxbuffer', ctx.maxShellOutputBytes),
         isError: false,
+      };
+    }
+
+    // Command exceeded the time limit.
+    if (e.killed || e.signal === 'SIGTERM') {
+      return {
+        content: `Error: command timed out after ${ctx.shellTimeoutMs}ms.\n` +
+          formatShell(e.stdout ?? '', e.stderr ?? '', null, ctx.maxShellOutputBytes),
+        isError: true,
       };
     }
 
@@ -230,6 +268,80 @@ const spawnCmd = (): ReturnType<typeof exec> => {
 };
 
 // ── search_code ──────────────────────────────────────────────────────────────
+
+interface RegexGroupState {
+  hasUnboundedQuantifier: boolean;
+  hasAlternation: boolean;
+}
+
+/** Return the end index of an unbounded quantifier (`*`, `+`, `{n,}`) at `index`, else null. */
+function unboundedQuantifierAt(pattern: string, index: number): { end: number } | null {
+  const ch = pattern[index];
+  if (ch === '*' || ch === '+') return { end: index };
+  if (ch !== '{') return null;
+  const match = /^\{(\d+)(,(\d*))?\}/.exec(pattern.slice(index));
+  if (!match) return null;
+  const digitsAfterComma = match[3];
+  const isUnbounded = match[2] !== undefined && (digitsAfterComma === undefined || digitsAfterComma === '');
+  return isUnbounded ? { end: index + match[0].length - 1 } : null;
+}
+
+/**
+ * Reject regex shapes that are classically exponential to backtrack. The
+ * wall-clock budget is checked between lines, so it cannot interrupt a single
+ * catastrophic match, and this module must not use worker threads — refusing
+ * the shape is the only reliable bound. Deliberately conservative: a
+ * quantified group that contains a quantifier (`(a+)+`) or a top-level
+ * alternation (`(a|aa)+`) is refused even when a particular input is fast.
+ */
+function hasCatastrophicBacktrackingShape(pattern: string): boolean {
+  const stack: RegexGroupState[] = [{ hasUnboundedQuantifier: false, hasAlternation: false }];
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (ch === '[') {
+      i += 1;
+      if (pattern[i] === '^') i += 1;
+      if (pattern[i] === ']') i += 1;
+      while (i < pattern.length && pattern[i] !== ']') {
+        if (pattern[i] === '\\') i += 1;
+        i += 1;
+      }
+      continue;
+    }
+    const current = stack[stack.length - 1]!;
+    if (ch === '(') {
+      stack.push({ hasUnboundedQuantifier: false, hasAlternation: false });
+      continue;
+    }
+    if (ch === ')') {
+      const group = stack.pop()!;
+      const parent = stack[stack.length - 1];
+      if (!parent) return false; // unbalanced — the RegExp constructor already rejected it
+      const quantifier = unboundedQuantifierAt(pattern, i + 1);
+      if (quantifier && (group.hasUnboundedQuantifier || group.hasAlternation)) return true;
+      if (quantifier) parent.hasUnboundedQuantifier = true;
+      else parent.hasUnboundedQuantifier ||= group.hasUnboundedQuantifier;
+      continue;
+    }
+    if (ch === '|') {
+      current.hasAlternation = true;
+      continue;
+    }
+    if (ch === '*' || ch === '+' || ch === '{') {
+      const quantifier = unboundedQuantifierAt(pattern, i);
+      if (quantifier) {
+        current.hasUnboundedQuantifier = true;
+        i = quantifier.end;
+      }
+    }
+  }
+  return false;
+}
+
 const searchCode: ToolExecutor = async (args, ctx) => {
   const v = validateArgs(SearchCodeArgs, args);
   if (!v.ok) return { content: v.error, isError: true };
@@ -247,13 +359,26 @@ const searchCode: ToolExecutor = async (args, ctx) => {
     } catch (e) {
       return { content: `Error: invalid regular expression: ${(e as Error).message}`, isError: true };
     }
+    if (hasCatastrophicBacktrackingShape(query)) {
+      return {
+        content: 'Error: regular expression rejected: nested or repeated quantifiers can cause catastrophic backtracking. Rewrite the pattern to avoid ambiguous repetition.',
+        isError: true,
+      };
+    }
   }
 
   const files = walkFiles(ctx.sandboxDir, { exclude: [...IGNORE_DIRS] }).slice(0, MAX_LIST_FILES);
   const matches: string[] = [];
   const lowerQuery = query.toLowerCase();
+  const startedAt = Date.now();
 
   for (const file of files) {
+    if (re && Date.now() - startedAt > SEARCH_REGEX_BUDGET_MS) {
+      return {
+        content: `Error: regex search exceeded the ${SEARCH_REGEX_BUDGET_MS}ms budget; narrow the pattern or search a smaller directory.`,
+        isError: true,
+      };
+    }
     let text: string;
     try {
       text = fs.readFileSync(file, 'utf8');
@@ -262,6 +387,12 @@ const searchCode: ToolExecutor = async (args, ctx) => {
     }
     const lines = text.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
+      if (re && Date.now() - startedAt > SEARCH_REGEX_BUDGET_MS) {
+        return {
+          content: `Error: regex search exceeded the ${SEARCH_REGEX_BUDGET_MS}ms budget; narrow the pattern or search a smaller directory.`,
+          isError: true,
+        };
+      }
       const line = lines[i]!;
       const hit = re
         ? re.test(line)
