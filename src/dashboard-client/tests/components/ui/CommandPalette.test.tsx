@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { CommandPalette, type CommandItem } from '../../../src/components/CommandPalette';
+import type { ComponentProps } from 'react';
+import { CommandPalette } from '../../../src/components/CommandPalette';
+
+type CommandItem = ComponentProps<typeof CommandPalette>['filtered'][number];
 
 function renderPalette(overrides: { query?: string; onClose?: () => void } = {}) {
   const filtered: CommandItem[] = [
@@ -19,7 +22,6 @@ function renderPalette(overrides: { query?: string; onClose?: () => void } = {})
         onQueryChange={vi.fn()}
         filtered={filtered}
         selectedIndex={0}
-        selected={filtered[0]}
         inputRef={inputRef}
         onKeyDown={vi.fn()}
         onSelect={vi.fn()}
@@ -41,7 +43,6 @@ describe('CommandPalette', () => {
           onQueryChange={vi.fn()}
           filtered={filtered}
           selectedIndex={0}
-          selected={undefined}
           inputRef={inputRef}
           onKeyDown={vi.fn()}
           onSelect={vi.fn()}
@@ -81,7 +82,6 @@ describe('CommandPalette', () => {
           onQueryChange={vi.fn()}
           filtered={filtered}
           selectedIndex={0}
-          selected={undefined}
           inputRef={inputRef}
           onKeyDown={vi.fn()}
           onSelect={vi.fn()}

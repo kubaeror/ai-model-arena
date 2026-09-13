@@ -111,7 +111,6 @@ export function useCommandPalette() {
     selectedIndex,
     setSelectedIndex,
     filtered,
-    selected,
     inputRef,
     handleKeyDown,
     execute,

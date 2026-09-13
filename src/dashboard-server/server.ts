@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import http from 'node:http';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -111,13 +110,6 @@ async function start(): Promise<void> {
   const corsOrigins = allowedOrigins.length
     ? allowedOrigins
     : ['http://localhost:4000', 'http://127.0.0.1:4000'];
-
-  // ── Correlation ID ──────────────────────────────────────────────────────
-  app.use((req, _res, next) => {
-    (req as AuthedRequest).correlationId = (req.headers['x-request-id'] as string) ?? crypto.randomUUID();
-    (req as AuthedRequest).clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.ip ?? '';
-    next();
-  });
 
   app.use(cors({ origin: corsOrigins, credentials: true }));
   app.use(helmet({
