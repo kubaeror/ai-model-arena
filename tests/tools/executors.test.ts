@@ -480,3 +480,48 @@ describe('search_code', () => {
     }
   });
 });
+
+// ── search_code regex shape guard ───────────────────────────────────────────
+
+describe('search_code regex shape guard', () => {
+  const search = buildToolExecutors()['search_code']!;
+  const shapeSandbox = path.join(tmp, 'shape-guard');
+  const shapeCtx: ToolExecutionContext = { ...ctx, sandboxDir: shapeSandbox };
+
+  before(() => {
+    fs.mkdirSync(shapeSandbox, { recursive: true });
+    // Short a-run only: if the guard regresses these inputs still finish fast.
+    fs.writeFileSync(path.join(shapeSandbox, 'small.txt'), `${'a'.repeat(12)}!\n`);
+  });
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  const accepted = ['(foo|bar)+', '(a|b)+', '[ab]+', 'a+', '(ab)*', '([ab]|c)+', '((foo|bar))+'];
+  for (const query of accepted) {
+    it(`accepts ${query}`, async () => {
+      const r = await search({ query, regex: true }, shapeCtx);
+      assert.strictEqual(r.isError, false, `expected ${query} to be accepted, got: ${r.content}`);
+    });
+  }
+
+  const rejected = [
+    '(a+)+$',
+    '((a|aa))+$',
+    '(a|a)+',
+    '(a|aa)+',
+    '(a+){2,}',
+    '((a+))+$',
+    '(a|ab)+',
+    '(\\.|.)+',
+  ];
+  for (const query of rejected) {
+    it(`rejects ${query}`, async () => {
+      const r = await search({ query, regex: true }, shapeCtx);
+      assert.strictEqual(r.isError, true, `expected ${query} to be rejected, got: ${r.content}`);
+      assert.match(r.content, /catastrophic|backtracking/i);
+      assert.ok(
+        r.content.includes(query.slice(0, -1)),
+        `message must quote the offending group, got: ${r.content}`,
+      );
+    });
+  }
+});

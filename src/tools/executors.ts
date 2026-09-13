@@ -269,9 +269,161 @@ const spawnCmd = (): ReturnType<typeof exec> => {
 
 // ── search_code ──────────────────────────────────────────────────────────────
 
+// Regex matching is synchronous, so the wall-clock budget cannot interrupt a
+// single catastrophic match; refusing dangerous shapes up front is the bound.
+// The analysis is deliberately shallow: it tracks quantifiers and alternations
+// per group and only trusts alternation branches whose first characters are
+// provably disjoint. Anything it cannot prove is treated as ambiguous, so the
+// failure mode is a false rejection, never a hang.
+
+type CharRange = readonly [number, number];
+type CharSet = readonly CharRange[];
+
+const DIGIT_SET: CharSet = [[0x30, 0x39]];
+const WORD_SET: CharSet = [[0x30, 0x39], [0x41, 0x5a], [0x5f, 0x5f], [0x61, 0x7a]];
+const SPACE_SET: CharSet = [
+  [0x09, 0x0d], [0x20, 0x20], [0xa0, 0xa0], [0x1680, 0x1680],
+  [0x2000, 0x200a], [0x2028, 0x2029], [0x202f, 0x202f], [0x205f, 0x205f],
+  [0x3000, 0x3000], [0xfeff, 0xfeff],
+];
+
+function complementCharSet(ranges: CharSet): CharSet {
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+  const out: CharRange[] = [];
+  let next = 0;
+  for (const [lo, hi] of sorted) {
+    if (lo > next) out.push([next, lo - 1]);
+    next = Math.max(next, hi + 1);
+  }
+  if (next <= 0xffff) out.push([next, 0xffff]);
+  return out;
+}
+
+const ESCAPE_SETS: Record<string, CharSet> = {
+  d: DIGIT_SET,
+  D: complementCharSet(DIGIT_SET),
+  w: WORD_SET,
+  W: complementCharSet(WORD_SET),
+  s: SPACE_SET,
+  S: complementCharSet(SPACE_SET),
+  n: [[0x0a, 0x0a]],
+  r: [[0x0d, 0x0d]],
+  t: [[0x09, 0x09]],
+  f: [[0x0c, 0x0c]],
+  v: [[0x0b, 0x0b]],
+};
+
+function singleCharSet(code: number): CharSet {
+  return [[code, code]];
+}
+
+/** Resolve the escape at `index` (a backslash) to the characters it can start a match with, or null when not understood. */
+function parseEscapeSet(pattern: string, index: number): { set: CharSet | null; end: number } {
+  const at = index + 1;
+  const ch = pattern[at];
+  if (ch === undefined) return { set: null, end: at };
+  const known = ESCAPE_SETS[ch];
+  if (known) return { set: known, end: at };
+  if (ch === 'x') {
+    const hex = pattern.slice(at + 1, at + 3);
+    if (/^[0-9a-fA-F]{2}$/.test(hex)) return { set: singleCharSet(parseInt(hex, 16)), end: at + 2 };
+    return { set: null, end: at };
+  }
+  if (ch === 'u') {
+    // Only the fixed-width form; without the u flag `\u{...}` is not a code-point escape.
+    const hex = pattern.slice(at + 1, at + 5);
+    if (/^[0-9a-fA-F]{4}$/.test(hex)) return { set: singleCharSet(parseInt(hex, 16)), end: at + 4 };
+    return { set: null, end: at };
+  }
+  if (/[A-Za-z0-9]/.test(ch)) return { set: null, end: at };
+  return { set: singleCharSet(ch.charCodeAt(0)), end: at };
+}
+
+interface ClassAtom {
+  single: number | null;
+  set: CharSet | null;
+  end: number;
+}
+
+function parseClassAtom(pattern: string, index: number): ClassAtom {
+  const ch = pattern[index]!;
+  if (ch !== '\\') {
+    const code = ch.charCodeAt(0);
+    return { single: code, set: singleCharSet(code), end: index };
+  }
+  const esc = parseEscapeSet(pattern, index);
+  const first = esc.set?.[0];
+  const single = esc.set && esc.set.length === 1 && first !== undefined && first[0] === first[1] ? first[0] : null;
+  return { single, set: esc.set, end: esc.end };
+}
+
+/** Parse the character class at `start` (a `[`); null set means it was not understood. */
+function parseCharClass(pattern: string, start: number): { set: CharSet | null; end: number } {
+  let i = start + 1;
+  let negated = false;
+  if (pattern[i] === '^') {
+    negated = true;
+    i += 1;
+  }
+  if (pattern[i] === ']') i += 1;
+  const ranges: CharRange[] = [];
+  let understood = true;
+  while (i < pattern.length && pattern[i] !== ']') {
+    const a = parseClassAtom(pattern, i);
+    const next = a.end + 1;
+    if (a.single !== null && pattern[next] === '-' && next + 1 < pattern.length && pattern[next + 1] !== ']') {
+      const b = parseClassAtom(pattern, next + 1);
+      if (b.single === null) understood = false;
+      else ranges.push([a.single, b.single]);
+      i = b.end + 1;
+      continue;
+    }
+    if (a.set) ranges.push(...a.set);
+    else understood = false;
+    i = next;
+  }
+  if (!understood) return { set: null, end: i };
+  return { set: negated ? complementCharSet(ranges) : ranges, end: i };
+}
+
+function charSetsDisjoint(a: CharSet, b: CharSet): boolean {
+  return !a.some(([a0, a1]) => b.some(([b0, b1]) => a0 <= b1 && b0 <= a1));
+}
+
+function branchFirstSetsDisjoint(sets: CharSet[]): boolean {
+  for (let i = 0; i < sets.length; i++) {
+    for (let j = i + 1; j < sets.length; j++) {
+      if (!charSetsDisjoint(sets[i]!, sets[j]!)) return false;
+    }
+  }
+  return true;
+}
+
 interface RegexGroupState {
+  start: number;
   hasUnboundedQuantifier: boolean;
-  hasAlternation: boolean;
+  hasAmbiguousAlternation: boolean;
+  first: CharSet | null;
+  branchFirst: CharSet | null | undefined; // undefined = the current branch has no atom yet
+  branchFirsts: (CharSet | null)[];
+  sawAlternation: boolean;
+}
+
+function newGroupState(start: number): RegexGroupState {
+  return {
+    start,
+    hasUnboundedQuantifier: false,
+    hasAmbiguousAlternation: false,
+    first: null,
+    branchFirst: undefined,
+    branchFirsts: [],
+    sawAlternation: false,
+  };
+}
+
+interface RegexShapeFinding {
+  kind: 'nested-quantifier' | 'ambiguous-alternation';
+  construct: string;
 }
 
 /** Return the end index of an unbounded quantifier (`*`, `+`, `{n,}`) at `index`, else null. */
@@ -287,48 +439,78 @@ function unboundedQuantifierAt(pattern: string, index: number): { end: number } 
 }
 
 /**
- * Reject regex shapes that are classically exponential to backtrack. The
- * wall-clock budget is checked between lines, so it cannot interrupt a single
- * catastrophic match, and this module must not use worker threads — refusing
- * the shape is the only reliable bound. Deliberately conservative: a
- * quantified group that contains a quantifier (`(a+)+`) or a top-level
- * alternation (`(a|aa)+`) is refused even when a particular input is fast.
+ * Find the first quantified group that can backtrack exponentially: a nested
+ * unbounded quantifier (`(a+)+`) or an ambiguous alternation, including one
+ * hidden behind wrapper groups (`((a|aa))+`). Alternations whose branches
+ * start with provably disjoint characters (`(foo|bar)+`) are permitted.
  */
-function hasCatastrophicBacktrackingShape(pattern: string): boolean {
-  const stack: RegexGroupState[] = [{ hasUnboundedQuantifier: false, hasAlternation: false }];
+function findCatastrophicRegexShape(pattern: string): RegexShapeFinding | null {
+  const stack: RegexGroupState[] = [newGroupState(0)];
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
+    const current = stack[stack.length - 1]!;
+
     if (ch === '\\') {
-      i += 1;
+      const esc = parseEscapeSet(pattern, i);
+      if (current.branchFirst === undefined) current.branchFirst = esc.set;
+      i = esc.end;
       continue;
     }
     if (ch === '[') {
-      i += 1;
-      if (pattern[i] === '^') i += 1;
-      if (pattern[i] === ']') i += 1;
-      while (i < pattern.length && pattern[i] !== ']') {
-        if (pattern[i] === '\\') i += 1;
-        i += 1;
-      }
+      const cls = parseCharClass(pattern, i);
+      if (current.branchFirst === undefined) current.branchFirst = cls.set;
+      i = cls.end;
       continue;
     }
-    const current = stack[stack.length - 1]!;
     if (ch === '(') {
-      stack.push({ hasUnboundedQuantifier: false, hasAlternation: false });
+      let content = i + 1;
+      if (pattern[content] === '?') {
+        if (pattern[content + 1] === '<' && (pattern[content + 2] === '=' || pattern[content + 2] === '!')) {
+          content += 3; // lookbehind
+        } else if (pattern[content + 1] === '<') {
+          const close = pattern.indexOf('>', content + 2);
+          content = close === -1 ? content + 2 : close + 1; // named capture
+        } else {
+          content += 2; // (?: (?= (?!
+        }
+      }
+      stack.push(newGroupState(i));
+      i = content - 1;
       continue;
     }
     if (ch === ')') {
       const group = stack.pop()!;
-      const parent = stack[stack.length - 1];
-      if (!parent) return false; // unbalanced — the RegExp constructor already rejected it
+      const parent = stack[stack.length - 1]!;
+      group.branchFirsts.push(group.branchFirst ?? null);
+      if (group.sawAlternation) {
+        const branches = group.branchFirsts;
+        const disjoint = branches.every((b) => b !== null) && branchFirstSetsDisjoint(branches as CharSet[]);
+        group.hasAmbiguousAlternation = !disjoint;
+        group.first = disjoint ? branches.flat() : null;
+      } else {
+        group.first = group.branchFirsts[0] ?? null;
+      }
+
       const quantifier = unboundedQuantifierAt(pattern, i + 1);
-      if (quantifier && (group.hasUnboundedQuantifier || group.hasAlternation)) return true;
-      if (quantifier) parent.hasUnboundedQuantifier = true;
-      else parent.hasUnboundedQuantifier ||= group.hasUnboundedQuantifier;
+      if (quantifier) {
+        if (group.hasUnboundedQuantifier) {
+          return { kind: 'nested-quantifier', construct: pattern.slice(group.start, quantifier.end + 1) };
+        }
+        if (group.hasAmbiguousAlternation) {
+          return { kind: 'ambiguous-alternation', construct: pattern.slice(group.start, quantifier.end + 1) };
+        }
+        parent.hasUnboundedQuantifier = true;
+      } else {
+        parent.hasUnboundedQuantifier ||= group.hasUnboundedQuantifier;
+      }
+      parent.hasAmbiguousAlternation ||= group.hasAmbiguousAlternation;
+      if (parent.branchFirst === undefined) parent.branchFirst = group.first;
       continue;
     }
     if (ch === '|') {
-      current.hasAlternation = true;
+      current.branchFirsts.push(current.branchFirst ?? null);
+      current.branchFirst = undefined;
+      current.sawAlternation = true;
       continue;
     }
     if (ch === '*' || ch === '+' || ch === '{') {
@@ -336,10 +518,17 @@ function hasCatastrophicBacktrackingShape(pattern: string): boolean {
       if (quantifier) {
         current.hasUnboundedQuantifier = true;
         i = quantifier.end;
+        continue;
       }
     }
+    if (ch === '.' || ch === '^' || ch === '$') {
+      // Wildcards and anchors cannot prove a disjoint first character.
+      if (current.branchFirst === undefined) current.branchFirst = null;
+      continue;
+    }
+    if (current.branchFirst === undefined) current.branchFirst = singleCharSet(ch!.charCodeAt(0));
   }
-  return false;
+  return null;
 }
 
 const searchCode: ToolExecutor = async (args, ctx) => {
@@ -359,9 +548,13 @@ const searchCode: ToolExecutor = async (args, ctx) => {
     } catch (e) {
       return { content: `Error: invalid regular expression: ${(e as Error).message}`, isError: true };
     }
-    if (hasCatastrophicBacktrackingShape(query)) {
+    const shape = findCatastrophicRegexShape(query);
+    if (shape) {
+      const offending = shape.kind === 'nested-quantifier'
+        ? `nested quantifier in \`${shape.construct}\``
+        : `ambiguous alternation in \`${shape.construct}\``;
       return {
-        content: 'Error: regular expression rejected: nested or repeated quantifiers can cause catastrophic backtracking. Rewrite the pattern to avoid ambiguous repetition.',
+        content: `Error: regular expression rejected: ${offending} can cause catastrophic backtracking. Rewrite branches so each starts with a distinct character (e.g. \`(foo|bar)+\`) and avoid repeating a quantified group.`,
         isError: true,
       };
     }
