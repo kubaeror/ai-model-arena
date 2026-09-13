@@ -27,6 +27,7 @@ tests/dashboard/auth.test.ts
 tests/dashboard/extract-bearer-token.test.ts
 tests/dashboard/live-polling.test.ts
 tests/dashboard/live-status.test.ts
+tests/dashboard/live-stop-finalize.test.ts
 tests/dashboard/mask-secrets.test.ts
 tests/dashboard/openapi-conformance.test.ts
 tests/dashboard/queues-routes.test.ts
@@ -39,6 +40,7 @@ tests/dashboard/runners-routes.test.ts
 tests/dashboard/runs-judge.test.ts
 tests/dashboard/scenarios-starterfiles-traversal.test.ts
 tests/dashboard/schedules-routes.test.ts
+tests/dashboard/secrets-404-fallback.test.ts
 tests/dashboard/secrets-envvar-validation.test.ts
 tests/dashboard/secrets-merge-patch.test.ts
 tests/dashboard/webhooks-routes.test.ts
