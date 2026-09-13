@@ -8,9 +8,9 @@ k8s/
 │   └── ai-arena-app.yaml              # Argo CD Application
 ├── base/                              # Shared manifests (Kustomize)
 │   ├── kustomization.yaml
-│   └── (21 manifests)
+│   └── (22 manifests)
 ├── overlays/
-│   ├── dev/                           # minikube dev: hostPath PV, imagePullPolicy: Never
+│   ├── dev/                           # minikube dev: hostPath PV, imagePullPolicy: IfNotPresent
 │   │   ├── kustomization.yaml
 │   │   └── dev-pv.yaml
 │   └── prod/                          # GHCR images, EFS StorageClass
@@ -178,7 +178,7 @@ kubectl -n ai-arena port-forward svc/dashboard 4000:4000
 
 ```bash
 kubectl -n ai-arena get pods -w
-kubectl -n ai-arena logs deploy/runner-openai --tail=50
+kubectl -n ai-arena logs deploy/runner-openai-compat --tail=50
 kubectl -n ai-arena logs deploy/dashboard -c db-migrate   # check migration init container
 kubectl -n ai-arena exec deploy/redis -- redis-cli PING
 ```

@@ -9,7 +9,7 @@ Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscalin
 
 - **Runtime**: Node.js >= 22, TypeScript (ESM, strict)
 - **Backend**: Express.js REST API + WebSocket (port 4000)
-- **Frontend**: React 18 + Vite + TanStack Query + Tailwind CSS + CodeMirror
+- **Frontend**: React 19 + Vite + TanStack Query + Tailwind CSS + CodeMirror
 - **Queue**: Redis Streams (production) or in-memory (dev)
 - **DB**: SQLite (dev, single-node) or Postgres (production, via Drizzle ORM)
 - **Infra**: Docker, docker-compose (dev), minikube + KEDA (k8s)

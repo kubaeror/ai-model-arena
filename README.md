@@ -10,7 +10,7 @@ Orchestration is queue-driven (Redis Streams or in-memory), with long-lived runn
 
 ## Features
 
-- **59 LLM providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, OpenRouter, Groq, Cerebras, NVIDIA, Mistral, SambaNova, Scaleway, Cloudflare, GitHub Copilot, xAI, Ollama, DeepSeek, DeepInfra, Together, Fireworks, Perplexity, Cohere, HuggingFace, Azure, Snowflake Cortex, SAP AI Core, and many more — all behind a unified adapter interface with 4 adapter families (openai-compat, anthropic, google, bedrock)
+- **58 LLM providers**: OpenAI, Anthropic, Google Gemini, AWS Bedrock, OpenRouter, Groq, Cerebras, NVIDIA, Mistral, SambaNova, Scaleway, Cloudflare, GitHub Copilot, xAI, Ollama, DeepSeek, DeepInfra, Together, Fireworks, Perplexity, Cohere, HuggingFace, Azure, Snowflake Cortex, SAP AI Core, and many more — all behind a unified adapter interface with 4 adapter families (openai-compat, anthropic, google, bedrock)
 - **Sandboxed workspaces** with path escape prevention and shell policy enforcement
 - **Agent loop**: prompt → model response → tool execution → repeat; stops on `task_complete` or `max_turns`
 - **13 built-in tools**: read_file, write_file, edit_file, glob, list_files, run_shell_command, search_code, web_fetch, web_search, todo_read, todo_write, task (subagent), task_complete
@@ -265,7 +265,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 
 ## Adding a model
 
-Models are managed through the provider catalog (59 built-in providers across 4 adapter families: `openai-compat`, `anthropic`, `google`, `bedrock`). To add a new model:
+Models are managed through the provider catalog (58 built-in providers across 4 adapter families: `openai-compat`, `anthropic`, `google`, `bedrock`). To add a new model:
 
 1. Ensure the provider descriptor exists in `src/providers/descriptors/`
 2. Add the model via the dashboard (**Models** page) or the API
@@ -315,7 +315,7 @@ docker compose up -d
 
 ### Kubernetes (minikube)
 
-Kubernetes deployments use **Kustomize overlays** (`dev` and `prod`) inheriting from `k8s/base/`. Runners are grouped into 3 adapter-family deployments (openai-compat, anthropic, google), each with KEDA autoscaling:
+Kubernetes deployments use **Kustomize overlays** (`dev` and `prod`) inheriting from `k8s/base/`. Runners are grouped into 4 adapter-family deployments (openai-compat, anthropic, google, bedrock), each with KEDA autoscaling:
 
 ```bash
 minikube start --memory=4096 --cpus=2
@@ -369,7 +369,7 @@ The arena instruments every run with OpenTelemetry spans following GenAI semanti
 - **`chat`** (per LLM API call — includes token usage, model, temperature)
 - **`execute_tool`** (per tool invocation — duration, success/failure)
 
-Set `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT` to export spans to an OTel Collector (e.g. Tempo/Grafana — the k8s stack ships the Collector; a Tempo deployment is not included by default).
+Set `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT` to export spans to an OTel Collector (e.g. Grafana — the k8s stack ships the Collector plus a Tempo deployment, and docker compose includes Tempo as well).
 
 Local trace metadata (`trace-meta.json`) is always recorded and surfaced in the dashboard's **Trace** tab. The **Observability** page provides aggregate stats without an external backend.
 
@@ -444,7 +444,7 @@ ai-model-arena/
 │   ├── notifications/            # Slack, Discord, webhooks
 │   ├── observability/            # OpenTelemetry setup + trace instrumentation
 │   ├── orchestrator/             # Run lifecycle + run index
-│   ├── providers/                # 59 provider descriptors + 4 adapter families
+│   ├── providers/                # 58 provider descriptors + 4 adapter families
 │   ├── queue/                    # In-memory + Redis Streams queue
 │   ├── runner/                   # Checkpoint/resume + idempotency
 │   ├── sandbox/                  # Isolated filesystem + git

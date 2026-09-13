@@ -48,6 +48,8 @@ import { createOutputMappingsRouter } from '../../src/dashboard-server/routes/ou
 import { createSessionsRouter } from '../../src/dashboard-server/routes/sessions.js';
 import { createUsersRouter } from '../../src/dashboard-server/routes/users.js';
 import { createAuditRouter } from '../../src/dashboard-server/routes/audit.js';
+import { createCostRouter } from '../../src/dashboard-server/routes/cost.js';
+import { createNotificationsRouter } from '../../src/dashboard-server/routes/notifications.js';
 import { createFilesRouter } from '../../src/dashboard-server/routes/files.js';
 import { registerRunnerRoutes } from '../../src/dashboard-server/routes/runners.js';
 import { registerQueueRoutes } from '../../src/dashboard-server/routes/queues.js';
@@ -65,6 +67,7 @@ const JWT_MOUNTS: Array<[string, () => Router]> = [
   ['/api/webhooks', createWebhooksRouter],
   ['/api/providers', createProvidersRouter],
   ['/api/secrets', createSecretsRouter],
+  ['/api/notifications', createNotificationsRouter],
   ['/api/catalog', createCatalogRouter],
   ['/api/metrics', createMetricsRouter],
   ['/api/cache', createCacheRouter],
@@ -75,6 +78,7 @@ const JWT_MOUNTS: Array<[string, () => Router]> = [
   ['/api/sessions', createSessionsRouter],
   ['/api/users', createUsersRouter],
   ['/api/audit', createAuditRouter],
+  ['/api/cost', createCostRouter],
   ['/api/files', createFilesRouter],
   ['/api/budget', createBudgetRouter],
   ['/api/schedules', createSchedulesRouter],
@@ -97,6 +101,7 @@ const V1_MOUNTS: Array<[string, () => Router]> = [
   ['/api/v1/metrics', createMetricsRouter],
   ['/api/v1/cache', createCacheRouter],
   ['/api/v1/budget', createBudgetRouter],
+  ['/api/v1/cost', createCostRouter],
   ['/api/v1/schedules', createSchedulesRouter],
   ['/api/v1/regression', createRegressionRouter],
   ['/api/v1/files', createFilesRouter],

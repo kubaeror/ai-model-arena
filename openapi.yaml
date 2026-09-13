@@ -395,6 +395,21 @@ paths:
         '400': { description: Invalid id }
         '404': { description: Not found }
 
+  # ── Notifications ───────────────────────────────────────────────────────────
+  /api/notifications:
+    get:
+      summary: Notification outbox state — delivery status, errors, retry schedule (admin)
+      responses:
+        '200': { description: Recent notifications (up to 100) }
+  /api/notifications/{id}/retry:
+    post:
+      summary: Manually retry a notification delivery (admin)
+      parameters:
+        - $ref: '#/components/parameters/StrId'
+      responses:
+        '200': { description: Retry triggered }
+        '400': { description: id is required }
+
   # ── Providers ──────────────────────────────────────────────────────────────
   /api/providers:
     get:
@@ -920,6 +935,16 @@ paths:
       summary: Current budget status (spend, remaining, alerts)
       responses:
         '200': { description: Budget status }
+
+  # ── Cost ledger ─────────────────────────────────────────────────────────────
+  /api/cost:
+    get:
+      summary: Cost ledger summary grouped by model or day
+      parameters:
+        - { name: groupBy, in: query, schema: { type: string, enum: [model, day], default: model } }
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Cost summary rows (groupBy + models) }
 
   # ── Schedules ──────────────────────────────────────────────────────────────
   /api/schedules:
@@ -1471,6 +1496,15 @@ paths:
       summary: Current budget status
       responses:
         '200': { description: Budget status }
+  /api/v1/cost:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      summary: Cost ledger summary (see GET /api/cost)
+      parameters:
+        - { name: groupBy, in: query, schema: { type: string, enum: [model, day], default: model } }
+        - { name: model, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Cost summary rows (groupBy + models) }
   /api/v1/analytics/tools:
     get:
       security: [{ ApiKeyAuth: [] }]
