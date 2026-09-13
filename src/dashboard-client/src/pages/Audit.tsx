@@ -59,7 +59,9 @@ export function Audit() {
       const loaded = dedupeById(allPages.flatMap((p) => p.entries)).length;
       return loaded < lastPage.total ? loaded : undefined;
     },
-    refetchInterval: 15_000,
+    // A paged user must not multiply requests: once a second page is loaded the
+    // interval refetches every page, so only keep the first page fresh.
+    refetchInterval: (query) => ((query.state.data?.pages.length ?? 0) > 1 ? false : 15_000),
   });
   const entries = dedupeById(data?.pages.flatMap((p) => p.entries) ?? []);
 

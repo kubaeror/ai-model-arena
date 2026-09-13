@@ -135,6 +135,40 @@ describe('Sessions', () => {
     fireEvent.click(screen.getByRole('button', { name: /load more/i }));
     await waitFor(() => expect(listSessions).toHaveBeenNthCalledWith(5, { limit: 50, offset: 99 }));
   });
+
+  it('stops the 15s refetch interval once more than one page is loaded', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(listSessions).mockReset();
+      vi.mocked(listSessions).mockImplementation(async (params?: { offset?: number }) => (
+        (params?.offset ?? 0) === 0
+          ? { sessions: [listRow('sess-A')], total: 2 }
+          : { sessions: [listRow('sess-B')], total: 2 }
+      ));
+
+      renderWithProviders(<Sessions />);
+      expect(await screen.findByText(/sess-A/)).toBeInTheDocument();
+
+      // Single page: the interval keeps the first page fresh.
+      const callsBefore = vi.mocked(listSessions).mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(vi.mocked(listSessions).mock.calls.length).toBeGreaterThan(callsBefore);
+
+      fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+      expect(await screen.findByText(/sess-B/)).toBeInTheDocument();
+
+      // Two pages loaded: the interval must not refetch every loaded page.
+      const callsAfterPaging = vi.mocked(listSessions).mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(vi.mocked(listSessions).mock.calls.length).toBe(callsAfterPaging);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 const PAGE_SIZE = 200;

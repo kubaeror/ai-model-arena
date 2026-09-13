@@ -6,11 +6,11 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { boot, authedGet, postJson, TEST_ADMIN, TEST_VIEWER } from './route-test-harness.js';
 import { getDrizzleDb } from '../../src/db/index.js';
-import { insertAnomaly, insertAuditEntry, insertPrompt, insertPromptVersion } from '../../src/db/query.js';
+import { insertAnomaly, insertAuditEntry, insertPrompt, insertPromptVersion, getAnomaly } from '../../src/db/query.js';
 import { messages, model_calls, models, model_providers, pricing, providers, run_models, runs, sessions, audit_log as auditLog, cost_ledger as costLedger } from '../../src/db/schema.js';
 import { outputRoot } from '../../src/paths.js';
 import { isWithin } from '../../src/sandbox/sandbox.js';
-import { getRunRecord, upsertRun } from '../../src/db/runs.js';
+import { getRunRecord, listRuns, upsertRun } from '../../src/db/runs.js';
 import { loadAuthConfig, signToken } from '../../src/dashboard-server/auth.js';
 
 function runFixture(runId: string, createdBy: string | undefined, tmpDir: string): Parameters<typeof upsertRun>[0] {
@@ -514,6 +514,53 @@ test('POST /api/prompts/enqueue rejects a missing prompt version with 400', asyn
   }
 });
 
+test('prompt enqueue registers a run owned by the enqueuer and hides it from other editors', async (t) => {
+  const h = await boot(t, { seedViewerUser: true });
+  const db = getDrizzleDb();
+  const now = new Date().toISOString();
+  await insertPrompt({ id: 'prompt-own', name: 'Prompt Own', description: null, createdAt: now, updatedAt: now });
+  await insertPromptVersion({
+    id: 'version-own', promptId: 'prompt-own', version: 1,
+    systemPrompt: 'system', task: 'task', config: null, tag: null,
+    createdAt: now, createdBy: 'editor-a',
+  });
+
+  const editorA = signToken(loadAuthConfig(), 'editor-a', 'editor');
+  const editorB = signToken(loadAuthConfig(), 'editor-b', 'editor');
+
+  const enqueue = await postJson(h.base, editorA, '/api/prompts/enqueue', {
+    promptId: 'prompt-own', models: ['gpt-4o'], scenario: 'smoke',
+  });
+  assert.equal(enqueue.status, 200, `enqueue must succeed: ${await enqueue.clone().text()}`);
+
+  const rec = (await listRuns()).find((r) => r.createdBy === 'editor-a');
+  assert.ok(rec, 'a prompt enqueue must register a run owned by the enqueuer');
+  assert.deepEqual(rec!.models, ['gpt-4o']);
+  assert.ok(rec!.perModel.some((m) => m.model === 'gpt-4o'), 'the registered run must include the enqueued model');
+
+  // The runner mints the session id deterministically from the registered run.
+  const sessionId = `${rec!.runId}-gpt-4o`;
+  await db.insert(sessions).values({ id: sessionId, model: 'gpt-4o', status: 'active', created_at: now, updated_at: now });
+
+  const ownerRun = await authedGet(h.base, editorA, `/api/runs/${rec!.runId}`);
+  assert.equal(ownerRun.status, 200, 'the enqueuer can read their run');
+  const ownerSession = await authedGet(h.base, editorA, `/api/sessions/${sessionId}`);
+  assert.equal(ownerSession.status, 200, 'the enqueuer can read their session');
+
+  const foreignRun = await authedGet(h.base, editorB, `/api/runs/${rec!.runId}`);
+  assert.equal(foreignRun.status, 403, 'another editor must not read the run');
+  const foreignSession = await authedGet(h.base, editorB, `/api/sessions/${sessionId}`);
+  assert.equal(foreignSession.status, 403, 'another editor must not read the session');
+
+  const ownerList = await authedGet(h.base, editorA, '/api/sessions');
+  const ownerSessions = ((await ownerList.json()) as { sessions: Array<{ id: string }> }).sessions;
+  assert.ok(ownerSessions.some((s) => s.id === sessionId), 'the enqueuer sees the session in their list');
+
+  const foreignList = await authedGet(h.base, editorB, '/api/sessions');
+  const foreignSessions = ((await foreignList.json()) as { sessions: Array<{ id: string }> }).sessions;
+  assert.ok(!foreignSessions.some((s) => s.id === sessionId), 'another editor must not list the session');
+});
+
 test('GET /api/runs only lists runs owned by the caller for non-admins', async (t) => {
   const h = await boot(t, { seedViewerUser: true });
   await upsertRun(runFixture('owned-by-viewer1', TEST_VIEWER.username, h.tmpDir));
@@ -686,6 +733,45 @@ test('anomaly list filters to runs owned by the caller for non-admins', async (t
   for (const id of [owned.id, foreign.id, ownerless.id, orphan.id]) {
     assert.ok(adminIds.includes(id), `admin must keep seeing anomaly ${id}`);
   }
+});
+
+test('anomaly resolve requires run ownership for editors', async (t) => {
+  const h = await boot(t);
+  await upsertRun(runFixture('anomaly-patch-alice', 'alice', h.tmpDir));
+  const anomaly = await insertAnomaly({
+    run_id: 'anomaly-patch-alice', model: 'gpt-4o', type: 'error_rate', severity: 'high',
+    description: 'resolve target',
+  });
+
+  const owner = signToken(loadAuthConfig(), 'alice', 'editor');
+  const stranger = signToken(loadAuthConfig(), 'mallory', 'editor');
+  const patch = (token: string) => fetch(`${h.base}/api/anomalies/${anomaly.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ resolved_as: 'resolved' }),
+  });
+
+  const denied = await patch(stranger);
+  assert.equal(denied.status, 403, 'a non-owner editor must not resolve another owner anomaly');
+  assert.equal((await getAnomaly(anomaly.id))?.resolved, false, 'denied patch must not mutate the anomaly');
+
+  const allowed = await patch(owner);
+  assert.equal(allowed.status, 200, `the owner editor must be able to resolve: ${await allowed.clone().text()}`);
+  const updated = await getAnomaly(anomaly.id);
+  assert.equal(updated?.resolved, true);
+  assert.equal(updated?.resolved_as, 'resolved');
+
+  const second = await insertAnomaly({
+    run_id: 'anomaly-patch-alice', model: 'gpt-4o', type: 'latency', severity: 'low',
+    description: 'admin resolve target',
+  });
+  const adminPatch = await fetch(`${h.base}/api/anomalies/${second.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${h.adminToken}` },
+    body: JSON.stringify({ resolved_as: 'false_positive' }),
+  });
+  assert.equal(adminPatch.status, 200, 'admins keep resolving any anomaly');
+  assert.equal((await getAnomaly(second.id))?.resolved, true);
 });
 
 test('session list filters to sessions of owned runs and total reflects the filtered set', async (t) => {

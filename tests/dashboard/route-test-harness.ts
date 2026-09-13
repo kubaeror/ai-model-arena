@@ -159,6 +159,7 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   const { createSessionsRouter } = await import(`../../src/dashboard-server/routes/sessions.js${bust}`);
   const { createExportRouter } = await import(`../../src/dashboard-server/routes/export.js${bust}`);
   const { createAnomaliesRouter } = await import(`../../src/dashboard-server/routes/anomalies.js${bust}`);
+  const { createPromptsRouter } = await import(`../../src/dashboard-server/routes/prompts.js${bust}`);
   const { registerQueueRoutes } = await import(`../../src/dashboard-server/routes/queues.js${bust}`);
 
   app.use('/api/models', requireAuth(auth), requireRole('viewer'), createModelsRouter());
@@ -172,6 +173,7 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   app.use('/api/sessions', requireAuth(auth), requireRole('viewer'), createSessionsRouter());
   app.use('/api/export', requireAuth(auth), requireRole('viewer'), createExportRouter());
   app.use('/api/anomalies', requireAuth(auth), requireRole('viewer'), createAnomaliesRouter());
+  app.use('/api/prompts', requireAuth(auth), requireRole('viewer'), createPromptsRouter());
   app.get('/api/roles', requireAuth(auth), requireRole('viewer'), async (_req, res) => {
     const { listRoles } = await import('../../src/db/query.js');
     res.json({ roles: await listRoles() });

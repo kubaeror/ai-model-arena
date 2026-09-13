@@ -96,6 +96,15 @@ export function createAnomaliesRouter(): Router {
       res.status(400).json({ error: 'resolved_as must be "resolved" or "false_positive"' });
       return;
     }
+    const anomaly = await getAnomaly(id);
+    if (!anomaly) {
+      notFound(res, `Anomaly ${id}`, String(id));
+      return;
+    }
+    // Same ownership gate as the read path: any editor could previously
+    // resolve another owner's anomaly by id (and the audit row blamed them
+    // for it). Default-deny for ownerless/foreign runs; admins unchanged.
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, anomaly.run_id, `Anomaly ${id} not found`))) return;
     const updated = await resolveAnomaly(id, resolvedAs as 'resolved' | 'false_positive');
     if (!updated) {
       notFound(res, `Anomaly ${id}`, String(id));
