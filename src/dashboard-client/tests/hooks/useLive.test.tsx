@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { LiveProvider, useRunLive } from '../../src/hooks/useLive.js';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
   url: string;
   protocols: string[];
   sent: string[] = [];
@@ -89,6 +93,20 @@ describe('useLive resubscribe', () => {
     expect(second.sent).toContain(JSON.stringify({ type: 'subscribe', runId: 'run-1' }));
   });
 
+  it('does not send while the socket is CONNECTING and flushes on open', () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <LiveProvider>{children}</LiveProvider>
+    );
+
+    renderHook(() => useRunLive('run-3', 'gpt-4o'), { wrapper });
+    const ws = MockWebSocket.instances[0]!;
+    expect(ws.readyState).toBe(MockWebSocket.CONNECTING);
+    expect(ws.sent).toHaveLength(0);
+
+    act(() => ws.open());
+    expect(ws.sent).toContain(JSON.stringify({ type: 'subscribe', runId: 'run-3' }));
+  });
+
   it('sends unsubscribe on unmount and does not reconnect after disposal', async () => {
     const wrapper = ({ children }: { children: ReactNode }) => (
       <LiveProvider>{children}</LiveProvider>
@@ -106,6 +124,6 @@ describe('useLive resubscribe', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2100);
     });
-    expect(MockWebSocket.instances.length).toBe(1, 'no reconnect after provider disposal');
+    expect(MockWebSocket.instances.length, 'no reconnect after provider disposal').toBe(1);
   });
 });

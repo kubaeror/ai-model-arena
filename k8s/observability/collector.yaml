@@ -1,4 +1,10 @@
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: observability
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: otel-config
@@ -43,7 +49,11 @@ data:
         endpoint: http://loki.observability:3100/loki/api/v1/push
       debug:
         verbosity: basic
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
     service:
+      extensions: [health_check]
       pipelines:
         traces:
           receivers: [otlp]
@@ -104,6 +114,8 @@ spec:
               containerPort: 4318
             - name: otlp-grpc
               containerPort: 4317
+            - name: prometheus
+              containerPort: 8889
           volumeMounts:
             - name: config
               mountPath: /etc/otel
@@ -146,3 +158,6 @@ spec:
     - name: otlp-grpc
       port: 4317
       targetPort: 4317
+    - name: prometheus
+      port: 8889
+      targetPort: 8889

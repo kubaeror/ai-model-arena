@@ -22,8 +22,13 @@ export type ModelWithProviderRow = DbModel & {
   api_model_id: string; env_var: string | null; provider_adapter: string;
 };
 
-export async function getModelByNameOrId(nameOrId: string): Promise<ModelWithProviderRow | null> {
+export async function getModelByNameOrId(nameOrId: string, providerId?: string): Promise<ModelWithProviderRow | null> {
   const db = getDrizzleDb();
+  // API model ids are only unique within a provider, so they are matched only
+  // when the caller supplies the provider (fallback hops know their provider).
+  const refMatch = providerId
+    ? sql`(${models.name} = ${nameOrId} OR ${models.id} = ${nameOrId} OR ${model_providers.api_model_id} = ${nameOrId})`
+    : sql`(${models.name} = ${nameOrId} OR ${models.id} = ${nameOrId})`;
   const rows = await db.select({
     id: models.id, name: models.name, family: models.family,
     provider_id: models.provider_id, release_date: models.release_date,
@@ -38,7 +43,10 @@ export async function getModelByNameOrId(nameOrId: string): Promise<ModelWithPro
     .from(models)
     .innerJoin(model_providers, eq(model_providers.model_id, models.id))
     .innerJoin(providers, eq(providers.id, model_providers.provider_id))
-    .where(sql`${models.name} = ${nameOrId} OR ${models.id} = ${nameOrId}`)
+    .where(and(
+      refMatch,
+      providerId ? eq(models.provider_id, providerId) : undefined,
+    ))
     .limit(1);
   return rows[0] as ModelWithProviderRow;
 }

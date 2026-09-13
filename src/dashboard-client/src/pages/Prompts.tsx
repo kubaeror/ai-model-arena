@@ -37,6 +37,7 @@ export function Prompts() {
   const [enqueueModels, setEnqueueModels] = useState('');
   const [enqueueVersion, setEnqueueVersion] = useState('');
   const [enqueueError, setEnqueueError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
 
   const list = useQuery({ queryKey: ['prompts'], queryFn: listPrompts });
 
@@ -84,7 +85,11 @@ export function Prompts() {
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deletePrompt(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['prompts'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['prompts'] });
+      setDeleteError('');
+    },
+    onError: (e) => setDeleteError((e as Error).message),
   });
 
   const enqueueMut = useMutation({
@@ -159,6 +164,9 @@ export function Prompts() {
         <Panel>
           <PanelHeader title="All Prompts" />
           <PanelBody>
+            {deleteError && (
+              <div role="alert" className="font-mono text-12 text-danger pb-2">{deleteError}</div>
+            )}
             {!list.data || list.data.length === 0 ? (
               <EmptyState title="No prompts yet" description="Prompts define the system prompt and task for agent runs." />
             ) : (

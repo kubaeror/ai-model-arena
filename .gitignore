@@ -34,6 +34,8 @@ test-results/
 
 # PM2 / scratch process artifacts
 *.pid
+dashboot.err
+dashboot.out
 
 # CI render scratch (k8s-validate / k8s-policy write .tmp/)
 .tmp/

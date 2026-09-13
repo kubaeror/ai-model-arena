@@ -22,3 +22,15 @@ test('allows plain commands', () => {
 test('permissive policy allows everything', () => {
   assert.equal(isShellCommandAllowed('rm -rf /', 'permissive'), true);
 });
+
+test('allows ln/link: hardlink containment is the write-time nlink check', () => {
+  assert.equal(isShellCommandAllowed('ln target link', 'strict'), true);
+  assert.equal(isShellCommandAllowed('ln -s /etc/passwd link', 'strict'), true);
+  assert.equal(isShellCommandAllowed('/usr/bin/ln target link', 'strict'), true);
+  assert.equal(isShellCommandAllowed('link target link', 'strict'), true);
+});
+
+test('allows commands that merely mention links in arguments', () => {
+  assert.equal(isShellCommandAllowed('echo links', 'strict'), true);
+  assert.equal(isShellCommandAllowed('npm test', 'strict'), true);
+});

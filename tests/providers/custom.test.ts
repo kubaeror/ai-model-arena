@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
-import { upsertCustomProvider, listCustomProviders, deleteCustomProvider } from '../../src/providers/custom.js';
+import { eq } from 'drizzle-orm';
+import { getDrizzleDb } from '../../src/db/index.js';
+import { providers, provider_versions } from '../../src/db/schema.js';
+import { upsertCustomProvider, listCustomProviders, listAllProviders, deleteCustomProvider } from '../../src/providers/custom.js';
 
 function freshDb() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-custom-'));
@@ -50,6 +53,55 @@ test('deleteCustomProvider removes a row', async () => {
     await upsertCustomProvider({ id: 'p1', name: 'A', adapter: 'openai-compat', authScheme: 'bearer' });
     await deleteCustomProvider('p1');
     assert.equal((await listCustomProviders()).length, 0);
+  } finally {
+    closeDb();
+    cleanup();
+  }
+});
+
+test('upsertCustomProvider cannot overwrite a synced (is_builtin=1) provider', async () => {
+  const cleanup = freshDb();
+  try {
+    const now = new Date().toISOString();
+    await getDrizzleDb().insert(providers).values({
+      id: 'synced-1', name: 'Synced One', api_base: 'https://api.synced.example/v1',
+      auth_scheme: 'bearer', env_var: 'SYNCED_KEY', is_builtin: 1,
+      adapter: 'openai-compat', header_name: null, created_at: now, updated_at: now,
+    });
+
+    await upsertCustomProvider({
+      id: 'synced-1', name: 'Hijacked', apiBase: 'https://hijack.example/v1',
+      authScheme: 'bearer', adapter: 'anthropic',
+    });
+
+    const [row] = await getDrizzleDb().select().from(providers).where(eq(providers.id, 'synced-1')).limit(1);
+    assert.equal(row!.is_builtin, 1);
+    assert.equal(row!.name, 'Synced One');
+    assert.equal(row!.api_base, 'https://api.synced.example/v1');
+    assert.equal(row!.adapter, 'openai-compat');
+
+    const versions = await getDrizzleDb().select().from(provider_versions).where(eq(provider_versions.provider_id, 'synced-1'));
+    assert.equal(versions.length, 0);
+  } finally {
+    closeDb();
+    cleanup();
+  }
+});
+
+test('listAllProviders returns builtin-synced and custom rows; listCustomProviders only custom', async () => {
+  const cleanup = freshDb();
+  try {
+    await upsertCustomProvider({ id: 'custom-1', name: 'Custom One', adapter: 'openai-compat', authScheme: 'bearer' });
+    const now = new Date().toISOString();
+    await getDrizzleDb().insert(providers).values({
+      id: 'synced-1', name: 'Synced One', api_base: 'https://api.synced.example/v1',
+      auth_scheme: 'bearer', env_var: 'SYNCED_KEY', is_builtin: 1,
+      adapter: 'openai-compat', header_name: null, created_at: now, updated_at: now,
+    });
+
+    const all = await listAllProviders();
+    assert.deepEqual(all.map(p => p.id), ['custom-1', 'synced-1']);
+    assert.deepEqual((await listCustomProviders()).map(p => p.id), ['custom-1']);
   } finally {
     closeDb();
     cleanup();

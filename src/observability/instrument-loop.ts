@@ -8,8 +8,8 @@ import { runInSpan } from './span-context.js';
 interface TracedLoopOptions extends AgentLoopOptions {
   provider: string;
   model: string;
-  temperature: number;
-  maxTokens: number;
+  temperature?: number;
+  maxTokens?: number;
   scenario: string;
   runId: string;
   modelConfig: string;
@@ -28,20 +28,32 @@ function captureContentEnabled(): boolean {
 function wrapAdapter(
   adapter: ModelAdapter,
   recorder: TraceRecorder,
-  o: { provider: string; model: string; temperature: number; maxTokens: number },
+  o: { provider: string; model: string; temperature?: number; maxTokens?: number },
 ): ModelAdapter {
   const sendMessage = async (messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> => {
-    return withSpan<ModelResponse>('chat', 'chat', recorder, {
+    // The loop-level temperature/maxTokens are the defaults; an explicit send
+    // option wins. Unset values stay absent so capability-gated parameters
+    // (e.g. reasoning-only models) are never re-injected from a stale default.
+    const temperature = opts?.temperature ?? o.temperature;
+    const maxTokens = opts?.maxTokens ?? o.maxTokens;
+    const effectiveOpts: SendOpts = {
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(opts?.maxTokensField ? { maxTokensField: opts.maxTokensField } : {}),
+      ...(opts?.reasoning ? { reasoning: opts.reasoning } : {}),
+    };
+    const attributes: Record<string, unknown> = {
       'gen_ai.system': o.provider,
       'gen_ai.request.model': o.model,
-      'gen_ai.request.temperature': o.temperature,
-      'gen_ai.request.max_tokens': o.maxTokens,
-    }, async (spanId) => {
+    };
+    if (temperature !== undefined) attributes['gen_ai.request.temperature'] = temperature;
+    if (maxTokens !== undefined) attributes['gen_ai.request.max_tokens'] = maxTokens;
+    return withSpan<ModelResponse>('chat', 'chat', recorder, attributes, async (spanId) => {
       if (captureContentEnabled()) {
         recorder.addAttribute(spanId, 'gen_ai.prompt', truncate(JSON.stringify(messages.slice(-4)), 8000));
       }
       const start = Date.now();
-      const response = await adapter.sendMessage(messages, tools, opts);
+      const response = await adapter.sendMessage(messages, tools, effectiveOpts);
       recorder.addAttribute(spanId, 'gen_ai.usage.input_tokens', response.usage?.prompt ?? 0);
       recorder.addAttribute(spanId, 'gen_ai.usage.output_tokens', response.usage?.completion ?? 0);
       recorder.addAttribute(spanId, 'duration_ms', Date.now() - start);

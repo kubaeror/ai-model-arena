@@ -15,10 +15,6 @@ export function createNotificationsRouter(): Router {
 
   router.post('/:id/retry', async (req, res) => {
     const id = req.params.id as string;
-    if (!id) {
-      res.status(400).json({ error: 'id is required' });
-      return;
-    }
     await retryNotification(id);
     res.json({ ok: true });
   });

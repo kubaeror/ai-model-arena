@@ -1,4 +1,4 @@
-export { getPricing, computeCost } from './pricing.js';
+export { getPricing, computeCost, computeTotalCost } from './pricing.js';
 export { 
   loadBudgetConfig, 
   checkBudget, 

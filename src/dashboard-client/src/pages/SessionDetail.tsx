@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelBody } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
@@ -11,11 +11,15 @@ import { EmptyState } from '../components/ui/EmptyState';
 import {
   getSession, getSessionMessages, getSessionCalls, deleteSession,
 } from '../lib/api';
+import { dedupeById } from '../lib/dedupe';
 
 const TAB_ITEMS = [
   { id: 'messages', label: 'Messages' },
   { id: 'calls', label: 'LLM calls' },
 ];
+
+const PAGE_SIZE = 200;
+type TranscriptRow = Record<string, unknown>;
 
 function jsonOrText(v: unknown): string {
   if (v === null || v === undefined) return '';
@@ -35,14 +39,28 @@ export function SessionDetail() {
     queryFn: () => getSession(sessionId),
     retry: false,
   });
-  const messagesQuery = useQuery({
+  const messagesQuery = useInfiniteQuery({
     queryKey: ['session-messages', sessionId],
-    queryFn: () => getSessionMessages(sessionId),
+    queryFn: ({ pageParam }) =>
+      getSessionMessages(sessionId, pageParam > 0 ? { limit: PAGE_SIZE, offset: pageParam } : { limit: PAGE_SIZE }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flat()).length;
+      return loaded < (sessionQuery.data?.message_count ?? 0) ? loaded : undefined;
+    },
     enabled: tab === 'messages',
   });
-  const callsQuery = useQuery({
+  const callsQuery = useInfiniteQuery({
     queryKey: ['session-calls', sessionId],
-    queryFn: () => getSessionCalls(sessionId),
+    queryFn: ({ pageParam }) =>
+      getSessionCalls(sessionId, pageParam > 0 ? { limit: PAGE_SIZE, offset: pageParam } : { limit: PAGE_SIZE }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flat()).length;
+      return loaded < (sessionQuery.data?.call_count ?? 0) ? loaded : undefined;
+    },
     enabled: tab === 'calls',
   });
 
@@ -61,6 +79,8 @@ export function SessionDetail() {
     return <PageShell title="Session"><EmptyState title="Session not found" /></PageShell>;
   }
   const session = sessionQuery.data;
+  const messages = dedupeById<TranscriptRow>(messagesQuery.data?.pages.flat() ?? []);
+  const calls = dedupeById<TranscriptRow>(callsQuery.data?.pages.flat() ?? []);
 
   return (
     <PageShell
@@ -83,22 +103,31 @@ export function SessionDetail() {
           <PanelBody>
             {messagesQuery.isLoading ? (
               <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading…</div>
-            ) : (messagesQuery.data?.length ?? 0) === 0 ? (
+            ) : messages.length === 0 ? (
               <EmptyState title="No messages" />
             ) : (
-              <div className="flex flex-col gap-2 font-mono text-12">
-                {(messagesQuery.data ?? []).map((m) => (
-                  <div key={String(m.id)} className="rounded-inner border border-border/50 p-2">
-                    <div className="flex gap-2 text-fg-1">
-                      <span className="text-accent">[{String(m.role)}]</span>
-                      <span>turn {String(m.turn)}</span>
-                      {m.tool_call_id ? <span>tool:{String(m.tool_name ?? m.tool_call_id).slice(0, 40)}</span> : null}
+              <>
+                <div className="flex flex-col gap-2 font-mono text-12">
+                  {messages.map((m) => (
+                    <div key={String(m.id)} className="rounded-inner border border-border/50 p-2">
+                      <div className="flex gap-2 text-fg-1">
+                        <span className="text-accent">[{String(m.role)}]</span>
+                        <span>turn {String(m.turn)}</span>
+                        {m.tool_call_id ? <span>tool:{String(m.tool_name ?? m.tool_call_id).slice(0, 40)}</span> : null}
+                      </div>
+                      {m.content ? <pre className="mt-1 whitespace-pre-wrap text-fg-0">{jsonOrText(m.content)}</pre> : null}
+                      {m.tool_calls ? <pre className="mt-1 whitespace-pre-wrap text-fg-1">{jsonOrText(m.tool_calls)}</pre> : null}
                     </div>
-                    {m.content ? <pre className="mt-1 whitespace-pre-wrap text-fg-0">{jsonOrText(m.content)}</pre> : null}
-                    {m.tool_calls ? <pre className="mt-1 whitespace-pre-wrap text-fg-1">{jsonOrText(m.tool_calls)}</pre> : null}
+                  ))}
+                </div>
+                {messages.length < session.message_count && messagesQuery.hasNextPage && (
+                  <div className="flex justify-center py-2">
+                    <Button variant="ghost" size="sm" onClick={() => void messagesQuery.fetchNextPage()} disabled={messagesQuery.isFetchingNextPage}>
+                      {messagesQuery.isFetchingNextPage ? 'Loading…' : 'Load more'}
+                    </Button>
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </PanelBody>
         </Panel>
@@ -109,31 +138,40 @@ export function SessionDetail() {
           <PanelBody>
             {callsQuery.isLoading ? (
               <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading…</div>
-            ) : (callsQuery.data?.length ?? 0) === 0 ? (
+            ) : calls.length === 0 ? (
               <EmptyState title="No model calls recorded" />
             ) : (
-              <table className="w-full font-mono text-12">
-                <thead>
-                  <tr className="border-b border-border text-left text-fg-1 text-12 uppercase">
-                    <th className="py-2 pr-4">Turn</th>
-                    <th className="py-2 pr-4">Provider</th>
-                    <th className="py-2 pr-4">Model</th>
-                    <th className="py-2 pr-4">Latency</th>
-                    <th className="py-2">Response</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(callsQuery.data ?? []).map((c) => (
-                    <tr key={String(c.id)} className="border-b border-border/50 align-top">
-                      <td className="py-2 pr-4 text-accent">{String(c.turn)}</td>
-                      <td className="py-2 pr-4 text-fg-1">{String(c.provider)}</td>
-                      <td className="py-2 pr-4 text-fg-1">{String(c.model)}</td>
-                      <td className="py-2 pr-4 text-fg-1" data-numeric>{c.latency_ms != null ? `${c.latency_ms}ms` : '—'}</td>
-                      <td className="py-2 text-fg-1 whitespace-pre-wrap max-w-400">{String(c.response_text ?? '').slice(0, 2000)}</td>
+              <>
+                <table className="w-full font-mono text-12">
+                  <thead>
+                    <tr className="border-b border-border text-left text-fg-1 text-12 uppercase">
+                      <th className="py-2 pr-4">Turn</th>
+                      <th className="py-2 pr-4">Provider</th>
+                      <th className="py-2 pr-4">Model</th>
+                      <th className="py-2 pr-4">Latency</th>
+                      <th className="py-2">Response</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {calls.map((c) => (
+                      <tr key={String(c.id)} className="border-b border-border/50 align-top">
+                        <td className="py-2 pr-4 text-accent">{String(c.turn)}</td>
+                        <td className="py-2 pr-4 text-fg-1">{String(c.provider)}</td>
+                        <td className="py-2 pr-4 text-fg-1">{String(c.model)}</td>
+                        <td className="py-2 pr-4 text-fg-1" data-numeric>{c.latency_ms != null ? `${c.latency_ms}ms` : '—'}</td>
+                        <td className="py-2 text-fg-1 whitespace-pre-wrap max-w-400">{String(c.response_text ?? '').slice(0, 2000)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {calls.length < session.call_count && callsQuery.hasNextPage && (
+                  <div className="flex justify-center py-2">
+                    <Button variant="ghost" size="sm" onClick={() => void callsQuery.fetchNextPage()} disabled={callsQuery.isFetchingNextPage}>
+                      {callsQuery.isFetchingNextPage ? 'Loading…' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </PanelBody>
         </Panel>

@@ -50,7 +50,12 @@ export async function listModelCalls(runId: string): Promise<DbModelCall[]> {
     .orderBy(model_calls.created_at, model_calls.turn);
 }
 
-export async function listModelCallsForSession(sessionId: string): Promise<DbModelCall[]> {
+export async function listModelCallsForSession(
+  sessionId: string,
+  page?: { limit?: number; offset?: number },
+): Promise<DbModelCall[]> {
   const db = getDrizzleDb();
-  return db.select().from(model_calls).where(eq(model_calls.session_id, sessionId)).orderBy(model_calls.turn);
+  const query = db.select().from(model_calls).where(eq(model_calls.session_id, sessionId)).orderBy(model_calls.turn, model_calls.id);
+  if (page?.limit === undefined) return query;
+  return query.limit(page.limit).offset(page.offset ?? 0);
 }

@@ -1,4 +1,4 @@
-import { eq, and, count, inArray } from 'drizzle-orm';
+import { eq, and, count, desc, inArray } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { getDrizzleDb } from '../index.js';
 import { sessions, messages, model_calls } from '../schema.js';
@@ -37,14 +37,25 @@ export async function updateSessionStatus(id: string, status: string): Promise<v
 
 // ── Dashboard: sessions helpers ───────────────────────────────────────────
 
-export interface SessionWithCountsRow {
+export type SessionBaseRow = {
   id: string; model: string; status: string;
   created_at: string; updated_at: string;
-  message_count: number; call_count: number;
-}
+};
 
+export type SessionWithCountsRow = SessionBaseRow & {
+  message_count: number; call_count: number;
+};
+
+/**
+ * `isVisible` is a caller-supplied predicate because session ownership is
+ * resolved from the run index (session ids embed the run id), not from a
+ * sessions column. When present the predicate is applied BEFORE pagination so
+ * `total`, `limit`, and `offset` all describe the visible set; this loads every
+ * status/model-matching row, which is acceptable at dashboard session volumes.
+ */
 export async function listSessionsWithCounts(opts: {
   status?: string; model?: string; limit: number; offset: number;
+  isVisible?: (row: SessionBaseRow) => boolean;
 }): Promise<{ sessions: SessionWithCountsRow[]; total: number }> {
   const db = getDrizzleDb();
   const conds: SQL[] = [];
@@ -52,21 +63,39 @@ export async function listSessionsWithCounts(opts: {
   if (opts.model) conds.push(eq(sessions.model, opts.model));
   const where = conds.length ? and(...conds) : undefined;
 
-  const { rows, total } = await paginate(sessions, {
-    id: sessions.id,
-    model: sessions.model,
-    status: sessions.status,
-    created_at: sessions.created_at,
-    updated_at: sessions.updated_at,
-  }, {
-    orderBy: 'created_at',
-    dir: 'desc',
-    pageSize: opts.limit,
-    offset: opts.offset,
-    where,
-  });
+  let rows: SessionBaseRow[];
+  let total: number;
+  if (opts.isVisible) {
+    const all = await db.select({
+      id: sessions.id,
+      model: sessions.model,
+      status: sessions.status,
+      created_at: sessions.created_at,
+      updated_at: sessions.updated_at,
+    }).from(sessions).where(where).orderBy(desc(sessions.created_at), desc(sessions.id)) as SessionBaseRow[];
+    const visible = all.filter(opts.isVisible);
+    total = visible.length;
+    rows = visible.slice(opts.offset, opts.offset + opts.limit);
+  } else {
+    const page = await paginate(sessions, {
+      id: sessions.id,
+      model: sessions.model,
+      status: sessions.status,
+      created_at: sessions.created_at,
+      updated_at: sessions.updated_at,
+    }, {
+      orderBy: 'created_at',
+      dir: 'desc',
+      tiebreakBy: 'id',
+      pageSize: opts.limit,
+      offset: opts.offset,
+      where,
+    });
+    rows = page.rows as SessionBaseRow[];
+    total = page.total;
+  }
 
-  const ids = (rows as Array<{ id: string }>).map(r => r.id);
+  const ids = rows.map(r => r.id);
   const msgCounts = new Map<string, number>();
   const callCounts = new Map<string, number>();
   if (ids.length > 0) {
@@ -78,7 +107,7 @@ export async function listSessionsWithCounts(opts: {
     for (const g of callRows) callCounts.set(String(g.sessionId), Number(g.c));
   }
 
-  const result = (rows as Array<{ id: string }>).map(r => ({
+  const result = rows.map(r => ({
     ...r,
     message_count: msgCounts.get(r.id) ?? 0,
     call_count: callCounts.get(r.id) ?? 0,

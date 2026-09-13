@@ -31,3 +31,33 @@ export function outputRoot(): string {
 export function dbPath(): string {
   return process.env.ARENA_DB_PATH ?? path.join(outputRoot(), 'arena.db');
 }
+
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+/** True iff `name` is a bare identifier safe to use as a single path segment. */
+export function isSafeId(name: string): boolean {
+  return SAFE_ID_RE.test(name);
+}
+
+/** Throw unless `name` is a bare identifier safe to use as a single path segment. */
+export function assertSafeId(name: string): void {
+  if (!isSafeId(name)) {
+    throw new Error(`Invalid identifier "${name}": only letters, digits, "_" and "-" are allowed`);
+  }
+}
+
+const UNSAFE_DIR_CHAR_RE = /[^A-Za-z0-9._-]/g;
+
+/**
+ * Map a catalog lookup key (display name like "Claude 3.7 Sonnet" or canonical
+ * id like "openai/gpt-4o") to a single filesystem-safe directory segment.
+ * Characters outside [A-Za-z0-9._-] become "_", parent-dir ("..") sequences and
+ * leading dots are stripped, and the result is never empty, ".", or "..". The
+ * returned value never contains "/", "\", or NUL.
+ */
+export function modelDirSegment(canonicalOrDisplayName: string): string {
+  let segment = canonicalOrDisplayName.replace(UNSAFE_DIR_CHAR_RE, '_');
+  while (segment.includes('..')) segment = segment.replace(/\.\./g, '_');
+  segment = segment.replace(/^\.+/, '');
+  return segment.length === 0 || segment === '.' ? '_' : segment;
+}

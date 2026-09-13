@@ -1,11 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { task } from '../../src/tools/task.js';
-import type { ToolExecutionContext, ChatMessage, ModelResponse, ToolDefinition } from '../../src/types.js';
+import { task, createSubagentAdapter } from '../../src/tools/task.js';
+import type { ToolExecutionContext, ChatMessage, ModelResponse, ToolDefinition, SubagentConfig } from '../../src/types.js';
+import type { SendOpts } from '../../src/providers/adapters/base.js';
 
 const logger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => logger } as ToolExecutionContext['logger'];
 
-function makeCtx(sendMessage?: typeof mockSendMessage): ToolExecutionContext {
+type SendMessageFn = (messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts) => Promise<ModelResponse>;
+
+function makeCtx(sendMessage?: SendMessageFn): ToolExecutionContext {
   if (!sendMessage) {
     return {
       sandboxDir: '/tmp/arena-task-test',
@@ -31,14 +34,7 @@ function makeCtx(sendMessage?: typeof mockSendMessage): ToolExecutionContext {
   };
 }
 
-function mockSendMessage(_messages: ChatMessage[], _tools: ToolDefinition[]): Promise<ModelResponse> {
-  // Auto-respond with task_complete on the first call
-  return {
-    [Symbol.toPrimitive]() { return 'mock'; },
-  } as any;
-}
-
-function createMockAdapter(responses: ModelResponse[]): (msgs: ChatMessage[], tools: ToolDefinition[]) => Promise<ModelResponse> {
+function createMockAdapter(responses: ModelResponse[]): SendMessageFn {
   let idx = 0;
   return async () => {
     const r = responses[idx] ?? responses[responses.length - 1]!;
@@ -149,5 +145,49 @@ describe('task', () => {
     }, ctx);
     assert.strictEqual(r.isError, false);
     // Should have called read_file executor — if stripped incorrectly, it'd fail on unknown tool
+  });
+
+  it('forwards parent send options to the subagent adapter', async () => {
+    let captured: SendOpts | undefined;
+    const sendMsg = async (_messages: ChatMessage[], _tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> => {
+      captured = opts;
+      return {
+        text: null,
+        toolCalls: [{ id: 'tc1', name: 'task_complete', arguments: { summary: 'done' } }],
+        usage: { prompt: 1, completion: 1, total: 2 },
+        stopReason: 'tool_calls',
+      };
+    };
+    const ctx = makeCtx(sendMsg);
+    ctx.subagent!.sendOpts = { temperature: 0.4, maxTokens: 1234, reasoning: { type: 'toggle' } };
+    ctx.subagent!.executors = {
+      task_complete: async () => ({ content: 'done', isError: false }),
+    };
+    const r = await task({ description: 'opts task', prompt: 'Go' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.deepEqual(captured, { temperature: 0.4, maxTokens: 1234, reasoning: { type: 'toggle' } });
+  });
+
+  it('forwards subagent capability flags through the adapter shim', () => {
+    const base: SubagentConfig = {
+      maxTurns: 1,
+      sendMessage: async () => ({
+        text: 'ok',
+        toolCalls: [],
+        usage: {},
+        stopReason: 'stop',
+      }),
+      logger,
+      tools: [],
+      executors: {},
+      shellTimeoutMs: 30000,
+      maxShellOutputBytes: 524288,
+    };
+    const capable = createSubagentAdapter({ ...base, supportsReasoning: true, supportsPromptCaching: true });
+    assert.equal(capable.supportsReasoning(), true);
+    assert.equal(capable.supportsPromptCaching(), true);
+    const bare = createSubagentAdapter(base);
+    assert.equal(bare.supportsReasoning(), false);
+    assert.equal(bare.supportsPromptCaching(), false);
   });
 });

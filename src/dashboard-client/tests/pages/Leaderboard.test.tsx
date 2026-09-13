@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { Leaderboard } from '../../src/pages/Leaderboard';
 
-const { leaderboardData, apiFetchMock } = vi.hoisted(() => {
+const { apiFetchMock } = vi.hoisted(() => {
   const leaderboardData = [
     { id: 'gpt-4o', name: 'GPT-4o', provider_id: 'openai', context_limit: 128000, input: 2.5, output: 10, cache_read: 1.25, intelligence: 9.1, coding: 8.7, arena_tps: 50.4, arena_latency: 320, arena_runs: 5 },
     { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet', provider_id: 'anthropic', context_limit: 200000, input: 3, output: 15, cache_read: 1.5, intelligence: 8.8, coding: 9.2, arena_tps: 41.2, arena_latency: 410, arena_runs: 0 },

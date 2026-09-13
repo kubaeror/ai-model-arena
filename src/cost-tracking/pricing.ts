@@ -2,6 +2,7 @@ import { getDrizzleDb, getDriver } from '../db/index.js';
 import { pricing, models } from '../db/schema.js';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import { type ModelPricing, type CostTokenUsage, type CostBreakdown } from './types.js';
+import type { TokenUsage } from '../types.js';
 
 interface PricingRow {
   input: number | null;
@@ -14,9 +15,15 @@ interface Over200kRow {
   input: number | null;
   output: number | null;
   cache_read: number | null;
+  cache_write: number | null;
 }
 
-const pricingCache = new Map<string, PricingRow>();
+/** Base row plus the pricing.model_id it was resolved to (the canonical id). */
+interface ResolvedPricingRow extends PricingRow {
+  resolvedModelId: string;
+}
+
+const pricingCache = new Map<string, ResolvedPricingRow>();
 
 /** Cache key includes the DB identity so tests and DB swaps never serve stale cross-DB entries. */
 function cacheKey(modelId: string): string {
@@ -24,7 +31,7 @@ function cacheKey(modelId: string): string {
 }
 
 /** Look up per-model pricing from the SQLite catalog. Returns null if not found. */
-export async function getModelPricing(modelId: string): Promise<PricingRow | null> {
+export async function getModelPricing(modelId: string): Promise<ResolvedPricingRow | null> {
   try {
     const key = cacheKey(modelId);
     const cached = pricingCache.get(key);
@@ -37,24 +44,32 @@ export async function getModelPricing(modelId: string): Promise<PricingRow | nul
   }
 }
 
-async function queryModelPricing(modelId: string): Promise<PricingRow | null> {
+async function queryModelPricing(modelId: string): Promise<ResolvedPricingRow | null> {
   const db = getDrizzleDb();
   const rows = await db.select({
     input: pricing.input, output: pricing.output,
     cache_read: pricing.cache_read, cache_write: pricing.cache_write,
   }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} = 0`)).limit(1) as PricingRow[];
   let direct = rows[0] ?? null;
-  if (direct && (direct.input != null || direct.output != null)) return direct;
+  if (direct && (direct.input != null || direct.output != null)) return { ...direct, resolvedModelId: modelId };
   // Fall back: treat `modelId` as a friendly name and resolve via the catalog.
   const modelRows = await db.select({ id: models.id }).from(models).where(sql`${models.name} = ${modelId} OR ${models.id} = ${modelId}`).limit(1);
   if (!modelRows.length) return null;
+  const canonicalId = modelRows[0].id;
   const fallback = await db.select({
     input: pricing.input, output: pricing.output,
     cache_read: pricing.cache_read, cache_write: pricing.cache_write,
-  }).from(pricing).where(and(eq(pricing.model_id, modelRows[0].id), sql`${pricing.tier_size} = 0`)).limit(1) as PricingRow[];
-  return fallback[0] ?? null;
+  }).from(pricing).where(and(eq(pricing.model_id, canonicalId), sql`${pricing.tier_size} = 0`)).limit(1) as PricingRow[];
+  const row = fallback[0];
+  return row ? { ...row, resolvedModelId: canonicalId } : null;
 }
 
+/**
+ * Display-only pricing shape: absent cache prices default to 0 so dashboards
+ * can render "no cache pricing". This intentionally diverges from billing:
+ * `computeCost` is null-aware and bills cached tokens at the input price when
+ * the catalog has no cache price. No production billing caller may use this.
+ */
 export async function getPricing(modelName: string): Promise<ModelPricing | undefined> {
   const p = await getModelPricing(modelName);
   if (!p) return undefined;
@@ -67,39 +82,93 @@ export async function getPricing(modelName: string): Promise<ModelPricing | unde
 }
 
 export async function computeCost(modelName: string, usage: CostTokenUsage): Promise<CostBreakdown> {
-  const pricingData = await getPricing(modelName);
-  if (!pricingData) {
+  const row = await getModelPricing(modelName);
+  if (!row) {
     return { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
   }
 
-  const totalTokens = (usage.prompt ?? 0) + (usage.completion ?? 0);
-  const isOver200k = totalTokens > 200_000;
-  const tieredPricing = isOver200k ? await getTieredPricing(modelName) : null;
+  const promptTokens = usage.prompt ?? 0;
+  const completionTokens = usage.completion ?? 0;
+  const cachedTokens = usage.cached ?? 0;
+  const cacheWriteTokens = usage.cacheWrite ?? 0;
 
-  const inputPrice = tieredPricing?.input ?? pricingData.input;
-  const outputPrice = tieredPricing?.output ?? pricingData.output;
-  const cachedPrice = tieredPricing?.cache_read ?? pricingData.cached;
+  // Tier selection is per request, not per run: callers must pass one call's
+  // usage (see computeTotalCost), or a run's calls would all pay the premium.
+  // Price the canonical id so a display-name lookup reaches the same tier rows.
+  const isOver200k = promptTokens + completionTokens > 200_000;
+  const tieredPricing = isOver200k ? await getTieredPricing(row.resolvedModelId) : null;
+
+  const inputPrice = tieredPricing?.input ?? row.input ?? 0;
+  const outputPrice = tieredPricing?.output ?? row.output ?? 0;
+  // Cache prices are optional in the catalog. A token category with no price
+  // (including no tier price) is billed as ordinary input rather than zeroed
+  // out by a defaulted cache price.
+  const cacheReadPrice = tieredPricing?.cache_read ?? row.cache_read ?? row.cache_write;
+  const cacheWritePrice = tieredPricing?.cache_write ?? row.cache_write;
+  // `prompt` counts every input token; priced cache tokens are billed at their
+  // own price, so only the remainder pays the input price. Clamped so a provider
+  // reporting cache tokens additively cannot drive the remainder negative.
+  const inputTokens = Math.max(0,
+    promptTokens
+    - (cacheReadPrice != null ? cachedTokens : 0)
+    - (cacheWritePrice != null ? cacheWriteTokens : 0));
 
   // Catalog prices are USD per 1M tokens (models.dev convention).
-  const inputCost = ((usage.prompt ?? 0) / 1_000_000) * inputPrice;
-  const outputCost = ((usage.completion ?? 0) / 1_000_000) * outputPrice;
-  const cachedCost = ((usage.cached ?? 0) / 1_000_000) * cachedPrice;
+  const inputCost = (inputTokens / 1_000_000) * inputPrice;
+  const outputCost = (completionTokens / 1_000_000) * outputPrice;
+  const cachedCost = cacheReadPrice != null ? (cachedTokens / 1_000_000) * cacheReadPrice : 0;
+  const cacheWriteCost = cacheWritePrice != null ? (cacheWriteTokens / 1_000_000) * cacheWritePrice : 0;
 
   return {
     inputCost,
     outputCost,
-    cachedCost,
-    total: inputCost + outputCost + cachedCost,
+    cachedCost: cachedCost + cacheWriteCost,
+    total: inputCost + outputCost + cachedCost + cacheWriteCost,
   };
 }
 
-async function getTieredPricing(modelId: string): Promise<{ input: number; output: number; cache_read: number | null } | null> {
+/** Map the loop's canonical TokenUsage onto the billing shape. */
+function toCostUsage(usage: TokenUsage): CostTokenUsage {
+  return {
+    prompt: usage.prompt ?? 0,
+    completion: usage.completion ?? 0,
+    cached: usage.cacheReadTokens ?? 0,
+    cacheWrite: usage.cacheWriteTokens ?? 0,
+  };
+}
+
+/**
+ * Total cost for a run: sum each model call's cost so the over-200k tier is
+ * applied per request. Each call is priced with its own `model` tag when
+ * present (fallback hops bill at the serving model), falling back to
+ * `modelName` for untagged calls. Falls back to the aggregate usage when no
+ * per-call list exists (e.g. resumed legacy runs that predate usagePerCall).
+ */
+export async function computeTotalCost(
+  modelName: string,
+  perCallUsage: TokenUsage[] | undefined,
+  aggregateUsage: TokenUsage,
+): Promise<CostBreakdown> {
+  const calls = perCallUsage && perCallUsage.length > 0 ? perCallUsage : [aggregateUsage];
+  const total: CostBreakdown = { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
+  for (const usage of calls) {
+    const cost = await computeCost(usage.model ?? modelName, toCostUsage(usage));
+    total.inputCost += cost.inputCost;
+    total.outputCost += cost.outputCost;
+    total.cachedCost += cost.cachedCost;
+    total.total += cost.total;
+  }
+  return total;
+}
+
+async function getTieredPricing(modelId: string): Promise<{ input: number; output: number; cache_read: number | null; cache_write: number | null } | null> {
   try {
     const db = getDrizzleDb();
     const rows = await db.select({
       input: pricing.over_200k_input,
       output: pricing.over_200k_output,
       cache_read: pricing.over_200k_cache_read,
+      cache_write: pricing.over_200k_cache_write,
     }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.over_200k_input} IS NOT NULL`)).limit(1) as Over200kRow[];
     const row = rows[0];
     if (!row || row.input == null) return null;
@@ -117,6 +186,7 @@ async function getTieredPricing(modelId: string): Promise<{ input: number; outpu
       input: row.input,
       output: output ?? row.input,
       cache_read: row.cache_read,
+      cache_write: row.cache_write,
     };
   } catch {
     return null;

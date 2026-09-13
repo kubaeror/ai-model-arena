@@ -21,20 +21,20 @@
     "audit": "npm audit --audit-level=high --production",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/scripts/db-migrate.ts",
-    "test:db": "tsx --test tests/db/**/*.test.ts tests/catalog/**/*.test.ts tests/lineage/**/*.test.ts tests/metrics/writeback.test.ts tests/providers/custom.test.ts tests/runner/checkpoint*.test.ts tests/session/**/*.test.ts tests/worker/**/*.test.ts",
+    "test:db": "tsx --test tests/db/**/*.test.ts tests/catalog/**/*.test.ts tests/cost-tracking/**/*.test.ts tests/metrics/writeback.test.ts tests/providers/custom.test.ts tests/runner/checkpoint*.test.ts tests/session/**/*.test.ts tests/worker/**/*.test.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dashboard:dev": "concurrently -k -n api,web -c green,cyan \"tsx src/dashboard-server/server.ts\" \"npm --prefix src/dashboard-client run dev\"",
     "dashboard:build": "tsc && npm --prefix src/dashboard-client run build",
     "dashboard:start": "node dist/dashboard-server/server.js",
     "e2e": "playwright test",
-    "test:db-pg": "DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena npm run db:migrate && DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena PG_TEST_RESET=1 NODE_OPTIONS=\"--import=./tests/helpers/pg-test-reset.ts\" tsx --test --test-concurrency=1 tests/db/**/*.test.ts tests/catalog/**/*.test.ts tests/lineage/**/*.test.ts tests/metrics/writeback.test.ts tests/providers/custom.test.ts tests/runner/checkpoint*.test.ts tests/session/**/*.test.ts tests/worker/**/*.test.ts"
+    "test:db-pg": "DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena npm run db:migrate && DB_DRIVER=postgres DATABASE_URL=postgres://arena:arena@localhost:5432/arena PG_TEST_RESET=1 NODE_OPTIONS=\"--import=./tests/helpers/pg-test-reset.ts\" tsx --test --test-concurrency=1 tests/db/**/*.test.ts tests/catalog/**/*.test.ts tests/cost-tracking/**/*.test.ts tests/metrics/writeback.test.ts tests/providers/custom.test.ts tests/runner/checkpoint*.test.ts tests/session/**/*.test.ts tests/worker/**/*.test.ts tests/notifications/**/*.test.ts"
   },
   "engines": {
     "node": ">=22.22.0"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1105.0",
-    "@aws-sdk/credential-provider-node": "^3.972.78",
+    "@aws-sdk/client-bedrock-runtime": "^3.1131.0",
+    "@aws-sdk/credential-provider-node": "^3.972.83",
     "@kubernetes/client-node": "^1.4.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.221.0",
@@ -52,7 +52,7 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.6.2",
+    "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
     "ioredis": "^6.0.0",
     "js-yaml": "^5.2.3",
@@ -70,7 +70,7 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^26.1.1",
-    "@types/pg": "^8.20.4",
+    "@types/pg": "^8.23.1",
     "@types/ws": "^8.5.13",
     "@typescript-eslint/eslint-plugin": "^8.64.0",
     "@typescript-eslint/parser": "^8.64.0",
@@ -79,7 +79,7 @@
     "concurrently": "^10.0.4",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.7.0",
-    "tsx": "^4.23.11",
+    "tsx": "^4.23.13",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
   },
   "overrides": {

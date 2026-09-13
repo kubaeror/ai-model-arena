@@ -2,32 +2,36 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { outputRoot, dbPath, findProjectRoot } from './paths.js';
+import { outputRoot, dbPath, findProjectRoot, modelDirSegment } from './paths.js';
 import { initDb } from './db/index.js';
-import { transitionTaskState, listModelCallsForSession, listMessagesBySession } from './db/query.js';
+import { transitionTaskState, listModelCallsForSession, listMessagesBySession, getPromptVersion } from './db/query.js';
+import { getRunRecord } from './db/runs.js';
 import { resumeFrom } from './runner/checkpoint.js';
 import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS, isTerminalAttempt } from './queue/index.js';
 import { createSessionStore } from './session/store.js';
 import { ProviderRegistry, loadBuiltins } from './providers/index.js';
-import { resolveModelForRun } from './db/model-resolver.js';
+import { resolveModelForRun, type ResolvedModel } from './db/model-resolver.js';
 import { loadScenario, resolveScenarioPath, toSendOptsReasoning, type ScenarioConfig } from './config.js';
 import { createLogger } from './logger/pino-logger.js';
 import { ConversationLogger } from './logger/conversation-logger.js';
 import { writeReport } from './logger/report-logger.js';
 import { writeResultJson, type RunResult } from './logger/result-logger.js';
-import { Sandbox, sandboxEnv, resolveSeedDir } from './sandbox/sandbox.js';
+import { Sandbox, sandboxEnv, resolveSeedDir, isWithin } from './sandbox/sandbox.js';
 import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
 import { generateManifest, writeManifest, buildProducedByTool } from './sandbox/artifact-manifest.js';
 import { getProfile, getAllowedTools } from './profiles/definitions.js';
+import { evaluateRunLimits, resolveExecutionStartMs } from './runner/limits.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
 import { resolveFallback, resolveMaxFallbackHops, type FallbackConfig } from './providers/fallback.js';
-import { loadBudgetConfig, checkBudget, computeCost, budgetStateRoot } from './cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, computeCost, computeTotalCost, budgetStateRoot } from './cost-tracking/index.js';
+import type { CostTokenUsage } from './cost-tracking/types.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled, dispatchBudgetExceeded } from './orchestrator/run-lifecycle.js';
 import { activeTasks, taskCounter, taskDuration, tasksClaimed, tasksFailed, startMetricsServer } from './observability/metrics.js';
 import type { ToolExecutionContext, TokenUsage, ChatMessage, Logger } from './types.js';
+import type { SendOpts } from './providers/adapters/base.js';
 import type { StoredMessage } from './session/store.js';
 import { closeDb } from './db/index.js';
 import { secretStore } from './secrets/store.js';
@@ -146,16 +150,50 @@ export async function runSuccessCriteria(
  * Queue-driven runs previously depended on the dashboard watcher polling
  * every 3s; if the dashboard was down they never finalized. finalizeRunByRunId
  * is idempotent (skips already-completed runs), so racing the watcher or a
- * CLI finalize is safe.
+ * CLI finalize is safe. prepareRunFinalization applies the shared stop gate:
+ * while a stop awaits sibling runners (non-terminal row or live signal inside
+ * the grace window) this returns false instead of finalizing mid-turn.
  */
 async function maybeFinalizeRun(runId: string, log: Logger): Promise<void> {
   try {
-    const { isRunCompleteByRunId, finalizeRunByRunId } = await import('./orchestrator/run-lifecycle.js');
-    if (!(await isRunCompleteByRunId(runId))) return;
+    const { prepareRunFinalization, finalizeRunByRunId } = await import('./orchestrator/run-lifecycle.js');
+    if (!(await prepareRunFinalization(runId))) return;
     await finalizeRunByRunId(runId, log);
   } catch (err) {
     log.warn('Self-finalize failed (non-fatal)', { runId, error: String(err) });
   }
+}
+
+/**
+ * Per-model stop acknowledgement: rows are the acks. The cancel signal stays
+ * set until every model row is terminal, so sibling runners keep observing the
+ * stop and the watcher/CLI keep holding the run; the runner that writes the
+ * last terminal row clears it. Idempotent, and a no-op for a run without a
+ * live cancel signal.
+ */
+async function acknowledgeStop(runId: string, log: Logger): Promise<void> {
+  try {
+    if (!(await isRunCancelled(runId))) return;
+    const { isRunCompleteByRunId } = await import('./orchestrator/run-lifecycle.js');
+    if (!(await isRunCompleteByRunId(runId))) return;
+    await clearRunCancelled(runId);
+  } catch (err) {
+    log.warn('Failed to acknowledge stop (non-fatal)', { runId, error: String(err) });
+  }
+}
+
+/**
+ * True iff `id` cannot be used as a run-id directory segment. Dots are allowed
+ * (CLI scenario stems and timestamps may contain them); a path separator, NUL,
+ * or a "."/".." segment is not. The containment assert downstream is the
+ * actual boundary — this is the pre-fs-write rejection.
+ */
+function isUnsafeRunId(id: string): boolean {
+  return id.length === 0
+    || id === '.' || id === '..'
+    || /[\\/\0]/.test(id)
+    || path.isAbsolute(id)
+    || id.startsWith('~');
 }
 
 /** Sum of a session's prior model-call spend (for resume budget continuity). */
@@ -163,11 +201,14 @@ export async function sumPriorRunSpend(sessionId: string, modelName: string): Pr
   let total = 0;
   const priorCalls = await listModelCallsForSession(sessionId);
   for (const c of priorCalls) {
-    const usage = JSON.parse(c.usage ?? '{}') as { prompt?: number; completion?: number };
+    const usage = JSON.parse(c.usage ?? '{}') as {
+      prompt?: number; completion?: number; cacheReadTokens?: number; cacheWriteTokens?: number;
+    };
     const prior = await computeCost(modelName, {
       prompt: Number(usage.prompt ?? 0),
       completion: Number(usage.completion ?? 0),
-      cached: 0,
+      cached: Number(usage.cacheReadTokens ?? 0),
+      cacheWrite: Number(usage.cacheWriteTokens ?? 0),
     });
     total = Math.max(total, prior.total);
   }
@@ -297,12 +338,28 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       taskStartedAt = new Date();
       activeTasks.inc();
 
-      // Check per-run cancellation before starting execution
+      // Queue tasks are untrusted input: the run-id segment is validated here
+      // and the run directory (derived from the resolved model below) must stay
+      // under outputRoot() before any directory is created or artifact written.
       const modelRunId = String(task.config.modelRunId ?? task.sessionId);
       const runId = modelRunId;
+      const modelName = task.model;
+      if (isUnsafeRunId(modelRunId)) {
+        throw new Error(`Invalid run id "${modelRunId}": path separators and parent references are not allowed`);
+      }
+      const startedAt = new Date();
+
+      // Check per-run cancellation before starting execution. The runner owns
+      // its model row: ack the stop by writing its own terminal state, then
+      // release the cancel signal only if every sibling has also acked.
       if (await isRunCancelled(runId)) {
         logger.info('Run cancelled before execution', { runId, taskId: task.taskId });
-        await clearRunCancelled(runId);
+        try {
+          await transitionTaskState(runId, task.model, 'stopped', runnerId);
+        } catch (e) {
+          logger.warn('Failed to write stopped state for cancelled task', { error: String(e) });
+        }
+        await acknowledgeStop(runId, logger);
         await queue.ack(task._redisId ?? task.taskId);
         continue;
       }
@@ -328,10 +385,19 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       // Seeded from persisted model calls on resume so a restarted run does
       // not lose sight of what the pre-crash attempt already spent.
       let prevRunCost = 0;
+      // Wall-clock cap anchor: the session is created at first dequeue with a
+      // deterministic id (`${runId}-${model}`), so session.created_at marks the
+      // first execution for this run+model. Queue wait and sibling-model runtime
+      // do not count toward the cap, while nack retries and runner restarts
+      // cannot reset it. First attempt (no session yet) falls back to now.
       let session = await store.loadSession(task.sessionId);
+      const executionStartedAtMs = resolveExecutionStartMs(session?.createdAt, startedAt.getTime());
       let resumedMessages: ChatMessage[] | undefined;
       if (!session) {
-        session = await store.createSession({ id: task.sessionId, model: task.model });
+        session = await store.createSession({
+          id: task.sessionId, model: task.model,
+          promptId: task.promptId, promptVersion: task.promptVersion,
+        });
         // Nothing to resume — nothing persisted yet.
       } else {
         const resumed = await resumeFrom(session.id);
@@ -348,28 +414,77 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
 
       const scenarioName = task.scenario;
-      const modelName = task.model;
-
       const scenarioDir = path.join(process.cwd(), 'configs', 'scenarios');
-      const scenario = loadScenario(resolveScenarioPath(scenarioDir, scenarioName));
+      const scenario = loadScenario(resolveScenarioPath(scenarioDir, scenarioName, {
+        allowPath: task.config.scenarioSource === 'cli',
+      }));
+
+      // A prompt-version run uses the stored prompt text instead of the
+      // scenario's; a prompt that no longer exists fails the run rather than
+      // silently executing different instructions.
+      const storedPrompt = task.promptId
+        ? await getPromptVersion(task.promptId, task.promptVersion ?? 1)
+        : null;
+      if (task.promptId && !storedPrompt) {
+        throw new Error(`Prompt version not found: ${task.promptId}@${task.promptVersion ?? 1}`);
+      }
+      const systemPrompt = storedPrompt?.system_prompt ?? scenario.systemPrompt;
+      const taskPrompt = storedPrompt?.task ?? scenario.task;
+
+      // Resolve the model before any fs write so a catalog miss cannot leave
+      // an output directory behind.
+      const resolved = await resolveModelForRun(modelName);
+      if (!resolved) {
+        logger.error('Model not found', { model: modelName });
+        // nack requeues below the DLQ threshold — count failed + duration
+        // only when the nack dead-letters (terminal).
+        if (isTerminalFailure(task!.attempts)) {
+          taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
+          taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
+          taskCounted = true;
+          tasksFailed.inc();
+          // The nack below dead-letters this attempt, so the model task just
+          // reached a terminal state. Mark the model row failed and finalize
+          // the run; without this the run stays wedged in 'running' forever
+          // (isRunCompleteByRunId never sees a terminal status).
+          try {
+            await transitionTaskState(runId, task!.model, 'failed', runnerId);
+          } catch (err: unknown) {
+            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+            logger.error('transitionTaskState to "failed" failed for missing model — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
+          }
+          // A failed terminal row is this model's stop ack too: if it was the
+          // last non-terminal sibling, clear the signal so the run can finalize.
+          await acknowledgeStop(runId, logger);
+          void maybeFinalizeRun(runId, logger).catch(() => undefined);
+        }
+        await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
+        continue;
+      }
+
+      // Derive the directory from the resolved canonical id (falling back to
+      // the lookup key) the same way createRunSpec does, so orchestrator and
+      // runner agree on outputDir without task.model ever reaching a path.
+      const modelDir = modelDirSegment(resolved.canonicalId || modelName);
+      const runOutputDir = path.join(outputRoot(), modelDir, modelRunId);
+      const sandboxDir = path.join(runOutputDir, 'files');
+      if (!isWithin(outputRoot(), path.resolve(runOutputDir))) {
+        throw new Error(`Run output path escapes the output root: ${runOutputDir}`);
+      }
 
       // Fresh sessions persist the initial system+task as turn 0 so a later
       // resume can replay the full context.
       if (!resumedMessages) {
         const t0 = new Date().toISOString();
         const turnZero: StoredMessage[] = [
-          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'system', content: scenario.systemPrompt, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
-          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'user', content: scenario.task, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
+          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'system', content: systemPrompt, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
+          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'user', content: taskPrompt, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
         ];
         for (const m of turnZero) await store.appendMessage(session.id, m);
       }
 
-      const runOutputDir = path.join(outputRoot(), modelName, modelRunId);
-      const sandboxDir = path.join(runOutputDir, 'files');
       fs.mkdirSync(runOutputDir, { recursive: true });
       fs.mkdirSync(sandboxDir, { recursive: true });
-
-      const startedAt = new Date();
 
       // Ported from worker.ts: conversation.json is written so report.md can
       // be generated from it at the end of the run.
@@ -426,35 +541,13 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const sandboxGit = new SandboxGit({ sandboxDir, modelName, logger });
       await sandboxGit.init();
 
-      const resolved = await resolveModelForRun(modelName);
-      if (!resolved) {
-        logger.error('Model not found', { model: modelName });
-        // nack requeues below the DLQ threshold — count failed + duration
-        // only when the nack dead-letters (terminal).
-        if (isTerminalFailure(task!.attempts)) {
-          taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-          taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
-          taskCounted = true;
-          tasksFailed.inc();
-          // The nack below dead-letters this attempt, so the model task just
-          // reached a terminal state. Mark the model row failed and finalize
-          // the run; without this the run stays wedged in 'running' forever
-          // (isRunCompleteByRunId never sees a terminal status).
-          try {
-            await transitionTaskState(runId, task!.model, 'failed', runnerId);
-          } catch (err: unknown) {
-            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
-            logger.error('transitionTaskState to "failed" failed for missing model — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
-          }
-          void maybeFinalizeRun(runId, logger).catch(() => undefined);
-        }
-        await queue.nack(task!._redisId ?? task!.taskId, `Model not found: ${modelName}`);
-        continue;
-      }
-
       // Ported from worker.ts: fail fast on a missing API key instead of
       // letting the adapter surface a confusing auth error mid-loop.
-      if (resolved.envVar && !secretStore.get(resolved.envVar)) {
+      const descriptor = registry.get(resolved.providerId);
+      // Bedrock authenticates via SigV4/IAM credentials and its catalog
+      // "envVar" is the region: it has no API-key secret to require.
+      const keylessProvider = descriptor?.adapter === 'bedrock' || descriptor?.authScheme === 'none';
+      if (!keylessProvider && resolved.envVar && !secretStore.get(resolved.envVar)) {
         const msg = `Missing API key: set ${resolved.envVar} in your .env`;
         logger.error(msg, { model: modelName });
         writeResultJson(path.join(runOutputDir, 'result.json'), {
@@ -463,30 +556,63 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           durationMs: 0, turnsUsed: 0, maxTurns: 0, totalToolCalls: 0, toolsCalled: [],
           tokenUsage: {}, stopReason: 'setup_error', errors: [msg], success: false,
         });
-        // Awaited before maybeFinalizeRun below: on Postgres the pg.Pool
-        // spreads queries across connections, so a fire-and-forget UPDATE
-        // could lose the race against the isRunCompleteByRunId SELECT.
-        try {
-          await transitionTaskState(runId, task.model, 'failed', runnerId);
-        } catch (err: unknown) {
-          const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
-          logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
+        // A retryable attempt must not terminalize its row: the nack below
+        // requeues the task, so a non-terminal row keeps the stop gate closed
+        // until the redelivery resolves (mirrors the catch path). It also lets
+        // a key fixed before the retry lands be picked up instead of losing
+        // the task to acked setup_error. Only a terminal attempt acks and
+        // terminalizes.
+        const terminalFailure = isTerminalFailure(task.attempts);
+        if (terminalFailure) {
+          // Awaited before maybeFinalizeRun below: on Postgres the pg.Pool
+          // spreads queries across connections, so a fire-and-forget UPDATE
+          // could lose the race against the isRunCompleteByRunId SELECT.
+          try {
+            await transitionTaskState(runId, task.model, 'failed', runnerId);
+          } catch (err: unknown) {
+            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+            logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
+          }
+          taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
+          taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
+          taskCounted = true;
+          tasksFailed.inc();
+          await acknowledgeStop(runId, logger);
+          await queue.ack(task!._redisId ?? task!.taskId);
+          void maybeFinalizeRun(runId, logger).catch(() => undefined);
+        } else {
+          await queue.nack(task!._redisId ?? task!.taskId, msg);
         }
-        taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-        taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
-        taskCounted = true;
-        tasksFailed.inc();
-        await queue.ack(task!._redisId ?? task!.taskId);
-        void maybeFinalizeRun(runId, logger).catch(() => undefined);
         continue;
       }
 
       let currentProvider = resolved.providerId;
       let currentModel = resolved.apiModelId;
-      const descriptor = registry.get(currentProvider);
+      // Canonical id used to price calls made by the serving model: the
+      // primary's until a fallback hop switches it to the hop's own row.
+      let currentBillingModel = resolved.canonicalId;
       const apiKey = descriptor?.envVar ? secretStore.get(descriptor.envVar) : undefined;
       const executors = buildToolExecutors();
       let adapter = registry.createAdapter(currentProvider, currentModel, { apiKey, logger: logger.child('adapter') });
+
+      // Scenario-configured reasoning plus the catalog sampling/output limits.
+      // These must ride in sendOpts (not only as span attributes) so every
+      // adapter — and the subagent — receives them. Null capability fields
+      // mean "omit": unsupported temperature on reasoning-only models
+      // (o-series). A reasoning-only model keeps its output cap but the cap
+      // must be sent as max_completion_tokens (max_tokens 400s).
+      const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
+      const buildSendOpts = (m: ResolvedModel | null): SendOpts => {
+        const opts: SendOpts = {};
+        if (m?.temperature != null) opts.temperature = m.temperature;
+        if (m?.maxTokens != null) {
+          opts.maxTokens = m.maxTokens;
+          if (m.reasoningOnly) opts.maxTokensField = 'max_completion_tokens';
+        }
+        if (reasoningOpt) opts.reasoning = reasoningOpt;
+        return opts;
+      };
+      let sendOpts = buildSendOpts(resolved);
 
       // Wire subagent support: strip recursive tools
       const subagentToolNames = new Set(['task', 'todo_read', 'todo_write']);
@@ -497,7 +623,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
       toolCtx.subagent = {
         maxTurns: 5,
-        sendMessage: (msgs, tools) => adapter.sendMessage(msgs, tools),
+        sendMessage: (msgs, tools, opts) => adapter.sendMessage(msgs, tools, opts),
+        sendOpts,
+        supportsReasoning: adapter.supportsReasoning(),
+        supportsPromptCaching: adapter.supportsPromptCaching(),
         logger: logger.child('subagent'),
         tools: subagentTools,
         executors: subagentExecutors,
@@ -510,9 +639,6 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       };
       let loopResult;
       let maxFallbackHops = resolveMaxFallbackHops();
-      // Scenario-configured reasoning, converted to the adapter union shape.
-      // Undefined when the scenario sets nothing — no behavior change.
-      const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
 
       // Transition to 'running'
       try {
@@ -521,19 +647,23 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         logger.warn('Failed to write running state', { error: String(e) });
       }
 
+      // Per-call spend tracking for the budget check. The turn hook receives
+      // cumulative usage, so each turn's cost is the delta from the previous
+      // cumulative snapshot; attemptRunCost resets on a fallback so a retried
+      // attempt is not counted twice on top of the pre-attempt seed.
+      const seededRunCost = prevRunCost;
       while (maxFallbackHops >= 0) {
         const breaker = CircuitBreaker.for(currentProvider, currentModel);
+        let attemptRunCost = 0;
+        let prevTurnUsage: TokenUsage = {};
         try {
           const traced = await breaker.exec(() => runAgentLoopTraced({
             adapter,
             tools: TOOL_DEFINITIONS,
             executors,
-            systemPrompt: scenario.systemPrompt,
-            task: scenario.task,
-            maxTurns: Math.min(
-              (task!.config.maxTurns as number) ?? scenario.maxTurns ?? profile.maxTurns,
-              profile.maxTurns,
-            ),
+            systemPrompt,
+            task: taskPrompt,
+            maxTurns: scenario.maxTurns ?? profile.maxTurns,
             toolCtx,
             conv,
             logger: logger.child('loop'),
@@ -541,9 +671,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             initialTurn,
             provider: currentProvider,
             model: currentModel,
-            temperature: (resolved.temperature as number) ?? 0,
-            maxTokens: (resolved.maxTokens as number) ?? 0,
-            sendOpts: reasoningOpt ? { reasoning: reasoningOpt } : undefined,
+            billingModel: currentBillingModel,
+            temperature: sendOpts.temperature,
+            maxTokens: sendOpts.maxTokens,
+            sendOpts,
             scenario: scenarioName,
             runId: modelRunId,
             modelConfig: modelName,
@@ -581,6 +712,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                     completion: usage.completion ?? 0,
                     total: usage.total ?? 0,
                     cacheReadTokens: usage.cacheReadTokens ?? 0,
+                    cacheWriteTokens: usage.cacheWriteTokens ?? 0,
                   },
                   latencyMs: durationMs ?? null,
                   ttftMs: durationMs ?? null,
@@ -590,13 +722,24 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               }
               // Track this run's spend so the per-turn budget check below can
               // trip on it (spend only reaches the ledger at finalize time).
+              // Price the current turn's token delta, not the cumulative total,
+              // so the over-200k tier is applied per request.
               try {
-                const cumulative = await computeCost(modelName, {
-                  prompt: usage.prompt ?? 0,
-                  completion: usage.completion ?? 0,
-                  cached: usage.cacheReadTokens ?? 0,
-                });
-                prevRunCost = Math.max(prevRunCost, cumulative.total);
+                const turnUsage: CostTokenUsage = {
+                  prompt: Math.max(0, (usage.prompt ?? 0) - (prevTurnUsage.prompt ?? 0)),
+                  completion: Math.max(0, (usage.completion ?? 0) - (prevTurnUsage.completion ?? 0)),
+                  cached: Math.max(0, (usage.cacheReadTokens ?? 0) - (prevTurnUsage.cacheReadTokens ?? 0)),
+                  cacheWrite: Math.max(0, (usage.cacheWriteTokens ?? 0) - (prevTurnUsage.cacheWriteTokens ?? 0)),
+                };
+                prevTurnUsage = {
+                  prompt: usage.prompt,
+                  completion: usage.completion,
+                  cacheReadTokens: usage.cacheReadTokens,
+                  cacheWriteTokens: usage.cacheWriteTokens,
+                };
+                const turnCost = await computeCost(currentBillingModel, turnUsage);
+                attemptRunCost += turnCost.total;
+                prevRunCost = Math.max(prevRunCost, seededRunCost + attemptRunCost);
               } catch (e) {
                 logger.warn('Failed to compute run spend (non-fatal)', { model: modelName, err: String(e) });
               }
@@ -606,6 +749,18 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               if (await isRunCancelled(cancelledRunId)) {
                 logger.info('Run cancelled during execution', { runId: cancelledRunId });
                 return false;
+              }
+              const elapsedMs = Date.now() - executionStartedAtMs;
+              const limitReason = evaluateRunLimits(
+                { maxExecutionSec: profile.maxExecutionSec, maxCostUsd: profile.maxCostUsd },
+                { elapsedMs, runCostUsd: prevRunCost },
+              );
+              if (limitReason) {
+                logger.warn('Run limit exceeded during run', {
+                  runId: modelRunId, reason: limitReason, elapsedMs, spentUsd: prevRunCost,
+                  maxExecutionSec: profile.maxExecutionSec, maxCostUsd: profile.maxCostUsd,
+                });
+                return limitReason;
               }
               const budgetCheck = checkBudget(modelName, budgetStateRoot(root), false, logger, prevRunCost);
               if (!budgetCheck.allowed) {
@@ -625,6 +780,15 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               logger.warn('Falling back', { from: `${currentProvider}/${currentModel}`, to: `${next.provider}/${next.model}` });
               currentProvider = next.provider;
               currentModel = next.model;
+              // Rebuild sampling options from the hop's own catalog row so a
+              // fallback never inherits the primary's temperature/maxTokens
+              // (a lower output cap or a reasoning-only model would 400).
+              const hopResolved = await resolveModelForRun(currentModel, currentProvider);
+              sendOpts = buildSendOpts(hopResolved);
+              currentBillingModel = hopResolved?.canonicalId ?? currentModel;
+              // The subagent shares the live adapter; keep its inherited
+              // options in sync with the hop as well.
+              if (toolCtx.subagent) toolCtx.subagent.sendOpts = sendOpts;
               const fallbackDescriptor = registry.get(currentProvider);
               const fallbackApiKey = fallbackDescriptor?.envVar ? secretStore.get(fallbackDescriptor.envVar) : undefined;
               adapter = registry.createAdapter(currentProvider, currentModel, { apiKey: fallbackApiKey, logger: logger.child('adapter') });
@@ -646,11 +810,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         success = successOutcome ? successOutcome.passed : success;
       } catch { /* non-fatal */ }
 
-      const costBreakdown = await computeCost(modelName, {
-        prompt: result.tokenUsage.prompt ?? 0,
-        completion: result.tokenUsage.completion ?? 0,
-        cached: result.tokenUsage.cacheReadTokens ?? 0,
-      });
+      // Sum the per-call costs so each request is tiered on its own tokens;
+      // the aggregate fallback covers runs with no per-call usage (legacy).
+      const costBreakdown = await computeTotalCost(modelName, result.usagePerCall, result.tokenUsage);
 
       await sandboxGit.commitFinal(success ? 'Task completed successfully' : 'Task failed or incomplete');
       const diff = await sandboxGit.generateDiff();
@@ -661,7 +823,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         model: modelName, scenario: scenarioName, runId: modelRunId,
         startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
-        turnsUsed: result.turnsUsed + (initialTurn - 1), maxTurns: result.maxTurns,
+        // turn-loop's turnsUsed is already the absolute turn number, including
+        // the resumed run's initialTurn offset.
+        turnsUsed: result.turnsUsed, maxTurns: result.maxTurns,
         totalToolCalls: result.totalToolCalls, toolsCalled: result.toolsCalled,
         tokenUsage: result.tokenUsage, stopReason: result.stopReason,
         errors: result.errors, success, costUsd: costBreakdown.total,
@@ -679,13 +843,25 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         writeReport(path.join(runOutputDir, 'report.md'), runResult, convFile);
       } catch { /* best-effort */ }
 
+      // A run stopped mid-execution stays stopped: stopRun records the cancel
+      // signal, this runner records its own terminal row, and finalization is
+      // gated until every model row is terminal, so success completion is
+      // skipped entirely below.
+      const runStopped = (await isRunCancelled(modelRunId))
+        || (await getRunRecord(modelRunId))?.status === 'stopped';
+
       // run_models.status reflects loop health, not the success-criteria result:
       // a clean loop whose criteria failed stays 'completed' (criteria is
       // recorded in result.json). Loop errors still map to 'failed'.
-      const finalStatus = result.errors.length > 0 ? 'failed' : 'completed';
-      transitionTaskState(runId, task.model, finalStatus, runnerId).catch(e =>
-        logger.warn('Failed to write final state', { error: String(e) }),
-      );
+      const finalStatus = runStopped ? 'stopped' : result.errors.length > 0 ? 'failed' : 'completed';
+      // Awaited before maybeFinalizeRun's completeness SELECT: on Postgres the
+      // pool spreads queries across connections, so a fire-and-forget UPDATE
+      // could lose the race and leave the run wedged in 'running'.
+      try {
+        await transitionTaskState(runId, task.model, finalStatus, runnerId);
+      } catch (e) {
+        logger.warn('Failed to write final state', { error: String(e) });
+      }
       try {
         const producedByTool = buildProducedByTool(conv.entries);
         const manifest = generateManifest(sandboxDir, modelRunId, modelName, producedByTool);
@@ -708,14 +884,34 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           { error: manifestErr instanceof Error ? manifestErr.message : String(manifestErr) });
       }
 
+      // Per-model stop acknowledgement: the 'stopped' row and its artifacts are
+      // durable now, so release the cancel signal if this was the last
+      // non-terminal model. Until then it stays set so the watcher, CLI, and
+      // sibling runners keep treating the stop as in flight.
+      if (runStopped) {
+        await acknowledgeStop(modelRunId, logger);
+      }
+
       taskCounter.inc({ model: modelName, scenario: scenarioName, status: finalStatus });
       taskDuration.observe({ model: modelName, scenario: scenarioName }, (finishedAt.getTime() - startedAt.getTime()) / 1000);
       taskCounted = true;
 
       logger.info('Agent loop finished', { taskId: task!.taskId, stopReason: result.stopReason, turns: result.turnsUsed, success });
-      await store.updateSessionStatus(session.id, result.errors.length > 0 ? 'errored' : 'completed');
-      await queue.ack(task!._redisId ?? task!.taskId);
-      void maybeFinalizeRun(runId, logger).catch(() => undefined);
+      // Bookkeeping after a finished loop must never fall through to the task
+      // failure path: log and continue instead of nacking a completed session.
+      if (!runStopped) {
+        try {
+          await store.updateSessionStatus(session.id, result.errors.length > 0 ? 'errored' : 'completed');
+        } catch (e) {
+          logger.warn('Failed to update session status (non-fatal)', { sessionId: session.id, error: String(e) });
+        }
+      }
+      try {
+        await queue.ack(task!._redisId ?? task!.taskId);
+      } catch (e) {
+        logger.warn('Failed to ack finished task; it may be redelivered', { taskId: task!.taskId, error: String(e) });
+      }
+      if (!runStopped) void maybeFinalizeRun(runId, logger).catch(() => undefined);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error('Task failed', { taskId: task?.taskId, error: msg });
@@ -724,39 +920,64 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         // without TypeScript narrowing it back to `T | null` across the await
         // boundary (the `if (task)` guard does not propagate into callbacks).
         const failedTask = task;
-        // Best-effort state transition to 'failed'. If THIS throws, the run
-        // would stay stuck in 'running' forever — log at error level so
-        // operators can see the dropped transition (previously this was
-        // `.catch(() => {})` which hid the failure entirely).
-        // The transition MUST be awaited before maybeFinalizeRun below: on
-        // Postgres the pg.Pool spreads queries across connections, so a
-        // fire-and-forget UPDATE here could lose the race against the
-        // isRunCompleteByRunId SELECT in maybeFinalizeRun running on another
-        // connection — the run would still read 'running' and the
-        // self-finalize would be skipped with no retry (SQLite's synchronous
-        // driver serializes this and cannot reproduce the race).
         const failedRunId = failedTask.config.modelRunId as string ?? failedTask.sessionId;
-        try {
-          await transitionTaskState(failedRunId, failedTask.model, 'failed', runnerId);
-        } catch (err: unknown) {
-          const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
-          logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: failedTask.taskId, modelRunId: failedRunId, ...detail });
+        // A retryable failure must not terminalize its row — nor ack the stop:
+        // the nack below requeues the task, and a non-terminal row keeps the
+        // stop gate closed until the retry lands (a sibling's ack must not
+        // release and finalize the run while this model still has a delivery
+        // pending). A terminal attempt under an active stop is this model's
+        // stop ack, so it terminalizes as 'stopped' like the success path
+        // (mirrors maybeFinalizeRun's terminal-failure guard); every other
+        // terminal attempt writes 'failed'.
+        const terminalFailure = isTerminalFailure(failedTask.attempts);
+        if (terminalFailure) {
+          // Best-effort state transition. If THIS throws, the run would stay
+          // stuck in 'running' forever — log at error level so operators can
+          // see the dropped transition (previously this was `.catch(() => {})`
+          // which hid the failure entirely).
+          // The transition MUST be awaited before maybeFinalizeRun below: on
+          // Postgres the pg.Pool spreads queries across connections, so a
+          // fire-and-forget UPDATE here could lose the race against the
+          // isRunCompleteByRunId SELECT in maybeFinalizeRun running on another
+          // connection — the run would still read 'running' and the
+          // self-finalize would be skipped with no retry (SQLite's synchronous
+          // driver serializes this and cannot reproduce the race).
+          let stoppedFailure = false;
+          try {
+            stoppedFailure = (await isRunCancelled(failedRunId))
+              || (await getRunRecord(failedRunId))?.status === 'stopped';
+          } catch (err: unknown) {
+            // A failed stop-state read must not skip the nack below or escape
+            // this catch: treat it as a plain (not stopped) failure.
+            logger.warn('Failed to read stop state for a terminal failure (treating as not stopped)', {
+              taskId: failedTask.taskId, modelRunId: failedRunId, error: String(err),
+            });
+          }
+          try {
+            await transitionTaskState(failedRunId, failedTask.model, stoppedFailure ? 'stopped' : 'failed', runnerId);
+          } catch (err: unknown) {
+            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+            logger.error(`transitionTaskState to "${stoppedFailure ? 'stopped' : 'failed'}" failed — run may be stuck in "running" state`, { taskId: failedTask.taskId, modelRunId: failedRunId, ...detail });
+          }
+          // The dead-lettered attempt is this model's stop ack: if it was the
+          // last sibling, clear the signal so the run is released.
+          await acknowledgeStop(failedRunId, logger);
+          // nack requeues below the DLQ threshold — count failed + duration
+          // only when the nack dead-letters (terminal).
+          if (!taskCounted) {
+            taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: stoppedFailure ? 'stopped' : 'failed' });
+            if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
+            taskCounted = true;
+            // The nack below dead-letters this attempt, so the run's model task
+            // just reached a terminal state — finalize the run if all models are
+            // done, without waiting for the dashboard watcher. The terminal
+            // transition above was awaited, so the UPDATE has committed before
+            // this SELECT-based completeness check runs.
+            void maybeFinalizeRun(failedRunId, logger).catch(() => undefined);
+          }
+          // nack requeues below the DLQ threshold — count only when it dead-letters.
+          tasksFailed.inc();
         }
-        // nack requeues below the DLQ threshold — count failed + duration
-        // only when the nack dead-letters (terminal).
-        if (!taskCounted && isTerminalFailure(failedTask.attempts)) {
-          taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
-          if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
-          taskCounted = true;
-          // The nack below dead-letters this attempt, so the run's model task
-          // just reached a terminal state — finalize the run if all models are
-          // done, without waiting for the dashboard watcher. The 'failed'
-          // transition above was awaited, so the UPDATE has committed before
-          // this SELECT-based completeness check runs.
-          void maybeFinalizeRun(failedRunId, logger).catch(() => undefined);
-        }
-        // nack requeues below the DLQ threshold — count only when it dead-letters.
-        if (isTerminalFailure(failedTask.attempts)) tasksFailed.inc();
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {

@@ -23,6 +23,7 @@ spec:
         app: runner
         provider: bedrock
     spec:
+      serviceAccountName: bedrock-runner
       terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
@@ -125,3 +126,4 @@ spec:
         - name: provider-keys
           secret:
             secretName: provider-keys
+            optional: true

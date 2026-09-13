@@ -3,7 +3,7 @@ import { listRuns } from '../../orchestrator/orchestrator.js';
 import { extractToolCallsFromConversation, detectTurnLoops, type LoopIncident } from '../../logger/conversation-parser.js';
 import { getDrizzleDb } from '../../db/index.js';
 import { tool_call_stats, run_models } from '../../db/schema.js';
-import { inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { readJsonFile } from '../../fs/read-json.js';
 import { queryToolCallStats, queryDailyToolTrends, queryCostLeaderboard, type ToolCallStatsRow } from '../../db/query.js';
 
@@ -92,18 +92,24 @@ export function createAnalyticsRouter(): Router {
       dbRows = await queryToolCallStats({ runIds, model: filterModel });
     }
 
-    // Track which (run_id, model) pairs we have DB data for
+    // Track which runs are DB-covered for the requested model. Coverage must
+    // be model-scoped: a run whose stats only cover another model still needs
+    // the file fallback for the filtered model.
     const coveredRunIds = new Set<string>();
     if (runIds.length > 0) {
       const coveredRows = await db.select({ run_id: tool_call_stats.run_id }).from(tool_call_stats)
-        .where(inArray(tool_call_stats.run_id, runIds));
+        .where(filterModel
+          ? and(inArray(tool_call_stats.run_id, runIds), eq(tool_call_stats.model, filterModel))
+          : inArray(tool_call_stats.run_id, runIds));
       for (const r of coveredRows) coveredRunIds.add(r.run_id);
     }
 
     // ── File fallback: scan runs not in DB ────────────────────────────────
     const perModelMap = new Map<string, ModelToolStat>();
+    // Successful (run, model) pairs, keyed so the DB and file paths cannot
+    // count the same success twice (which previously drove failedRate < 0).
+    const successfulPairs = new Set<string>();
     let totalRuns = 0;
-    let successfulRuns = 0;
     let totalToolCalls = 0;
     const allLoops: LoopIncident[] = [];
 
@@ -116,7 +122,7 @@ export function createAnalyticsRouter(): Router {
 
         if (coveredRunIds.has(run.runId)) {
           const result = await readJsonFile<Record<string, unknown>>(perModel.resultPath);
-          if (result?.success === true) successfulRuns++;
+          if (result?.success === true) successfulPairs.add(`${run.runId}:${perModel.model}`);
           continue;
         }
 
@@ -129,7 +135,7 @@ export function createAnalyticsRouter(): Router {
         }
         const toolCalls = conv ? extractToolCallsFromConversation(conv) : [];
         const success = result?.success === true;
-        if (success) successfulRuns++;
+        if (success) successfulPairs.add(`${run.runId}:${perModel.model}`);
 
         for (const tc of toolCalls) {
           totalToolCalls++;
@@ -160,9 +166,11 @@ export function createAnalyticsRouter(): Router {
       const coveredList = [...coveredRunIds];
       successRows = await db.select({ run_id: run_models.run_id, model: run_models.model, success: run_models.success })
         .from(run_models)
-        .where(inArray(run_models.run_id, coveredList));
+        .where(filterModel
+          ? and(inArray(run_models.run_id, coveredList), eq(run_models.model, filterModel))
+          : inArray(run_models.run_id, coveredList));
       for (const row of successRows) {
-        if (row.success === 1) successfulRuns++;
+        if (row.success === 1) successfulPairs.add(`${row.run_id}:${row.model}`);
       }
     }
 
@@ -217,7 +225,8 @@ export function createAnalyticsRouter(): Router {
 
     const perModel = [...perModelMap.values()].sort((a, b) => b.total - a.total);
 
-    const failedRate = totalRuns > 0 ? (totalRuns - successfulRuns) / totalRuns : 0;
+    const successfulRuns = successfulPairs.size;
+    const failedRate = totalRuns > 0 ? Math.max(0, (totalRuns - successfulRuns) / totalRuns) : 0;
     const avgCallsPerSuccess = successfulRuns > 0 ? totalToolCalls / successfulRuns : 0;
 
     const response: ToolAnalyticsResponse = {

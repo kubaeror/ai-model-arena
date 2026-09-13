@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listAnomalies, resolveAnomaly } from '../lib/api.js';
 import type { AnomalyRecord, AnomalySeverity } from '../lib/types.js';
@@ -122,7 +123,7 @@ export function Anomalies() {
                   <td className="px-3 py-2 font-mono text-12">{a.type}</td>
                   <td className="px-3 py-2 text-14">{a.model}</td>
                   <td className="px-3 py-2 text-12 text-fg-1 truncate max-w-[12rem]">
-                    <a className="hover:underline text-accent" href={`#/runs/${a.run_id}`}>{a.run_id}</a>
+                    <Link className="hover:underline text-accent" to={`/runs/${a.run_id}`}>{a.run_id}</Link>
                   </td>
                   <td className="px-3 py-2 text-12 max-w-md">{a.description}</td>
                   <td className="px-3 py-2 text-12 text-fg-1">{new Date(a.detected_at).toLocaleString()}</td>

@@ -5,6 +5,16 @@ import { SENSITIVE_KEYS } from './sensitive-keys.js';
 
 const SECRETS_DIR = '/etc/arena/secrets';
 const K8S_SECRET_FILE_RE = /^[A-Za-z0-9_]+$/;
+const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * Names accepted for secret lookups. Anything else (path separators, dots,
+ * lowercase) is rejected so a crafted DB `env_var` cannot traverse out of the
+ * k8s secrets mount when used as a filename.
+ */
+export function isValidSecretEnvVar(envVar: unknown): envVar is string {
+  return typeof envVar === 'string' && SECRET_NAME_RE.test(envVar) && path.basename(envVar) === envVar;
+}
 
 interface SecretStoreOptions {
   /** Bare-metal .env path (default: <cwd>/.env). */
@@ -57,6 +67,7 @@ export class SecretStore {
    * In bare-metal mode, reads from process.env.
    */
   get(envVar: string): string | undefined {
+    if (!isValidSecretEnvVar(envVar)) return undefined;
     if (this.isK8s()) {
       const filePath = path.join(this.secretsDir, envVar);
       try {

@@ -113,6 +113,44 @@ test('OpenAICompatAdapter.sendMessage ignores non-effort reasoning options', asy
   }
 });
 
+test('OpenAICompatAdapter sends max_completion_tokens when the cap-field signal is set', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'o3', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], {
+      maxTokens: 100000,
+      maxTokensField: 'max_completion_tokens',
+    });
+    assert.equal(capturedBody.max_completion_tokens, 100000);
+    assert.ok(!('max_tokens' in capturedBody), 'reasoning-only models must not receive max_tokens');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('OpenAICompatAdapter defaults the output cap to max_tokens', async () => {
+  const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([{ role: 'user', content: 'hi' }], [], { temperature: 0.2, maxTokens: 8192 });
+    assert.equal(capturedBody.max_tokens, 8192);
+    assert.equal(capturedBody.temperature, 0.2);
+    assert.ok(!('max_completion_tokens' in capturedBody), 'normal models keep max_tokens');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('OpenAICompatAdapter.sendMessage leaves body unchanged when reasoning is absent', async () => {
   const adapter = new OpenAICompatAdapter(openaiDescriptor, 'gpt-4o', { apiKey: 'sk-test' });
   let capturedBody: Record<string, unknown> = {};

@@ -40,6 +40,7 @@ export function createAuditRouter(): Router {
       where: conds.length ? and(...conds) : undefined,
       orderBy: 'at',
       dir: 'desc',
+      tiebreakBy: 'id',
       pageSize: limit,
       offset,
     });

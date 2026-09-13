@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { readFile, writeFile, listFiles, runShellCommand, editFile, globFiles } from '../../src/tools/executors.js';
+import { readFile, writeFile, listFiles, runShellCommand, editFile, globFiles, buildToolExecutors } from '../../src/tools/executors.js';
 import type { ToolExecutionContext } from '../../src/types.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-exec-'));
@@ -285,5 +285,310 @@ describe('globFiles', () => {
   it('rejects missing directories', async () => {
     const r = await globFiles({ pattern: '*.ts', path: 'nonexistent' }, ctx);
     assert.strictEqual(r.isError, true);
+  });
+
+  it('rejects absolute glob patterns without leaking host paths', async () => {
+    const outsideAbs = path.join(tmp, 'glob-abs-outside.txt');
+    fs.writeFileSync(outsideAbs, 'classified');
+    const r = await globFiles({ pattern: outsideAbs }, ctx);
+    assert.strictEqual(r.isError, true, `absolute pattern must be rejected, got: ${r.content}`);
+    assert.ok(!r.content.includes(outsideAbs), `absolute path leaked: ${r.content}`);
+    const host = await globFiles({ pattern: '/etc/hostname' }, ctx);
+    assert.strictEqual(host.isError, true, `absolute host glob must be rejected, got: ${host.content}`);
+    assert.ok(!host.content.includes('/etc/hostname'), `host path leaked: ${host.content}`);
+  });
+
+  it('rejects .. traversal patterns without leaking outside files', async () => {
+    fs.writeFileSync(path.join(tmp, 'glob-outside-secret.txt'), 'classified');
+    const r = await globFiles({ pattern: '../glob-outside-secret.txt' }, ctx);
+    assert.strictEqual(r.isError, true, `traversal pattern must be rejected, got: ${r.content}`);
+    assert.ok(!r.content.includes('glob-outside-secret'), `outside match leaked: ${r.content}`);
+  });
+
+  it('rejects ~-prefixed patterns', async () => {
+    const r = await globFiles({ pattern: '~/*' }, ctx);
+    assert.strictEqual(r.isError, true, `home-relative pattern must be rejected, got: ${r.content}`);
+  });
+
+  it('filters brace-expanded traversal matches that resolve outside the sandbox', async () => {
+    fs.writeFileSync(path.join(tmp, 'glob-brace-outside.txt'), 'classified');
+    const r = await globFiles({ pattern: '{..,src}/glob-brace-outside.txt' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(!r.content.includes('glob-brace-outside'), `brace traversal leaked: ${r.content}`);
+  });
+
+  it('filters brace-expanded absolute matches that resolve outside the sandbox', async () => {
+    const outsideAbs = path.join(tmp, 'glob-brace-abs.txt');
+    fs.writeFileSync(outsideAbs, 'classified');
+    const r = await globFiles({ pattern: `{${outsideAbs},${outsideAbs}.missing}` }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(!r.content.includes('glob-brace-abs'), `brace absolute path leaked: ${r.content}`);
+  });
+
+  it('does not return files reached through an escaping symlinked directory', async () => {
+    const outsideDir = path.join(tmp, 'glob-outside-dir');
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, 'leak.txt'), 'classified');
+    fs.symlinkSync(outsideDir, path.join(sandbox, 'glob-escape-dir'), 'dir');
+    const r = await globFiles({ pattern: 'glob-escape-dir/*.txt' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(!r.content.includes('leak.txt'), `escaped match leaked: ${r.content}`);
+  });
+});
+
+// ── hardlink write containment ──────────────────────────────────────────────
+
+describe('hardlink write containment', () => {
+  before(() => {
+    fs.mkdirSync(tmp, { recursive: true });
+    fs.mkdirSync(sandbox, { recursive: true });
+  });
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('write_file rejects a hardlink to a file outside the sandbox and leaves it unchanged', async () => {
+    const outside = path.join(tmp, 'hardlink-write-outside.txt');
+    const linked = path.join(sandbox, 'hardlink-write.txt');
+    fs.writeFileSync(outside, 'original-outside');
+    fs.linkSync(outside, linked);
+
+    const r = await writeFile({ path: 'hardlink-write.txt', content: 'pwned' }, ctx);
+
+    assert.strictEqual(r.isError, true, `hardlink write must be rejected, got: ${r.content}`);
+    assert.match(r.content, /hardlink/i);
+    assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'original-outside');
+    assert.strictEqual(fs.readFileSync(linked, 'utf8'), 'original-outside');
+  });
+
+  it('edit_file rejects a hardlink to a file outside the sandbox and leaves it unchanged', async () => {
+    const outside = path.join(tmp, 'hardlink-edit-outside.txt');
+    const linked = path.join(sandbox, 'hardlink-edit.txt');
+    fs.writeFileSync(outside, 'original-outside');
+    fs.linkSync(outside, linked);
+
+    const r = await editFile({ path: 'hardlink-edit.txt', old_string: 'original', new_string: 'pwned' }, ctx);
+
+    assert.strictEqual(r.isError, true, `hardlink edit must be rejected, got: ${r.content}`);
+    assert.match(r.content, /hardlink/i);
+    assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'original-outside');
+    assert.strictEqual(fs.readFileSync(linked, 'utf8'), 'original-outside');
+  });
+
+  it('write_file still overwrites files it created inside the sandbox', async () => {
+    const first = await writeFile({ path: 'hardlink-created.txt', content: 'one' }, ctx);
+    assert.strictEqual(first.isError, false);
+    const second = await writeFile({ path: 'hardlink-created.txt', content: 'two' }, ctx);
+    assert.strictEqual(second.isError, false);
+    assert.strictEqual(fs.readFileSync(path.join(sandbox, 'hardlink-created.txt'), 'utf8'), 'two');
+  });
+
+  it('edit_file still edits files it created inside the sandbox', async () => {
+    fs.writeFileSync(path.join(sandbox, 'hardlink-edited.txt'), 'hello world');
+    const r = await editFile({ path: 'hardlink-edited.txt', old_string: 'hello', new_string: 'goodbye' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.strictEqual(fs.readFileSync(path.join(sandbox, 'hardlink-edited.txt'), 'utf8'), 'goodbye world');
+  });
+});
+
+// ── run_shell_command timeout & maxBuffer observability ─────────────────────
+
+describe('runShellCommand resource limits', () => {
+  before(() => fs.mkdirSync(sandbox, { recursive: true }));
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  function limitedCtx(policy: 'strict' | 'permissive', maxShellOutputBytes = ctx.maxShellOutputBytes): ToolExecutionContext {
+    return { ...ctx, shellTimeoutMs: 250, maxShellOutputBytes, shellPolicy: policy };
+  }
+
+  it('reports a timed-out command as an error (strict/execFile)', async () => {
+    const started = Date.now();
+    const r = await runShellCommand({ command: 'sleep 5' }, limitedCtx('strict'));
+    const elapsed = Date.now() - started;
+    assert.strictEqual(r.isError, true, `timeout must be an error, got: ${r.content}`);
+    assert.match(r.content, /timed out after 250ms/);
+    assert.ok(elapsed < 5000, `must not wait for the command to finish (${elapsed}ms)`);
+  });
+
+  it('reports a timed-out command as an error (permissive/exec)', async () => {
+    const started = Date.now();
+    const r = await runShellCommand({ command: 'sleep 5' }, limitedCtx('permissive'));
+    const elapsed = Date.now() - started;
+    assert.strictEqual(r.isError, true, `timeout must be an error, got: ${r.content}`);
+    assert.match(r.content, /timed out after 250ms/);
+    assert.ok(elapsed < 5000, `must not wait for the command to finish (${elapsed}ms)`);
+  });
+
+  it('returns truncated output instead of failing when maxBuffer is exceeded', async () => {
+    const r = await runShellCommand(
+      { command: `${process.execPath} -e "process.stdout.write('x'.repeat(200000))"` },
+      limitedCtx('permissive', 4096),
+    );
+    assert.strictEqual(r.isError, false, `maxBuffer overflow is a truncated success, got: ${r.content}`);
+    assert.match(r.content, /\(output truncated at 4096 bytes\)/);
+  });
+});
+
+// ── search_code resource bounds ─────────────────────────────────────────────
+
+describe('search_code', () => {
+  const search = buildToolExecutors()['search_code']!;
+
+  before(() => {
+    fs.mkdirSync(sandbox, { recursive: true });
+    fs.writeFileSync(path.join(sandbox, 'search-basic.txt'), 'alpha\nBeta\nneedle here\ngamma needle\n');
+  });
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('finds plain substring matches with line numbers', async () => {
+    const r = await search({ query: 'needle' }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.match(r.content, /search-basic\.txt:3: needle here/);
+    assert.match(r.content, /search-basic\.txt:4: gamma needle/);
+  });
+
+  it('still supports safe regular expressions', async () => {
+    const r = await search({ query: 'n(e+)dle', regex: true }, ctx);
+    assert.strictEqual(r.isError, false);
+    assert.match(r.content, /needle/);
+  });
+
+  it('rejects a catastrophic nested-quantifier regex instead of hanging', async () => {
+    fs.writeFileSync(path.join(sandbox, 'search-redos.txt'), `${'a'.repeat(40)}!\n`);
+    const started = Date.now();
+    const r = await search({ query: '(a+)+$', regex: true }, ctx);
+    const elapsed = Date.now() - started;
+    assert.strictEqual(r.isError, true, `pathological regex must be rejected, got: ${r.content}`);
+    assert.match(r.content, /catastrophic|backtracking/i);
+    assert.ok(elapsed < 5000, `must return promptly, took ${elapsed}ms`);
+  });
+
+  it('aborts a regex search when the wall-clock budget is exceeded', async () => {
+    // Deterministic budget trip: force the clock past the deadline without
+    // depending on machine speed. The search runs synchronously, so the patch
+    // cannot affect unrelated work.
+    const realNow = Date.now;
+    let calls = 0;
+    Date.now = () => {
+      calls += 1;
+      return realNow() + (calls > 1 ? 60_000 : 0);
+    };
+    try {
+      const r = await search({ query: 'needle', regex: true }, ctx);
+      assert.strictEqual(r.isError, true, `budget must abort the search, got: ${r.content}`);
+      assert.match(r.content, /budget/i);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+});
+
+// ── search_code regex shape guard ───────────────────────────────────────────
+
+describe('search_code regex shape guard', () => {
+  const search = buildToolExecutors()['search_code']!;
+  const shapeSandbox = path.join(tmp, 'shape-guard');
+  const shapeCtx: ToolExecutionContext = { ...ctx, sandboxDir: shapeSandbox };
+
+  before(() => {
+    fs.mkdirSync(shapeSandbox, { recursive: true });
+    // Short a-run only: if the guard regresses these inputs still finish fast.
+    fs.writeFileSync(path.join(shapeSandbox, 'small.txt'), `${'a'.repeat(12)}!\n`);
+  });
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  const accepted = [
+    '(foo|bar)+', '(a|b)+', '[ab]+', 'a+', '(ab)*', '([ab]|c)+', '((foo|bar))+', '(a?b)+', '(a?)+', '(a|b){35}', '(ab){2,3}',
+    // Fixed-length inner repeats under a bounded outer consume a fixed number
+    // of characters per iteration, so they stay linear.
+    '(a{2}){35}',
+    '(ab){1,3}',
+    // IPv4-style: a small outer count keeps the variable-length inner repeat safe.
+    '([0-9]{1,3}\\.){3}[0-9]{1,3}',
+    '(\\d{1,3}\\.){3}\\d{1,3}',
+  ];
+  for (const query of accepted) {
+    it(`accepts ${query}`, async () => {
+      const r = await search({ query, regex: true }, shapeCtx);
+      assert.strictEqual(r.isError, false, `expected ${query} to be accepted, got: ${r.content}`);
+    });
+  }
+
+  const rejected = [
+    '(a+)+$',
+    '((a|aa))+$',
+    '(a|a)+',
+    '(a|aa)+',
+    '(a+){2,}',
+    '((a+))+$',
+    '(a|ab)+',
+    '(\\.|.)+',
+    // Case-insensitive (the default) folding makes these branches overlap.
+    '(a|A)+',
+    '([a]|[A])+',
+    '(foo|FOO)+',
+    // Nullable leading atoms hide overlapping first characters.
+    '(a?b|b)+',
+    '(a{0,1}b|b)+',
+    // Consecutive or overlapping nullable atoms make the repeat boundary ambiguous.
+    '(a?a)+',
+    '(a?b?)+',
+    '((a?)(b?))+',
+    // Bounded inner quantifiers still compose exponentially.
+    '(a{2,3})+',
+    '(a{1,2})+',
+    '(a{0,2})+',
+    // `[]` closes immediately in JS; the rest of the group must stay visible.
+    '(a|[]x|a)+',
+    // `[^]` is the negated empty class (matches any code unit), not an empty set.
+    '([^]|a)+',
+    // A min-only unbounded repeat explodes once its minimum reaches the
+    // bounded-repeat threshold, even though there is no max to check.
+    '(a?){8,}',
+    '(a?){20,}',
+  ];
+  for (const query of rejected) {
+    it(`rejects ${query}`, async () => {
+      const r = await search({ query, regex: true }, shapeCtx);
+      assert.strictEqual(r.isError, true, `expected ${query} to be rejected, got: ${r.content}`);
+      assert.match(r.content, /catastrophic|backtracking/i);
+      assert.ok(
+        r.content.includes(query.slice(0, -1)),
+        `message must quote the offending group, got: ${r.content}`,
+      );
+    });
+  }
+
+  const rejectedShapes = [
+    // Ambiguity under a bounded outer quantifier blows up multiplicatively.
+    '^(a|aa){35}b$',
+    '(a|aa){2}',
+    '(a|aa){35}',
+    '(a{2,3}){35}',
+    // A nullable body makes every repetition boundary ambiguous: each optional
+    // atom can consume the same character.
+    '^(a?){35}b$',
+    '^(a?|b){35}c$',
+    '^([a-z]?){30}b$',
+    // A long root-level run of nullable atoms before a required atom leaves
+    // exponentially many ways to split the input.
+    '^a?a?a?a?a?a?a?a?b$',
+    `^${'a?'.repeat(30)}b$`,
+  ];
+  for (const query of rejectedShapes) {
+    it(`rejects ${query}`, async () => {
+      const r = await search({ query, regex: true }, shapeCtx);
+      assert.strictEqual(r.isError, true, `expected ${query} to be rejected, got: ${r.content}`);
+      assert.match(r.content, /catastrophic|backtracking/i);
+    });
+  }
+
+  it('accepts case-variant branches when case-sensitive', async () => {
+    const r = await search({ query: '(a|A)+', regex: true, caseSensitive: true }, shapeCtx);
+    assert.strictEqual(r.isError, false, `expected case-sensitive \`(a|A)+\` to be accepted, got: ${r.content}`);
+  });
+
+  it('rejects a regex longer than the 500-character cap with an actionable error', async () => {
+    const r = await search({ query: `^${'a'.repeat(501)}$`, regex: true }, shapeCtx);
+    assert.strictEqual(r.isError, true, `over-long regex must be rejected, got: ${r.content}`);
+    assert.match(r.content, /too long|500/);
   });
 });

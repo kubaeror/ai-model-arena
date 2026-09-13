@@ -6,6 +6,9 @@ import { createLogger } from './pino-logger.js';
 
 const logger = createLogger('ai-arena:conversation-logger');
 
+/** Max time between an append and its transcript write when no turn boundary lands. */
+const WRITE_DEBOUNCE_MS = 250;
+
 type ConversationEntryType =
   | 'system'
   | 'user'
@@ -57,8 +60,10 @@ interface ConversationDbSink {
 
 /**
  * Writes a structured, durable conversation transcript to `conversation.json`.
- * Each `append()` flushes the whole file so a crash mid-run still leaves a
- * usable partial transcript.
+ * Appends are coalesced and persisted by a short debounce timer; `flush()`
+ * (called at turn boundaries and on `setEnded`) writes synchronously so a
+ * crash leaves a usable partial transcript without rewriting the whole growing
+ * file once per entry (previously O(n²) bytes over a run).
  */
 export class ConversationLogger {
   private file: ConversationFile;
@@ -66,6 +71,7 @@ export class ConversationLogger {
   private sessionId?: string;
   private turn = 0;
   private disableFile = false;
+  private writeTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly filePath: string,
@@ -109,7 +115,7 @@ export class ConversationLogger {
       });
     }
 
-    this.flush();
+    this.scheduleWrite();
   }
 
   setEnded(at: string): void {
@@ -121,9 +127,56 @@ export class ConversationLogger {
     return this.file.entries;
   }
 
+  /**
+   * Persist pending appends immediately, cancelling any debounce timer. A write
+   * failure is logged and swallowed: entries stay in memory, so the next flush
+   * (or the next append's timer) retries the whole file. Throwing here would
+   * surface a transient FS error as an uncaught exception in the runner loop.
+   */
   flush(): void {
+    if (this.writeTimer !== null) {
+      clearTimeout(this.writeTimer);
+      this.writeTimer = null;
+    }
+    this.writeSafely();
+  }
+
+  private scheduleWrite(): void {
+    if (this.disableFile || this.writeTimer !== null) return;
+    this.writeTimer = setTimeout(() => {
+      this.writeTimer = null;
+      this.writeSafely();
+    }, WRITE_DEBOUNCE_MS);
+    // Do not keep the process alive just to write a best-effort transcript.
+    this.writeTimer.unref?.();
+  }
+
+  private writeSafely(): void {
+    try {
+      this.writeFile();
+    } catch (err) {
+      const detail = err instanceof Error ? { message: err.message } : { error: String(err) };
+      logger.error('conversation-logger: transcript write failed; entries retained for retry', {
+        path: this.filePath,
+        ...detail,
+      });
+    }
+  }
+
+  private writeFile(): void {
     if (this.disableFile) return;
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify(this.file, null, 2));
+    const dir = path.dirname(this.filePath);
+    fs.mkdirSync(dir, { recursive: true });
+    // Temp-then-rename keeps readers from ever observing a torn transcript:
+    // the destination is replaced atomically, so a crash mid-write leaves the
+    // previous complete file in place.
+    const tmpPath = path.join(dir, `${path.basename(this.filePath)}.tmp-${process.pid}-${crypto.randomUUID()}`);
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(this.file, null, 2));
+      fs.renameSync(tmpPath, this.filePath);
+    } catch (err) {
+      try { fs.unlinkSync(tmpPath); } catch { /* temp may never have been created */ }
+      throw err;
+    }
   }
 }

@@ -4,12 +4,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
+import { transitionTaskState, createSession } from '../../src/db/query.js';
+import { InMemoryQueue } from '../../src/queue/in-memory.js';
+import type { Task } from '../../src/queue/types.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
-import { stopRun, registerRun, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
+import { stopRun, restartRun, registerRun, isRunCancelled, isStaleRunningRun, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
+import { markRunCancelled } from '../../src/orchestrator/run-signals.js';
 
 const ORIG_ENV = { ...process.env };
 
-test('stopRun marks per-model rows terminal', async () => {
+test('stopRun marks the run stopped and leaves model rows for the runners to ack', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stoprun-'));
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
   process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
@@ -29,10 +33,20 @@ test('stopRun marks per-model rows terminal', async () => {
     const rec = await getRunRecord('stop-1');
     assert.equal(rec?.status, 'stopped');
     assert.ok(rec?.finishedAt, 'finishedAt should be set');
-    for (const m of rec?.perModel ?? []) {
-      assert.notEqual(m.status, 'running', `model ${m.model} must not stay running`);
-      assert.equal(m.status, 'stopped', `model ${m.model} should be stopped`);
-    }
+    assert.equal(await isRunCancelled('stop-1'), true, 'stop must set the cancel signal');
+    // Rows are the per-model acknowledgements: stopRun must leave them for each
+    // runner to terminalize once it observes the cancellation.
+    assert.equal(rec?.perModel[0]?.status, 'running', 'stopRun must not force-terminalize an executing row');
+
+    // The terminal guard must let the runner ack running -> stopped.
+    await transitionTaskState('stop-1', 'gpt-4o', 'stopped');
+    assert.equal((await getRunRecord('stop-1'))?.perModel[0]?.status, 'stopped', 'running -> stopped must be permitted');
+
+    // Called again on the now-stopped (terminal) run it must not move the stop
+    // timestamp that anchors the finalize grace window.
+    const finishedAt = (await getRunRecord('stop-1'))?.finishedAt;
+    await stopRun('stop-1');
+    assert.equal((await getRunRecord('stop-1'))?.finishedAt, finishedAt, 'a second stop is a no-op');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -40,8 +54,8 @@ test('stopRun marks per-model rows terminal', async () => {
   }
 });
 
-test('stopRun on a completed run keeps terminal statuses intact', async () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stoprun2-'));
+test('stopRun leaves a claimed row and the runner can ack claimed -> stopped', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stoprun-claimed-'));
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
   process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
   process.env.DB_DRIVER = 'sqlite';
@@ -49,8 +63,36 @@ test('stopRun on a completed run keeps terminal statuses intact', async () => {
 
   try {
     await upsertRun({
+      runId: 'stop-claimed', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+      perModel: [{ model: 'gpt-4o', runId: 'stop-claimed', status: 'claimed' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    await stopRun('stop-claimed');
+    assert.equal((await getRunRecord('stop-claimed'))?.perModel[0]?.status, 'claimed', 'stopRun must not touch claimed rows');
+
+    await transitionTaskState('stop-claimed', 'gpt-4o', 'stopped');
+    assert.equal((await getRunRecord('stop-claimed'))?.perModel[0]?.status, 'stopped', 'claimed -> stopped must be permitted');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('stopRun on a completed run is a no-op (never regresses to stopped)', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stoprun2-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  const finishedAt = '2026-01-01T00:00:00.000Z';
+  try {
+    await upsertRun({
       runId: 'stop-2', scenario: 'smoke', models: ['gpt-4o'],
-      startedAt: new Date().toISOString(), finishedAt: null, status: 'completed', source: 'cli',
+      startedAt: new Date().toISOString(), finishedAt, status: 'completed', source: 'cli',
       perModel: [{ model: 'gpt-4o', runId: 'stop-2', status: 'completed' } as never],
       comparisonMdPath: null, comparisonJsonPath: null,
     });
@@ -58,8 +100,212 @@ test('stopRun on a completed run keeps terminal statuses intact', async () => {
     await stopRun('stop-2');
 
     const rec = await getRunRecord('stop-2');
-    assert.equal(rec?.status, 'stopped');
+    assert.equal(rec?.status, 'completed', 'a finalized run must not regress to stopped');
+    assert.equal(rec?.finishedAt, finishedAt, 'finishedAt must not change');
     assert.equal(rec?.perModel[0]?.status, 'completed', 'terminal model rows must not be regressed');
+    assert.equal(await isRunCancelled('stop-2'), false, 'no-op stop must not record a cancellation signal');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('restartRun resets a finalizing run to running', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-restart-fin-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'restart-fin', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      status: 'finalizing', source: 'cli',
+      perModel: [{ model: 'gpt-4o', runId: 'restart-fin', status: 'completed' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    await restartRun('restart-fin');
+
+    const rec = await getRunRecord('restart-fin');
+    assert.equal(rec?.status, 'running', 'restart must clear the finalizing claim');
+    assert.equal(rec?.finishedAt, null, 'restart must clear finishedAt');
+    assert.equal(rec?.perModel[0]?.status, 'running', 'restart must reset model rows');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('restartRun refreshes started_at so an old run is not immediately reap-eligible', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-restart-stale-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'restart-stale', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+      finishedAt: null, status: 'running', source: 'dashboard',
+      perModel: [{ model: 'gpt-4o', runId: 'restart-stale', status: 'running' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    const before = (await getRunRecord('restart-stale'))!;
+    assert.equal(isStaleRunningRun(before), true, 'a 7h-old running run is stale before restart');
+
+    await restartRun('restart-stale');
+
+    const rec = (await getRunRecord('restart-stale'))!;
+    assert.ok(
+      Date.now() - Date.parse(rec.startedAt) < 60_000,
+      'restart must stamp a fresh started_at, not the original start',
+    );
+    assert.equal(isStaleRunningRun(rec), false, 'a freshly restarted run must not be immediately reap-eligible');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('restartRun resets the record before clearing the signal and enqueueing', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-restart-order-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'restart-order', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+      finishedAt: new Date().toISOString(), status: 'errored', source: 'dashboard',
+      perModel: [{ model: 'gpt-4o', runId: 'restart-order', status: 'errored', success: false } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+      reapedAt: '2026-09-13T00:00:00.000Z',
+    });
+    await markRunCancelled('restart-order');
+
+    // A watcher tick racing the restart must never observe the old record after
+    // the signal is cleared (it could reap/finalize the stale record and then be
+    // clobbered by the reset). Enqueue is the observation point.
+    const observed: Array<{
+      status: string; finishedAt: string | null; reapedAt: string | null | undefined;
+      perModelStatus: string; cancelSignal: boolean;
+    }> = [];
+    const orig = InMemoryQueue.prototype.enqueue;
+    InMemoryQueue.prototype.enqueue = async function (): Promise<void> {
+      const rec = (await getRunRecord('restart-order'))!;
+      observed.push({
+        status: rec.status,
+        finishedAt: rec.finishedAt,
+        reapedAt: rec.reapedAt,
+        perModelStatus: rec.perModel[0]!.status,
+        cancelSignal: await isRunCancelled('restart-order'),
+      });
+    };
+    try {
+      await restartRun('restart-order');
+    } finally {
+      InMemoryQueue.prototype.enqueue = orig;
+    }
+
+    assert.equal(observed.length, 1, 'restart enqueues one task per model');
+    const at = observed[0]!;
+    assert.equal(at.status, 'running', 'the record reset must land before enqueue');
+    assert.equal(at.finishedAt, null, 'finishedAt must be cleared before enqueue');
+    assert.equal(at.reapedAt, null, 'a previous reap marker must be cleared before enqueue');
+    assert.equal(at.perModelStatus, 'running', 'per-model rows must be reset before enqueue');
+    assert.equal(at.cancelSignal, false, 'the cancel signal must be cleared before enqueue');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('restartRun carries promptId/promptVersion from the run session', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-restart-prompt-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'restart-prompt', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      status: 'completed', source: 'dashboard',
+      perModel: [{ model: 'gpt-4o', runId: 'restart-prompt', status: 'completed' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+    const now = new Date().toISOString();
+    await createSession({
+      id: 'restart-prompt-gpt-4o', promptId: 'prompt-1', promptVersion: 3,
+      model: 'gpt-4o', status: 'completed', createdAt: now, updatedAt: now,
+    });
+
+    const captured: Task[] = [];
+    const orig = InMemoryQueue.prototype.enqueue;
+    InMemoryQueue.prototype.enqueue = async function (task: Task): Promise<void> { captured.push(task); };
+    try {
+      await restartRun('restart-prompt');
+    } finally {
+      InMemoryQueue.prototype.enqueue = orig;
+    }
+
+    assert.equal(captured.length, 1, 'restart must enqueue one task');
+    assert.equal(captured[0]?.promptId, 'prompt-1', 'restart must preserve the prompt id');
+    assert.equal(captured[0]?.promptVersion, 3, 'restart must preserve the prompt version');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('transitionTaskState never moves a terminal row to a conflicting terminal status', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-transition-guard-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    const mk = (runId: string, status: string) => upsertRun({
+      runId, scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+      perModel: [{ model: 'gpt-4o', runId, status } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+    await mk('guard-stopped', 'running');
+    await mk('guard-retry', 'running');
+
+    await transitionTaskState('guard-stopped', 'gpt-4o', 'stopped');
+    await transitionTaskState('guard-stopped', 'gpt-4o', 'completed');
+    let rec = await getRunRecord('guard-stopped');
+    assert.equal(rec?.perModel[0]?.status, 'stopped', 'stopped must never be overwritten by completed');
+
+    await transitionTaskState('guard-stopped', 'gpt-4o', 'failed');
+    rec = await getRunRecord('guard-stopped');
+    assert.equal(rec?.perModel[0]?.status, 'stopped', 'stopped must never be overwritten by failed');
+
+    await transitionTaskState('guard-retry', 'gpt-4o', 'failed');
+    await transitionTaskState('guard-retry', 'gpt-4o', 'completed');
+    rec = await getRunRecord('guard-retry');
+    assert.equal(rec?.perModel[0]?.status, 'failed', 'failed must never be overwritten by completed directly');
+
+    await transitionTaskState('guard-retry', 'gpt-4o', 'claimed');
+    await transitionTaskState('guard-retry', 'gpt-4o', 'running');
+    await transitionTaskState('guard-retry', 'gpt-4o', 'completed');
+    rec = await getRunRecord('guard-retry');
+    assert.equal(rec?.perModel[0]?.status, 'completed', 'retries must re-enter through claimed/running');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });

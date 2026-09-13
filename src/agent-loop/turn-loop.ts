@@ -9,6 +9,8 @@ import type {
   ModelResponse,
 } from '../types.js';
 import type { ModelAdapter, SendOpts } from '../providers/adapters/base.js';
+import { sanitizeToolResult, scanToolResult } from '../security/prompt-injection.js';
+import type { InjectionScan } from '../security/prompt-injection.js';
 
 /**
  * Per-caller error-text formatters. Defaults match the agent loop's historical
@@ -21,10 +23,13 @@ interface TurnLoopErrorFormatters {
   toolThrew: (turn: number, name: string, content: string) => string;
 }
 
-/** Per-turn hooks. Returning false aborts the loop. */
+/** Per-turn hooks. Returning false or a stop-reason string aborts the loop. */
 interface TurnLoopHooks {
-  /** Called before each model send; return false to abort the loop ('budget_exceeded'). */
-  onTurnStart?: (turn: number, usage: TokenUsage) => Promise<boolean>;
+  /**
+   * Called before each model send; return false to abort the loop
+   * ('budget_exceeded') or a string to abort with that stop reason.
+   */
+  onTurnStart?: (turn: number, usage: TokenUsage) => Promise<boolean | string>;
   /**
    * Called after each completed turn, before the stop-reason breaks. `newMessages`
    * is the slice appended this turn (snapshotted before any caller-side compaction
@@ -61,8 +66,12 @@ interface TurnLoopEvents {
   onToolStart?: (toolName: string) => void;
   /** Right after the executor call; `error` is set when the executor threw. */
   onToolEnd?: (toolName: string, error?: unknown) => void;
-  /** After the tool result is truncated, before it is appended to `messages`. */
-  onToolResult?: (turn: number, toolCallId: string, toolName: string, content: string, isError: boolean) => void;
+  /**
+   * After the tool result is truncated and hardened, before it is appended to
+   * `messages`. `scan` is the injection scan of the raw pre-sanitization result,
+   * since escaping neutralizes the markers the detector matches.
+   */
+  onToolResult?: (turn: number, toolCallId: string, toolName: string, content: string, isError: boolean, scan: InjectionScan) => void;
   /** When a model send fails. */
   onApiError?: (turn: number, message: string, error: unknown) => void;
   /** When the model replies with no tool calls (stopReason 'no_tool_calls' decided). */
@@ -84,6 +93,8 @@ interface TurnLoopOptions {
   taskCompleteToolName?: string;
   /** Model-send options forwarded to every adapter.sendMessage call. */
   sendOpts?: SendOpts;
+  /** Serving model stamped on each per-call usage entry for billing. */
+  billingModel?: string;
   /** First turn number; defaults to 1. */
   startTurn?: number;
   /** Tool-result truncation cap in chars; defaults to 60_000. */
@@ -104,6 +115,8 @@ interface TurnLoopResult {
   toolsCalled: { name: string; count: number }[];
   toolSuccessRates: Record<string, { success: number; fail: number }>;
   tokenUsage: TokenUsage;
+  /** Usage of each completed model call, in send order (for per-call billing). */
+  usagePerCall: TokenUsage[];
   /** 'unknown' when the loop exhausted maxTurns — callers map that to 'max_turns'. */
   stopReason: string;
   errors: string[];
@@ -137,18 +150,25 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
   const events: TurnLoopEvents = opts.events ?? {};
 
   const usage: TokenUsage = {};
+  const usagePerCall: TokenUsage[] = [];
   const toolCounts = new Map<string, number>();
   const toolSuccessRates: Record<string, { success: number; fail: number }> = {};
   const errors: string[] = [];
   let totalToolCalls = 0;
   let stopReason = 'unknown';
-  let turnsUsed = 0;
+  // startTurn is the first turn to run, so startTurn - 1 is the last completed
+  // turn: a resume that aborts before any send still reports the prior count.
+  let turnsUsed = startTurn - 1;
 
   for (let turn = startTurn; turn <= maxTurns; turn++) {
     if (hooks.onTurnStart) {
-      const ok = await hooks.onTurnStart(turn, usage);
-      if (!ok) {
+      const outcome = await hooks.onTurnStart(turn, usage);
+      if (outcome === false) {
         stopReason = 'budget_exceeded';
+        break;
+      }
+      if (typeof outcome === 'string') {
+        stopReason = outcome;
         break;
       }
     }
@@ -177,6 +197,14 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
       usage.prompt = (usage.prompt ?? 0) + (response.usage.prompt ?? 0);
       usage.completion = (usage.completion ?? 0) + (response.usage.completion ?? 0);
       usage.total = (usage.total ?? 0) + (response.usage.total ?? 0);
+      usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + (response.usage.cacheReadTokens ?? 0);
+      usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + (response.usage.cacheWriteTokens ?? 0);
+      // Snapshot per call so callers can price each request at its own tier —
+      // and, after a fallback hop, at its own model's rates.
+      usagePerCall.push({
+        ...response.usage,
+        ...(opts.billingModel ? { model: opts.billingModel } : {}),
+      });
     }
 
     const wantsComplete = taskCompleteToolName != null
@@ -216,7 +244,13 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
         }
 
         content = content.length <= maxToolResultChars ? content : content.slice(0, maxToolResultChars) + truncateSuffix;
-        events.onToolResult?.(turn, tc.id, tc.name, content, isError);
+        // Scan before hardening: escaping neutralizes the markers the detector
+        // matches, which would hide flagged output from onToolResult observers.
+        const rawScan = scanToolResult(content);
+        // Harden after truncation so the final appended content cannot break
+        // out of its data envelope (escapes markers, marks flagged output).
+        content = sanitizeToolResult(content);
+        events.onToolResult?.(turn, tc.id, tc.name, content, isError, rawScan);
         messages.push({ role: 'tool', toolCallId: tc.id, name: tc.name, content });
 
         // Track per-tool success/fail rates
@@ -252,7 +286,7 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
 
   const toolsCalled = [...toolCounts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
 
-  return { turnsUsed, totalToolCalls, toolsCalled, toolSuccessRates, tokenUsage: usage, stopReason, errors };
+  return { turnsUsed, totalToolCalls, toolsCalled, toolSuccessRates, tokenUsage: usage, usagePerCall, stopReason, errors };
 }
 
 /** Normalize an 'unknown' stop reason when the turn budget was exhausted.

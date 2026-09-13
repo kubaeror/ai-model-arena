@@ -6,7 +6,7 @@
 #  as documentation.)
 CVE-2023-45853
 
-# npm bundled dependencies (node:22-bookworm-slim base image).
+# npm bundled dependencies (node:26-bookworm-slim base image).
 # These are shipped with npm and not used at application runtime.
 CVE-2026-13149
 CVE-2026-33671

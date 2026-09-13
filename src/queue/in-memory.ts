@@ -96,8 +96,9 @@ export class InMemoryQueue implements TaskQueue {
     const t = this.inFlight.get(taskId);
     if (t) {
       this.inFlight.delete(taskId);
-      t.attempts += 1;
-      if (isTerminalAttempt(t.attempts, this.maxAttempts)) {
+      const preBumpAttempts = t.attempts;
+      t.attempts = preBumpAttempts + 1;
+      if (isTerminalAttempt(preBumpAttempts, this.maxAttempts)) {
         this.dead.push(t);
         this.syncQueueDepth();
         this.syncDlqDepth();

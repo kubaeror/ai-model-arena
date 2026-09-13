@@ -4,7 +4,7 @@ import { createLogger } from '../logger/pino-logger.js';
 import { outputRoot } from '../paths.js';
 import type { ComparisonEntry } from '../logger/comparison-logger.js';
 import { sleep } from './utils.js';
-import { listRuns, getRunRecord } from './run-index.js';
+import { listRuns, listLiveRuns, getRunRecord } from './run-index.js';
 import {
   startRun,
   isRunComplete,
@@ -13,9 +13,17 @@ import {
   registerRun,
   checkRunStatus,
   isRunCompleteByRunId,
+  shouldAttemptFinalize,
+  isStopAwaitingRunner,
+  STOP_FINALIZE_GRACE_MS,
+  isStaleRunningRun,
+  failNonTerminalModels,
+  markRunReaped,
+  prepareRunFinalization,
   finalizeRunByRunId,
   stopRun,
   restartRun,
+  isRunCancelled,
   type RunStartOptions,
   type RunSpec,
   type PerModelSpec,
@@ -30,11 +38,20 @@ export {
   checkRunStatus,
   isRunComplete,
   isRunCompleteByRunId,
+  shouldAttemptFinalize,
+  isStopAwaitingRunner,
+  STOP_FINALIZE_GRACE_MS,
+  isStaleRunningRun,
+  failNonTerminalModels,
+  markRunReaped,
+  prepareRunFinalization,
   finalizeRun,
   finalizeRunByRunId,
   stopRun,
   restartRun,
+  isRunCancelled,
   listRuns,
+  listLiveRuns,
   getRunRecord,
   type RunStartOptions,
   type RunSpec,
@@ -69,13 +86,32 @@ export async function runScenarioForModels(opts: CliRunOptions): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let done = false;
   while (Date.now() < deadline) {
-    if (await isRunComplete(spec)) {
+    // Same gate as the watcher: a stopped run only finalizes after every model
+    // row is terminal (rows are the per-model acks) and the cancel signal is
+    // absent, unless the grace window elapsed and stale rows were force-stopped.
+    if (await prepareRunFinalization(spec.runId)) {
       done = true;
       break;
     }
     await sleep(1500);
   }
-  if (!done) logger.warn('Timeout reached while waiting for workers; proceeding with partial results.');
+  if (!done) {
+    // The stop gate stays authoritative on timeout: a stopped run whose cancel
+    // signal is still live inside the grace window is owned by a runner that
+    // may yet ack, so force-finalizing it here would settle it while sibling
+    // models still execute (or strand it with non-terminal rows).
+    if (await prepareRunFinalization(spec.runId)) {
+      done = true;
+    } else {
+      const rec = await getRunRecord(spec.runId);
+      if (rec && isStopAwaitingRunner(rec, await isRunCancelled(spec.runId))) {
+        logger.warn('Timeout reached but the run is stopped with a live cancel signal; skipping finalization', { runId: spec.runId });
+        console.log('Run is stopped and awaiting runner acknowledgements; skipping finalization (check `status` once the runners stop).');
+        return;
+      }
+      logger.warn('Timeout reached while waiting for workers; proceeding with partial results.');
+    }
+  }
 
   const { entries } = await finalizeRun(spec, logger);
   printComparisonTable(entries);

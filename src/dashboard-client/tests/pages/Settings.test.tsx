@@ -46,7 +46,7 @@ const { apiGetMock, fetchMock, listWebhooksMock, registerWebhookMock, deleteWebh
 }));
 
 vi.mock('../../src/lib/api', async () => {
-  const actual = await vi.importActual('../../src/lib/api');
+  const actual = await vi.importActual<typeof import('../../src/lib/api')>('../../src/lib/api');
   return {
     ...actual,
     api: { ...actual.api, get: apiGetMock },
@@ -126,6 +126,34 @@ describe('Settings', () => {
     await waitFor(() => {
       expect(registerWebhookMock).toHaveBeenCalledWith('https://hooks.test/hook', ['run.started', 'run.completed'], undefined);
     });
+  });
+
+  it('surfaces webhook delete failures', async () => {
+    deleteWebhookMock.mockRejectedValueOnce(new Error('Delete failed'));
+    renderWithProviders(<Settings />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Webhooks' }));
+    await waitFor(() => {
+      expect(screen.getByText('https://example.com/hook')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Delete failed');
+  });
+
+  it('surfaces webhook create failures', async () => {
+    registerWebhookMock.mockRejectedValueOnce(new Error('Invalid webhook URL'));
+    renderWithProviders(<Settings />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Webhooks' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'New Webhook' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Webhook' }));
+    fireEvent.change(screen.getByPlaceholderText('https://example.com/webhook'), { target: { value: 'bad-url' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid webhook URL');
   });
 
   it('renders the secrets panel on the API Keys tab', async () => {

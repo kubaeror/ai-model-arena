@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { Budget } from '../../src/pages/Budget';
 
-const { budget, getBudgetMock } = vi.hoisted(() => {
+const { getBudgetMock } = vi.hoisted(() => {
   const budget = {
     global: { daily: { spent: 5.12, limit: 100 }, monthly: { spent: 50.55, limit: 1000 } },
     models: {

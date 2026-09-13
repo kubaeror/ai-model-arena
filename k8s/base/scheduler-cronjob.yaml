@@ -11,6 +11,9 @@ spec:
   jobTemplate:
     spec:
       template:
+        metadata:
+          labels:
+            app: scheduler
         spec:
           restartPolicy: OnFailure
           securityContext:
@@ -62,3 +65,9 @@ spec:
                 limits:
                   cpu: 200m
                   memory: 128Mi
+              volumeMounts:
+                - name: outputs
+                  mountPath: /var/arena/outputs
+          volumes:
+            - name: outputs
+              emptyDir: {}

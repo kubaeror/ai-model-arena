@@ -2,6 +2,7 @@ import 'dotenv/config';
 import path from 'node:path';
 import { z } from 'zod';
 import { loadYamlConfigSync } from './config-loader.js';
+import { assertSafeId } from './paths.js';
 import type { SendOpts } from './providers/adapters/base.js';
 
 // ── Schemas ────────────────────────────────────────────────────────────────
@@ -68,10 +69,20 @@ export function loadScenario(filePath: string): ScenarioConfig {
   });
 }
 
-/** Resolve a scenario by bare name ("express-rest") or explicit yaml path. */
-export function resolveScenarioPath(scenariosDir: string, name: string): string {
-  if (name.endsWith('.yaml') || name.endsWith('.yml')) {
+export interface ResolveScenarioPathOptions {
+  /** CLI runs may reference an explicit YAML path; all other callers must use a bare name. */
+  allowPath?: boolean;
+}
+
+/** Resolve a scenario by bare name ("express-rest") or, for CLI-sourced runs, an explicit yaml path. */
+export function resolveScenarioPath(
+  scenariosDir: string,
+  name: string,
+  opts: ResolveScenarioPathOptions = {},
+): string {
+  if (opts.allowPath && (path.isAbsolute(name) || name.endsWith('.yaml') || name.endsWith('.yml'))) {
     return path.isAbsolute(name) ? name : path.resolve(scenariosDir, name);
   }
+  assertSafeId(name);
   return path.join(scenariosDir, `${name}.yaml`);
 }

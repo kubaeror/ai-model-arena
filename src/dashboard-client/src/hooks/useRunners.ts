@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 
 interface RunnerInfo {
@@ -15,6 +15,17 @@ interface RunnerInfo {
   }>;
 }
 
+async function runnerError(res: Response, fallback: string): Promise<Error> {
+  let message = `${fallback} (HTTP ${res.status})`;
+  try {
+    const body = await res.json();
+    if (body?.error) message = body.error;
+  } catch {
+    /* keep the fallback message */
+  }
+  return new Error(message);
+}
+
 export function useRunners() {
   return useQuery({
     queryKey: ['runners'],
@@ -29,24 +40,28 @@ export function useRunners() {
 }
 
 export function useScaleRunner() {
-  return {
-    mutateAsync: async ({ name, replicas }: { name: string; replicas: number }) => {
-      const res = await api.post(`/api/runners/${name}/scale`, {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ name, replicas }: { name: string; replicas: number }) => {
+      const res = await api.post(`/api/runners/${encodeURIComponent(name)}/scale`, {
         body: JSON.stringify({ replicas }),
         headers: { 'Content-Type': 'application/json' },
       });
-      if (!res.ok) throw new Error('Failed to scale');
+      if (!res.ok) throw await runnerError(res, 'Failed to scale runner');
       return res.json();
     },
-  };
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['runners'] }),
+  });
 }
 
 export function useDrainRunner() {
-  return {
-    mutateAsync: async (name: string) => {
-      const res = await api.post(`/api/runners/${name}/drain`);
-      if (!res.ok) throw new Error('Failed to drain');
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (name: string) => {
+      const res = await api.post(`/api/runners/${encodeURIComponent(name)}/drain`);
+      if (!res.ok) throw await runnerError(res, 'Failed to drain runner');
       return res.json();
     },
-  };
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['runners'] }),
+  });
 }

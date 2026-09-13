@@ -76,6 +76,9 @@ test('AnthropicAdapter.sendMessage extracts cache tokens', async () => {
   }) as Response) as typeof fetch;
   try {
     const result = await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    // Canonical convention: `prompt` is the total input token count; Anthropic
+    // reports uncached input + cache read + cache write as separate fields.
+    assert.equal(result.usage.prompt, 1950);
     assert.equal(result.usage.cacheReadTokens, 800);
     assert.equal(result.usage.cacheWriteTokens, 150);
   } finally {
@@ -110,7 +113,9 @@ test('AnthropicAdapter.sendMessage maps system/assistant-tool/tool messages and 
     assert.equal(capturedBody.model, 'claude-3-5-sonnet-20241022');
     assert.equal(capturedBody.max_tokens, 500);
     assert.equal(capturedBody.temperature, 0.3);
-    assert.equal(capturedBody.system, 'You are a test agent.', 'system hoisted out of messages');
+    assert.deepEqual(capturedBody.system, [
+      { type: 'text', text: 'You are a test agent.', cache_control: { type: 'ephemeral' } },
+    ], 'system hoisted out of messages with its cache breakpoint');
     assert.deepEqual(capturedBody.thinking, { type: 'enabled', budget_tokens: 2048 });
     const messages = capturedBody.messages as Array<Record<string, unknown>>;
     assert.equal(messages.length, 3, 'system excluded, tool role becomes user');
@@ -122,6 +127,29 @@ test('AnthropicAdapter.sendMessage maps system/assistant-tool/tool messages and 
     assert.equal(messages[2]!.role, 'user');
     assert.deepEqual(messages[2]!.content, [{ type: 'tool_result', tool_use_id: 'tc1', content: 'contents of a.ts' }]);
     assert.deepEqual(capturedBody.tools, [{ name: 'read_file', description: 'Read a file', input_schema: { type: 'object' } }]);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('AnthropicAdapter joins multiple system messages into separate cached blocks', async () => {
+  const adapter = new AnthropicAdapter(anthropicDescriptor, 'claude-3-5-sonnet-20241022', { apiKey: 'sk-ant' });
+  let capturedBody: Record<string, unknown> = {};
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return mockResponse({ role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } });
+  }) as typeof fetch;
+  try {
+    await adapter.sendMessage([
+      { role: 'system', content: 'First system.' },
+      { role: 'system', content: 'Second system.' },
+      { role: 'user', content: 'hi' },
+    ], []);
+    assert.deepEqual(capturedBody.system, [
+      { type: 'text', text: 'First system.', cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: 'Second system.', cache_control: { type: 'ephemeral' } },
+    ], 'system messages stay distinct and keep their cache breakpoints');
   } finally {
     globalThis.fetch = origFetch;
   }

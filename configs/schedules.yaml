@@ -11,7 +11,6 @@ schedules:
     enabled: true
     options:
       forceBudget: false
-      timeoutMs: 1800000
 
   # Add more schedules as needed
   # - id: weekly-benchmark

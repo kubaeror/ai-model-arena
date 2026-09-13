@@ -7,6 +7,8 @@ import { getRunRecord } from '../db/runs.js';
 import { aggregateLatency, computeTps } from './runtime.js';
 import { extractCacheMetrics } from './cache-metrics.js';
 import { matchModelToCanonical, type CatalogEntry } from '../catalog/match.js';
+import { createLogger } from '../logger/pino-logger.js';
+import type { Logger } from '../types.js';
 
 interface TraceMeta {
   spans: Array<{ spanId?: string; name: string; startedAt: number; endedAt: number; durationMs?: number | null; attributes?: Record<string, unknown> }>;
@@ -29,7 +31,11 @@ interface RunResult {
  * first recorded model_call of each model's session (sessions are keyed
  * `${runId}-${model}`); latency/TPS still come from trace-meta.json.
  */
-export async function writeRunStats(runId: string, root: string): Promise<void> {
+export async function writeRunStats(
+  runId: string,
+  _root: string,
+  logger: Logger = createLogger('ai-arena:metrics-writeback'),
+): Promise<void> {
   const db = getDrizzleDb();
   const rec = await getRunRecord(runId);
   if (!rec || rec.perModel.length === 0) return;
@@ -44,8 +50,16 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
   }
 
   const now = new Date().toISOString();
+  let skippedNoOutputDir = 0;
   for (const pm of rec.perModel) {
     if (!pm.resultPath || !fs.existsSync(pm.resultPath)) continue;
+    // No outputDir in the index means no trustworthy artifact directory: the
+    // raw model key is only correct for pre-upgrade runs, and those still carry
+    // their stored outputDir. Skip rather than guess.
+    if (!pm.outputDir) {
+      skippedNoOutputDir++;
+      continue;
+    }
     const result = JSON.parse(fs.readFileSync(pm.resultPath, 'utf8')) as RunResult;
 
     let canonicalId: string | null = null;
@@ -61,7 +75,7 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
     const firstCall = sessionCalls[0];
     const ttftMs = firstCall?.ttft_ms ?? firstCall?.latency_ms ?? null;
 
-    const outputDir = pm.outputDir || path.join(root, 'outputs', pm.model, runId);
+    const outputDir = pm.outputDir;
     const tracePath = path.join(outputDir, 'trace-meta.json');
     const trace: TraceMeta = fs.existsSync(tracePath)
       ? JSON.parse(fs.readFileSync(tracePath, 'utf8')) as TraceMeta
@@ -106,5 +120,11 @@ export async function writeRunStats(runId: string, root: string): Promise<void> 
         });
       }
     }
+  }
+
+  // One line per sweep keeps legacy rows (pre-upgrade, no artifact dir)
+  // visible without spamming a warning per model.
+  if (skippedNoOutputDir > 0) {
+    logger.warn('Stats writeback skipped rows with empty outputDir', { runId, count: skippedNoOutputDir });
   }
 }

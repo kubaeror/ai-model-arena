@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { OutputMappings } from '../../src/pages/OutputMappings';
 
-const { mappings, listOutputMappingsMock, createOutputMappingMock, updateOutputMappingMock, deleteOutputMappingMock } =
+const { listOutputMappingsMock, createOutputMappingMock, updateOutputMappingMock, deleteOutputMappingMock } =
   vi.hoisted(() => {
     const mappings = [
       {

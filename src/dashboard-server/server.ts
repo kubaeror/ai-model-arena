@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import http from 'node:http';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -102,26 +101,15 @@ async function start(): Promise<void> {
   const { syncSchedulesToDb } = await import('../scheduler/manager.js');
   await syncSchedulesToDb(path.join(root, 'configs', 'schedules.yaml'), logger);
 
-  // Notification outbox: retry failed deliveries every 30s (non-fatal).
-  const { deliverDueNotifications } = await import('../notifications/outbox.js');
-  const outboxTimer = setInterval(() => {
-    deliverDueNotifications(logger).catch((e) =>
-      logger.warn('Notification outbox delivery failed', { error: String(e) }),
-    );
-  }, 30_000);
-  if (outboxTimer.unref) outboxTimer.unref();
+  // Notification outbox: load channel config, then retry failed deliveries
+  // every 30s (non-fatal; ticks are single-flight so slow sweeps don't stack).
+  const { startNotificationOutboxTimer } = await import('../notifications/outbox.js');
+  const outboxTimer = startNotificationOutboxTimer(logger, path.join(root, 'configs', 'notifications.yaml'));
 
   const app = express();
   const corsOrigins = allowedOrigins.length
     ? allowedOrigins
     : ['http://localhost:4000', 'http://127.0.0.1:4000'];
-
-  // ── Correlation ID ──────────────────────────────────────────────────────
-  app.use((req, _res, next) => {
-    (req as AuthedRequest).correlationId = (req.headers['x-request-id'] as string) ?? crypto.randomUUID();
-    (req as AuthedRequest).clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.ip ?? '';
-    next();
-  });
 
   app.use(cors({ origin: corsOrigins, credentials: true }));
   app.use(helmet({
@@ -395,7 +383,7 @@ async function start(): Promise<void> {
 
   const shutdown = (): void => {
     logger.info('Shutting down dashboard server...');
-    clearInterval(outboxTimer);
+    outboxTimer.stop();
     hub.close();
     stopCatalogCron();
     stopOtelMetrics();

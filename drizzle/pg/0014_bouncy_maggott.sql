@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "reaped_at" text;

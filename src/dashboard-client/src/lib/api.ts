@@ -104,6 +104,10 @@ export async function login(username: string, password: string): Promise<{ token
   return r;
 }
 
+export async function logout(): Promise<void> {
+  await apiFetch('/api/auth/logout', { method: 'POST' });
+}
+
 // ── Models ───────────────────────────────────────────────────────────────────
 export async function listModels(): Promise<ModelConfig[]> {
   const r = await apiFetch<{ models: ModelConfig[] }>('/api/models');
@@ -379,13 +383,23 @@ export async function getSession(sessionId: string): Promise<SessionRow | null> 
   return apiFetch<SessionRow | null>(`/api/sessions/${encodeURIComponent(sessionId)}`);
 }
 
-export async function getSessionMessages(sessionId: string): Promise<Array<Record<string, unknown>>> {
-  const r = await apiFetch<{ messages: Array<Record<string, unknown>> }>(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+export async function getSessionMessages(
+  sessionId: string,
+  params?: { limit?: number; offset?: number },
+): Promise<Array<Record<string, unknown>>> {
+  const r = await apiFetch<{ messages: Array<Record<string, unknown>> }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs(params)}`,
+  );
   return r.messages;
 }
 
-export async function getSessionCalls(sessionId: string): Promise<Array<Record<string, unknown>>> {
-  const r = await apiFetch<{ calls: Array<Record<string, unknown>> }>(`/api/sessions/${encodeURIComponent(sessionId)}/calls`);
+export async function getSessionCalls(
+  sessionId: string,
+  params?: { limit?: number; offset?: number },
+): Promise<Array<Record<string, unknown>>> {
+  const r = await apiFetch<{ calls: Array<Record<string, unknown>> }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/calls${qs(params)}`,
+  );
   return r.calls;
 }
 

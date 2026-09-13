@@ -12,13 +12,14 @@ import {
 } from '../../orchestrator/orchestrator.js';
 import type { RunSpec } from '../../orchestrator/run-lifecycle.js';
 import type { RunIndexModelEntry } from '../../orchestrator/run-index.js';
+import { isSafeId } from '../../paths.js';
 import { safeResolve } from '../../sandbox/sandbox.js';
 import { readDiffPatch } from '../../sandbox/git.js';
 import { walkFiles } from '../../fs/walk.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { listJudgeScoresForRun } from '../../db/query.js';
 import type { AuthedRequest } from '../auth.js';
-import { allowIfRunOwner } from '../run-ownership.js';
+import { allowIfRunOwner, actorSubject, visibleRunsFor } from '../run-ownership.js';
 import { notFound } from '../helpers.js';
 
 async function getOwnedRunModelEntry(
@@ -50,21 +51,51 @@ async function getOwnedRunModelEntry(
  */
 const IGNORE_DIRS = ['dist', '.cache'];
 
-async function readTail(filePath: string, lines = 400): Promise<string> {
+/** Read backwards in chunks until enough line breaks are found. */
+const TAIL_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Read only the last `lines` lines of a file via a file descriptor. Equivalent
+ * to `(await readFile(p, 'utf8')).split(/\r?\n/).slice(-lines).join('\n')` but
+ * does not load the whole file (report/log tails can be tens of MB).
+ */
+export async function readTail(filePath: string, lines = 400): Promise<string> {
+  // `slice(-0)` would return the whole file; a non-positive request means none.
+  if (lines <= 0) return '';
+  let fd: Awaited<ReturnType<typeof fsp.open>> | null = null;
   try {
-    const content = await fsp.readFile(filePath, 'utf8');
-    return content.split(/\r?\n/).slice(-lines).join('\n');
+    fd = await fsp.open(filePath, 'r');
+    const { size } = await fd.stat();
+    const chunks: Buffer[] = [];
+    let position = size;
+    let newlines = 0;
+    while (position > 0 && newlines < lines) {
+      const readSize = Math.min(TAIL_CHUNK_BYTES, position);
+      position -= readSize;
+      const buffer = Buffer.alloc(readSize);
+      const { bytesRead } = await fd.read(buffer, 0, readSize, position);
+      const chunk = buffer.subarray(0, bytesRead);
+      for (let i = 0; i < chunk.length; i++) {
+        if (chunk[i] === 0x0a) newlines++;
+      }
+      chunks.unshift(chunk);
+    }
+    // Decode only after all chunks are collected: a chunk boundary can split a
+    // multibyte character, which per-chunk decoding would corrupt.
+    return Buffer.concat(chunks).toString('utf8').split(/\r?\n/).slice(-lines).join('\n');
   } catch {
     return '';
+  } finally {
+    await fd?.close();
   }
 }
 
 export function createRunsRouter(): Router {
   const router = Router();
 
-  // GET /api/runs — list all runs (from the index, no filesystem scan)
-  router.get('/', async (_req, res) => {
-    res.json({ runs: await listRuns() });
+  // GET /api/runs — list runs the caller may see (admin: all; others: owned)
+  router.get('/', async (req, res) => {
+    res.json({ runs: visibleRunsFor(req as AuthedRequest, await listRuns()) });
   });
 
   // POST /api/runs — trigger a new run (non-blocking; uses the orchestrator)
@@ -73,6 +104,10 @@ export function createRunsRouter(): Router {
     const rawModels = req.body?.models;
     if (!scenario || !Array.isArray(rawModels) || rawModels.length === 0) {
       res.status(400).json({ error: 'body must include scenario (string) and models (non-empty string[])' });
+      return;
+    }
+    if (!isSafeId(scenario)) {
+      res.status(400).json({ error: 'scenario must be a bare name (letters, digits, "_" and "-" only)' });
       return;
     }
     const models: string[] = (rawModels as unknown[])
@@ -87,7 +122,7 @@ export function createRunsRouter(): Router {
       return;
     }
     try {
-      const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard', createdBy: (req as AuthedRequest).user?.sub });
+      const spec: RunSpec = await startRun({ scenario, models, source: 'dashboard', createdBy: actorSubject(req as AuthedRequest) });
       auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'run.create', { type: 'run', id: spec.runId }, undefined, { scenario, models });
       res.status(202).json({
         runId: spec.runId,
@@ -175,11 +210,14 @@ export function createRunsRouter(): Router {
     // secrets, prompts, and model-generated credentials.
     const entry = await getOwnedRunModelEntry(req as AuthedRequest, res, req.params.runId as string, req.params.model);
     if (!entry) return;
-    const prefix = `/api/runs/${req.params.runId as string}/models/${req.params.model}/files/`;
-    const relRaw = req.path.startsWith(prefix) ? req.path.slice(prefix.length) : '';
+    // Express 5 exposes the wildcard capture as an array of already-decoded
+    // segments; `req.path` excludes the mount prefix inside a router, so the
+    // old prefix-slice always produced '' and 400'd every read.
+    const rawFilepath: unknown = req.params.filepath;
+    const relRaw = Array.isArray(rawFilepath) ? rawFilepath.join('/') : String(rawFilepath ?? '');
     let abs: string;
     try {
-      abs = safeResolve(entry.sandboxDir, decodeURIComponent(relRaw));
+      abs = safeResolve(entry.sandboxDir, relRaw);
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
       return;

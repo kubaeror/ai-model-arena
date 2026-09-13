@@ -10,8 +10,9 @@ import {
   type AnomalySeverity,
   type AnomalyQuery,
 } from '../../db/query.js';
-import { getRunRecord } from '../../orchestrator/run-index.js';
+import { getRunRecord, listRuns } from '../../orchestrator/run-index.js';
 import { readTraceMeta } from '../../observability/trace-meta.js';
+import { allowIfRunOwner, isAdminRequest, visibleRunsFor } from '../run-ownership.js';
 
 function parseBool(v: unknown): boolean | undefined {
   if (v === undefined) return undefined;
@@ -34,6 +35,11 @@ export function createAnomaliesRouter(): Router {
       limit: req.query.limit ? Math.min(500, Number(req.query.limit)) : undefined,
       offset: req.query.offset ? Number(req.query.offset) : undefined,
     };
+    // Non-admins only see anomalies whose run they own; anomalies with a
+    // missing/ownerless run record are default-denied (admin unchanged).
+    if (!isAdminRequest(req as AuthedRequest)) {
+      q.runIds = visibleRunsFor(req as AuthedRequest, await listRuns()).map((r) => r.runId);
+    }
     res.json({ anomalies: await listAnomalies(q) });
   }));
 
@@ -48,6 +54,9 @@ export function createAnomaliesRouter(): Router {
       notFound(res, `Anomaly ${id}`, String(id));
       return;
     }
+    // Trace spans can carry captured prompts/completions; gate the whole
+    // detail response on ownership of the anomaly's run (default-deny).
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, anomaly.run_id, `Anomaly ${id} not found`))) return;
     let run = null;
     let trace = null;
     const rec = await getRunRecord(anomaly.run_id);
@@ -87,6 +96,15 @@ export function createAnomaliesRouter(): Router {
       res.status(400).json({ error: 'resolved_as must be "resolved" or "false_positive"' });
       return;
     }
+    const anomaly = await getAnomaly(id);
+    if (!anomaly) {
+      notFound(res, `Anomaly ${id}`, String(id));
+      return;
+    }
+    // Same ownership gate as the read path: any editor could previously
+    // resolve another owner's anomaly by id (and the audit row blamed them
+    // for it). Default-deny for ownerless/foreign runs; admins unchanged.
+    if (!(await allowIfRunOwner(req as AuthedRequest, res, anomaly.run_id, `Anomaly ${id} not found`))) return;
     const updated = await resolveAnomaly(id, resolvedAs as 'resolved' | 'false_positive');
     if (!updated) {
       notFound(res, `Anomaly ${id}`, String(id));

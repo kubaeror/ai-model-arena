@@ -1,7 +1,8 @@
 import { getDrizzleDb } from './index.js';
 import { runs, run_models } from './schema.js';
 import type { DbRun, DbRunModel } from './schema.js';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, gte, inArray, or } from 'drizzle-orm';
+import { chunkedIn } from './query/chunked.js';
 
 export interface RunIndexModelEntry {
   model: string;
@@ -26,12 +27,14 @@ export interface RunIndexRecord {
   models: string[];
   startedAt: string;
   finishedAt: string | null;
-  status: 'running' | 'completed' | 'stopped' | 'errored' | 'unknown';
+  status: 'running' | 'finalizing' | 'completed' | 'stopped' | 'errored' | 'unknown';
   source: 'cli' | 'dashboard' | 'scheduler';
   perModel: RunIndexModelEntry[];
   comparisonMdPath: string | null;
   comparisonJsonPath: string | null;
   createdBy?: string;
+  /** Set when the dashboard reaps a stale dead-runner run; cleared on restart. */
+  reapedAt?: string | null;
 }
 
 export interface RunIndexFile {
@@ -84,14 +87,47 @@ export async function listRuns(): Promise<RunIndexRecord[]> {
   const db = getDrizzleDb();
   const rows: DbRun[] = await db.select().from(runs).orderBy(desc(runs.started_at));
   const allPm: DbRunModel[] = await db.select().from(run_models).orderBy(run_models.run_id);
-  const pmByRun = new Map<string, DbRunModel[]>();
-  for (const pm of allPm) {
+  const pmByRun = groupPerModel(allPm);
+  return rows.map((r: DbRun) => toRunRecord(r, pmByRun.get(String(r.run_id)) ?? []));
+}
+
+/** Statuses the live dashboard must always see regardless of age. */
+const LIVE_RUN_STATUSES = ['running', 'finalizing', 'stopped'];
+/** Completed/errored runs stay visible for this long after they start. */
+export const LIVE_RUN_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Bounded live feed: every non-completed (active) run plus runs started within
+ * the recent window, with per-model rows loaded only for those runs. Polling
+ * the full `runs`/`run_models` tables every couple of seconds does not scale
+ * with run history.
+ */
+export async function listLiveRuns(recentWindowMs: number = LIVE_RUN_WINDOW_MS): Promise<RunIndexRecord[]> {
+  const db = getDrizzleDb();
+  const cutoff = new Date(Date.now() - recentWindowMs).toISOString();
+  const rows: DbRun[] = await db.select().from(runs)
+    .where(or(inArray(runs.status, LIVE_RUN_STATUSES), gte(runs.started_at, cutoff)))
+    .orderBy(desc(runs.started_at));
+  if (rows.length === 0) return [];
+  const runIds = rows.map((r: DbRun) => String(r.run_id));
+  const allPm: DbRunModel[] = await db.select().from(run_models).where(chunkedIn(run_models.run_id, runIds));
+  const pmByRun = groupPerModel(allPm);
+  return rows.map((r: DbRun) => toRunRecord(r, pmByRun.get(String(r.run_id)) ?? []));
+}
+
+function groupPerModel(rows: DbRunModel[]): Map<string, DbRunModel[]> {
+  const byRun = new Map<string, DbRunModel[]>();
+  for (const pm of rows) {
     const rid = String(pm.run_id);
-    let lst = pmByRun.get(rid);
-    if (!lst) { lst = []; pmByRun.set(rid, lst); }
-    lst.push(pm);
+    let list = byRun.get(rid);
+    if (!list) { list = []; byRun.set(rid, list); }
+    list.push(pm);
   }
-  return rows.map((r: DbRun) => ({
+  return byRun;
+}
+
+function toRunRecord(r: DbRun, perModel: DbRunModel[]): RunIndexRecord {
+  return {
     runId: String(r.run_id),
     scenario: String(r.scenario),
     models: JSON.parse(String(r.models)) as string[],
@@ -99,11 +135,12 @@ export async function listRuns(): Promise<RunIndexRecord[]> {
     finishedAt: r.finished_at ? String(r.finished_at) : null,
     status: String(r.status) as RunIndexRecord['status'],
     source: String(r.source) as RunIndexRecord['source'],
-    perModel: (pmByRun.get(String(r.run_id)) ?? []).map(dbToPm),
+    perModel: perModel.map(dbToPm),
     comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
     comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
     createdBy: r.created_by ? String(r.created_by) : undefined,
-  }));
+    reapedAt: r.reaped_at ? String(r.reaped_at) : null,
+  };
 }
 
 export async function getRunRecord(runId: string): Promise<RunIndexRecord | undefined> {
@@ -124,6 +161,7 @@ export async function getRunRecord(runId: string): Promise<RunIndexRecord | unde
     comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
     comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
     createdBy: r.created_by ? String(r.created_by) : undefined,
+    reapedAt: r.reaped_at ? String(r.reaped_at) : null,
   };
 }
 
@@ -140,6 +178,7 @@ export async function upsertRun(record: RunIndexRecord): Promise<void> {
     comparison_md_path: record.comparisonMdPath,
     comparison_json_path: record.comparisonJsonPath,
     created_by: record.createdBy ?? null,
+    reaped_at: record.reapedAt ?? null,
   }).onConflictDoUpdate({
     target: runs.run_id,
     set: {
@@ -152,6 +191,7 @@ export async function upsertRun(record: RunIndexRecord): Promise<void> {
       comparison_md_path: record.comparisonMdPath,
       comparison_json_path: record.comparisonJsonPath,
       created_by: record.createdBy ?? null,
+      reaped_at: record.reapedAt ?? null,
     },
   });
   if (record.perModel && record.perModel.length > 0) {

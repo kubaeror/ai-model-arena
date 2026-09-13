@@ -19,12 +19,18 @@ export function getSharedRedisClient(url: string): Redis | null {
   return sharedClients.get(url) ?? null;
 }
 
+export function heartbeatIntervalMs(reclaimIdleMs: number): number {
+  return Math.min(reclaimIdleMs / 3, 20_000);
+}
+
 export class RedisStreamQueue implements TaskQueue {
   private redis: Redis;
   private config: RedisQueueConfig;
   private ownsClient: boolean;
   private reclaimTimer: ReturnType<typeof setInterval> | null = null;
   private reclaimStarted = false;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private inFlight = new Map<string, { addedAt: number }>();
 
   constructor(config: RedisQueueConfig, client?: Redis) {
     this.config = config;
@@ -173,6 +179,31 @@ export class RedisStreamQueue implements TaskQueue {
     }
   }
 
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer !== null || this.inFlight.size === 0) return;
+    this.heartbeatTimer = setInterval(() => {
+      void this.heartbeatInFlight().catch(() => { /* silent */ });
+    }, heartbeatIntervalMs(this.config.reclaimIdleMs));
+    if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
+  }
+
+  private stopHeartbeatIfIdle(): void {
+    if (this.heartbeatTimer === null || this.inFlight.size > 0) return;
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+  }
+
+  private async heartbeatInFlight(): Promise<void> {
+    const provider = this.config.providerFilter;
+    if (!provider || this.inFlight.size === 0) return;
+    const stream = streamKey(this.config.streamPrefix, provider);
+    for (const id of this.inFlight.keys()) {
+      try {
+        await this.redis.xclaim(stream, this.config.consumerGroup, this.config.consumerName, 0, id, 'JUSTID');
+      } catch { /* best-effort — never fail queue ops */ }
+    }
+  }
+
   private async ensureGroup(stream: string): Promise<void> {
     try {
       await this.redis.xgroup('CREATE', stream, this.config.consumerGroup, '$', 'MKSTREAM');
@@ -251,7 +282,7 @@ export class RedisStreamQueue implements TaskQueue {
       const results = await this.redis.xreadgroup(
         'GROUP', this.config.consumerGroup, this.config.consumerName,
         'COUNT', 1,
-        'BLOCK', rotations === 0 ? Math.max(timeoutMs, 0) : 0,
+        'BLOCK', rotations === 0 ? Math.max(timeoutMs, 0) : 1,
         'STREAMS', stream, '>',
       ) as [string, [string, string[]][]][] | null;
 
@@ -285,13 +316,17 @@ export class RedisStreamQueue implements TaskQueue {
         }
         await this.rotateNotDue(stream, this.config.consumerGroup, id, fields);
         rotations++;
-        continue; // re-read with BLOCK 0 — the next entry may be ready
+        continue; // re-read with a short block — the next entry may be ready
       }
+      this.inFlight.set(id, { addedAt: Date.now() });
+      this.startHeartbeat();
       return task;
     }
   }
 
   async ack(taskId: string): Promise<void> {
+    this.inFlight.delete(taskId);
+    this.stopHeartbeatIfIdle();
     const provider = this.config.providerFilter;
     if (!provider) return;
     const stream = streamKey(this.config.streamPrefix, provider);
@@ -300,6 +335,8 @@ export class RedisStreamQueue implements TaskQueue {
   }
 
   async nack(taskId: string, reason?: string): Promise<void> {
+    this.inFlight.delete(taskId);
+    this.stopHeartbeatIfIdle();
     const provider = this.config.providerFilter;
     if (!provider) return;
     const stream = streamKey(this.config.streamPrefix, provider);
@@ -381,9 +418,12 @@ export class RedisStreamQueue implements TaskQueue {
       const taskData: Record<string, string> = {};
       for (let i = 0; i < fields.length; i += 2) taskData[fields[i]!] = fields[i + 1]!;
       const task = parseTask(JSON.parse(taskData.task ?? '{}'));
-      task.attempts = (task.attempts ?? 0) + 1;
+      const preBumpAttempts = task.attempts ?? 0;
+      task.attempts = preBumpAttempts + 1;
 
-      if (isTerminalAttempt(task.attempts, maxAttempts)) {
+      // Mirrors the Lua nack script: terminality is decided from the pre-bump
+      // attempts (the script bumps first, then dead-letters at attempts >= max).
+      if (isTerminalAttempt(preBumpAttempts, maxAttempts)) {
         const dlqFields: (string | number)[] = ['task', JSON.stringify(task), 'reason', reason ?? ''];
         if (task._traceparent) { dlqFields.push('traceparent'); dlqFields.push(task._traceparent); }
         await this.redis.xadd(dlq, '*', ...dlqFields);
@@ -500,6 +540,11 @@ export class RedisStreamQueue implements TaskQueue {
       clearInterval(this.reclaimTimer);
       this.reclaimTimer = null;
     }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.inFlight.clear();
     if (!this.ownsClient) return; // shared client lives on for other instances
     sharedClients.delete(this.config.url);
     try {

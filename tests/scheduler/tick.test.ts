@@ -128,10 +128,12 @@ test('tickScheduler ticks a due schedule and advances next_run', async () => {
   }
 });
 
-test('tickScheduler passes schedule options (timeoutMs, forceBudget) into startRun', async () => {
+test('tickScheduler passes forceBudget into startRun and ignores the removed timeoutMs', async () => {
   const tmp = freshDb();
   const configPath = path.join(tmp, 'schedules.yaml');
   try {
+    // timeoutMs is intentionally still present in the YAML: the schema strips
+    // the removed option instead of rejecting the config.
     fs.writeFileSync(configPath, dump({
       schedules: [
         {
@@ -162,17 +164,18 @@ test('tickScheduler passes schedule options (timeoutMs, forceBudget) into startR
     const result = await tickScheduler({ startRunFn });
     assert.deepEqual(result.ticked.sort(), ['s-false', 's-opt', 's-plain']);
     assert.equal(calls.length, 3);
-    assert.deepEqual(calls.find((c) => c.timeoutMs === 12345), {
+    assert.deepEqual(calls.find((c) => c.forceBudget === true), {
       scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
-      forceBudget: true, timeoutMs: 12345,
+      forceBudget: true,
     });
-    assert.deepEqual(calls.find((c) => c.timeoutMs === 54321), {
+    assert.deepEqual(calls.find((c) => c.forceBudget === false), {
       scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
-      forceBudget: false, timeoutMs: 54321,
+      forceBudget: false,
     });
-    assert.deepEqual(calls.find((c) => c.timeoutMs === undefined), {
+    assert.deepEqual(calls.find((c) => c.forceBudget === undefined), {
       scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
     });
+    assert.ok(calls.every((c) => !('timeoutMs' in c)), 'removed timeoutMs must not reach startRun');
   } finally {
     resetSchedulesCache();
     delete process.env.AI_ARENA_ROOT;
@@ -326,14 +329,15 @@ test('scheduler-tick entrypoint loads schedules config before ticking (productio
     }
 
     assert.equal(calls.length, 2);
-    assert.deepEqual(calls.find((c) => c.timeoutMs === 9876), {
+    assert.deepEqual(calls.find((c) => c.forceBudget === false), {
       scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
-      forceBudget: false, timeoutMs: 9876,
+      forceBudget: false,
     });
-    assert.deepEqual(calls.find((c) => c.timeoutMs === 12345), {
+    assert.deepEqual(calls.find((c) => c.forceBudget === true), {
       scenario: 'express-rest', models: ['gpt-4o'], source: 'scheduler',
-      forceBudget: true, timeoutMs: 12345,
+      forceBudget: true,
     });
+    assert.ok(calls.every((c) => !('timeoutMs' in c)), 'removed timeoutMs must not reach startRun');
   } finally {
     resetSchedulesCache();
     delete process.env.AI_ARENA_ROOT;

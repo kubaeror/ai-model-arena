@@ -7,8 +7,12 @@ import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, computeCost, recordRunReservations, releaseRunReservations, budgetStateRoot } from '../cost-tracking/index.js';
 import { projectRoot, timestamp } from './utils.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
-import { initDb } from '../db/index.js';
-import { outputRoot, dbPath } from '../paths.js';
+import { getSessionById } from '../db/query.js';
+import { initDb, getDrizzleDb } from '../db/index.js';
+import { runs, run_models } from '../db/schema.js';
+import { and, eq, notInArray } from 'drizzle-orm';
+import { outputRoot, dbPath, assertSafeId, modelDirSegment } from '../paths.js';
+import { isWithin } from '../sandbox/sandbox.js';
 import { createQueue } from '../queue/index.js';
 import type { Task } from '../queue/types.js';
 import {
@@ -20,8 +24,11 @@ import {
 import type { ModelAdapter } from '../providers/adapters/base.js';
 import {
   aggregate,
+  claimRunFinalization,
+  completeRunFinalization,
   patchIndexAfterFinalize,
   buildPerModelEntries,
+  FINALIZE_STALE_MS,
 } from './finalize/aggregate.js';
 import { runJudgeScoringPass } from './finalize/judge.js';
 import { runAnomalyAnalysis, writebackRuntimeStats } from './finalize/anomalies.js';
@@ -90,7 +97,6 @@ export interface RunStartOptions {
   logger?: Logger;
   source?: 'cli' | 'dashboard' | 'scheduler';
   forceBudget?: boolean;
-  timeoutMs?: number;
   createdBy?: string;
   promptId?: string;
   promptVersion?: number;
@@ -103,28 +109,76 @@ export interface PerModelStatus {
   online: boolean;
 }
 
+/**
+ * Run ids are built from the scenario reference. CLI callers may pass an
+ * explicit YAML path (whose dotted basename stem is sanitized, not rejected);
+ * every other caller — including a caller that omitted `source` — must pass a
+ * bare name, so a missing source can never unlock path scenarios.
+ */
+function scenarioIdFor(scenario: string, source: RunStartOptions['source']): string {
+  const explicitPath = path.isAbsolute(scenario) || scenario.endsWith('.yaml') || scenario.endsWith('.yml');
+  if (explicitPath) {
+    if (source !== 'cli') {
+      throw new Error(`Invalid identifier "${scenario}": scenario paths are only allowed for CLI-sourced runs`);
+    }
+    const stem = path.basename(scenario).replace(/\.(yaml|yml)$/i, '');
+    return modelDirSegment(stem);
+  }
+  assertSafeId(scenario);
+  return scenario;
+}
+
+/**
+ * Model lookup keys are catalog keys (display names or canonical
+ * `provider/id` ids), not paths, and the output directory segment is derived
+ * from the resolved model — never from the key. This check only runs when a
+ * key failed catalog resolution, so traversal-shaped input gets a clear
+ * rejection instead of a generic catalog miss.
+ */
+function assertUnresolvedModelKeyIsNotPathLike(name: string): void {
+  const pathLike = name.length === 0
+    || name.includes('\0')
+    || name.includes('/')
+    || name.includes('\\')
+    || name.includes('..')
+    || path.isAbsolute(name)
+    || name.startsWith('~');
+  if (pathLike) {
+    throw new Error(`Invalid identifier "${name}": model names must not contain path separators or ..`);
+  }
+}
+
 /** Validate models + compute all run paths (no PM2, no spawning). */
 export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
   const root = projectRoot();
   const scenariosDir = opts.scenariosDir ?? path.join(root, 'configs', 'scenarios');
+  const scenarioId = scenarioIdFor(opts.scenario, opts.source);
   initDb(dbPath());
-  for (const name of opts.models) {
-    const resolved = await resolveModelForRun(name);
+  // Resolve every lookup key before deriving any directory: resolvable keys may
+  // legitimately contain spaces/dots or a `provider/id` slash, and only the
+  // resolved canonical id feeds modelDirSegment.
+  const resolvedModels = await Promise.all(opts.models.map(async (model) => {
+    const resolved = await resolveModelForRun(model);
     if (!resolved) {
-      throw new Error(`Model not found in catalog: ${name}. Run catalog sync first.`);
+      assertUnresolvedModelKeyIsNotPathLike(model);
+      throw new Error(`Model not found in catalog: ${model}. Run catalog sync first.`);
     }
-  }
+    return { model, resolved };
+  }));
 
   const ts = timestamp();
-  const runId = `${opts.scenario}_${ts}`;
-  const perModel: PerModelSpec[] = await Promise.all(opts.models.map(async (model) => {
-    const resolved = await resolveModelForRun(model);
-    const outputDir = path.join(outputRoot(), model, runId);
-    const pm2LogDir = path.join(outputRoot(), model, 'pm2-logs');
+  const runId = `${scenarioId}_${ts}`;
+  const perModel: PerModelSpec[] = resolvedModels.map(({ model, resolved }) => {
+    const modelDir = modelDirSegment(resolved.canonicalId || model);
+    const outputDir = path.join(outputRoot(), modelDir, runId);
+    if (!isWithin(outputRoot(), path.resolve(outputDir))) {
+      throw new Error(`Run output path escapes the output root: ${outputDir}`);
+    }
+    const pm2LogDir = path.join(outputRoot(), modelDir, 'pm2-logs');
     fs.mkdirSync(pm2LogDir, { recursive: true });
     return {
       model,
-      providerId: resolved?.providerId ?? 'unknown',
+      providerId: resolved.providerId,
       outputDir,
       sandboxDir: path.join(outputDir, 'files'),
       resultPath: path.join(outputDir, 'result.json'),
@@ -132,7 +186,7 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
       reportPath: path.join(outputDir, 'report.md'),
       logFile: path.join(pm2LogDir, `${runId}.log`),
     };
-  }));
+  });
   return {
     runId,
     scenario: opts.scenario,
@@ -148,10 +202,12 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
 
 /** Register a run (status=running) in the index. Never clobbers a terminal
  *  run or model: a fail-fast finalize may have written 'failed'/'stopped'
- *  before this upsert lands (e.g. crash between finalize and register). */
+ *  before this upsert lands (e.g. crash between finalize and register). A
+ *  run in 'finalizing' is equally protected: resetting it to 'running' would
+ *  let the watcher finalize it a second time. */
 export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli', createdBy?: string): Promise<void> {
   const existing = await getRunRecord(spec.runId);
-  if (existing && TERMINAL_STATUSES.has(existing.status)) return;
+  if (existing && (TERMINAL_STATUSES.has(existing.status) || existing.status === 'finalizing')) return;
   const perModel: RunIndexModelEntry[] = spec.models
     .filter((m) => {
       const ex = existing?.perModel.find((p) => p.model === m.model);
@@ -166,6 +222,9 @@ export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | '
     runId: spec.runId, scenario: spec.scenario, models: spec.models.map((m) => m.model),
     startedAt: spec.startedAt, finishedAt: null, status: 'running', source, perModel,
     comparisonMdPath: null, comparisonJsonPath: null, createdBy,
+    // A new execution begins: a marker left by a previous reap must not make a
+    // fresh run settle 'errored'.
+    reapedAt: null,
   });
 }
 
@@ -259,6 +318,9 @@ export async function startRun(opts: RunStartOptions): Promise<RunSpec> {
         modelRunId: runId,
         outputDir: m.outputDir,
         maxTurns: resolved?.maxTurns ?? 20,
+        // No 'cli' fallback: an omitted source must never unlock path scenarios
+        // in the runner (which gates path resolution on scenarioSource === 'cli').
+        scenarioSource: opts.source,
       },
       enqueuedAt: new Date().toISOString(),
       attempts: 0,
@@ -310,66 +372,300 @@ export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
 }
 
 /**
+ * Watcher-side eligibility: running/stopped runs are always finalization
+ * candidates; a 'finalizing' run is only retried once its claim is older than
+ * the stale window, so the watcher never races an active finalizer.
+ */
+export function shouldAttemptFinalize(
+  run: { status: string; finishedAt: string | null },
+  now = Date.now(),
+): boolean {
+  if (run.status === 'running' || run.status === 'stopped') return true;
+  if (run.status !== 'finalizing') return false;
+  const claimedAt = run.finishedAt ? Date.parse(run.finishedAt) : NaN;
+  return !Number.isFinite(claimedAt) || now - claimedAt >= FINALIZE_STALE_MS;
+}
+
+/**
+ * How long a stopped run whose cancel signal is still set is trusted to be
+ * owned by a live runner. The runner clears its cancel signal only after the
+ * terminal 'stopped' row and its artifacts are durable, so a signal still set
+ * after this window means the runner died without acknowledging and recovery
+ * may finalize.
+ */
+export const STOP_FINALIZE_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * True while a stopped run must not be finalized because its runner still owns
+ * it. The cancel signal is the runner's acknowledgement channel. Each runner
+ * writes its own model row 'stopped' when it observes cancellation and only the
+ * last ack clears the signal, so a still-set signal inside the grace window
+ * means a sibling (or this runner) may still be executing. A signal past the
+ * grace window — or a missing/unparsable stop timestamp, which means there is
+ * no live owner to wait for — releases the run for recovery.
+ */
+export function isStopAwaitingRunner(
+  run: { status: string; finishedAt: string | null },
+  cancelSignalActive: boolean,
+  now = Date.now(),
+): boolean {
+  if (run.status !== 'stopped' || !cancelSignalActive) return false;
+  const stoppedAt = run.finishedAt ? Date.parse(run.finishedAt) : NaN;
+  return Number.isFinite(stoppedAt) && now - stoppedAt < STOP_FINALIZE_GRACE_MS;
+}
+
+/**
+ * True once a stopped run is old enough that no live runner can still own it.
+ * A missing stop timestamp counts as elapsed (no owner to wait for); runs that
+ * are not stopped are never in grace.
+ */
+export function isStopGraceElapsed(
+  run: { status: string; finishedAt: string | null },
+  now = Date.now(),
+): boolean {
+  if (run.status !== 'stopped') return false;
+  const stoppedAt = run.finishedAt ? Date.parse(run.finishedAt) : NaN;
+  return !Number.isFinite(stoppedAt) || now - stoppedAt >= STOP_FINALIZE_GRACE_MS;
+}
+
+/**
+ * Dead-runner recovery: force every non-terminal model row of `runId` to
+ * 'stopped'. Only safe once the stop grace has elapsed (the runners are
+ * presumed dead). A late runner cannot overwrite the row afterwards because
+ * 'stopped' is terminal in the transition guard.
+ */
+export async function forceStopNonTerminalModels(runId: string): Promise<void> {
+  const db = getDrizzleDb();
+  await db.update(run_models)
+    .set({ status: 'stopped' })
+    .where(and(eq(run_models.run_id, runId), notInArray(run_models.status, [...TERMINAL_STATUSES])));
+}
+
+/**
+ * How long a 'running' run is trusted before the dashboard watcher treats it
+ * as a dead runner. An exhausted-retry task can be dead-lettered while its
+ * run_models row stays non-terminal, leaving the run 'running' forever (the
+ * finalize gate only recovers stale rows for 'stopped' runs). Override with
+ * RUN_STALE_AFTER_MS (milliseconds).
+ */
+export const RUN_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+
+export function runStaleAfterMs(): number {
+  const raw = process.env.RUN_STALE_AFTER_MS;
+  // Positive integers only: 0/NaN/trailing garbage would collapse the reap
+  // window to <= 0 and make fresh runs reaper-eligible.
+  if (raw !== undefined && /^\d+$/.test(raw)) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return RUN_STALE_AFTER_MS;
+}
+
+/**
+ * True when a run is still 'running' long after it started: its runner died
+ * before writing a terminal model row. Runs in any other state, and runs with
+ * an unparsable start timestamp (no evidence of age), are never stale.
+ */
+export function isStaleRunningRun(run: { status: string; startedAt: string }, now = Date.now()): boolean {
+  if (run.status !== 'running') return false;
+  const started = Date.parse(run.startedAt);
+  return Number.isFinite(started) && now - started >= runStaleAfterMs();
+}
+
+/**
+ * Persist the dead-runner reap marker before any finalization work starts.
+ * Persisted (not a per-tick flag) so a finalizer crash after the claim cannot
+ * make the stale retry settle a reaped run as 'completed'. Conditional on the
+ * run still being 'running': a concurrent finalize claim must not be marked.
+ */
+export async function markRunReaped(runId: string, now = new Date()): Promise<boolean> {
+  const db = getDrizzleDb();
+  const updated = await db.update(runs)
+    .set({ reaped_at: now.toISOString() })
+    .where(and(eq(runs.run_id, runId), eq(runs.status, 'running')))
+    .returning({ run_id: runs.run_id });
+  return updated.length > 0;
+}
+
+/**
+ * Dead-runner recovery for a stale 'running' run: the runner is presumed dead
+ * past RUN_STALE_AFTER_MS, so force every non-terminal model row to 'failed'
+ * (the runner died) and log each. Once every row is terminal the normal
+ * finalize gate admits the run.
+ */
+export async function failNonTerminalModels(runId: string, logger: Logger): Promise<void> {
+  const db = getDrizzleDb();
+  const failed = await db.update(run_models)
+    .set({ status: 'failed' })
+    .where(and(eq(run_models.run_id, runId), notInArray(run_models.status, [...TERMINAL_STATUSES])))
+    .returning({ model: run_models.model });
+  for (const row of failed) {
+    logger.warn('Stale run: runner presumed dead, marking model row failed', { runId, model: row.model });
+  }
+}
+
+/**
+ * Shared finalize gate for the watcher, CLI waiter, and runner self-finalize.
+ * A stopped run may only finalize when every per-model row is terminal and the
+ * cancel signal is absent (or the grace window elapsed): rows are the per-model
+ * acks, so a single runner clearing the signal early must not release the run
+ * while a sibling is still executing. Past the grace window, non-terminal rows
+ * are force-stopped so a dead runner's run can still finalize. Returns true when
+ * the caller may attempt finalization.
+ */
+export async function prepareRunFinalization(runId: string): Promise<boolean> {
+  const rec = await getRunRecord(runId);
+  if (!rec) return false;
+  if (isStopAwaitingRunner(rec, await isRunCancelledSignal(runId))) return false;
+  if (await isRunCompleteByRunId(runId)) return true;
+  if (rec.status === 'stopped' && isStopGraceElapsed(rec)) {
+    await forceStopNonTerminalModels(runId);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Single finalize core shared by the CLI (spec) and dashboard watcher (runId) paths.
  * Aggregates results, patches the index, releases budget, records spend/ledger,
- * runs anomaly analysis + stats writeback, persists judge scores, and dispatches
- * the run_completed notification + webhook. Never throws on ancillary failures.
+ * runs anomaly analysis + stats writeback, persists judge scores, dispatches the
+ * run_completed notification + webhook, then flips the claim to 'completed'.
+ * Never throws on ancillary failures.
+ *
+ * Callers must hold the atomic claim from `claimRunFinalization` before calling
+ * this: that claim is what serializes concurrent finalizers, and the attempt
+ * number it returned keys the ledger writes so a stale-retry of the same
+ * attempt cannot duplicate rows.
  */
-async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string }> {
+async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, finalizationAttempt: number, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string; completed: boolean }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
-  // Idempotency guard: the CLI and the dashboard watcher can both finalize a
-  // run (watcher polls every 3s). A second pass would duplicate cost_ledger
-  // and tool_call_stats rows and re-fire notifications.
-  if (rec.status === 'completed') {
-    logger.info('Run already finalized — skipping', { runId });
-    return { mdPath: rec.comparisonMdPath ?? '', jsonPath: rec.comparisonJsonPath ?? '' };
-  }
+  // Read the reaped marker from the record, never from a caller flag: a finalize
+  // crash-retry starts from a fresh caller, and only the persisted marker still
+  // knows the runner was reaped.
+  const reaped = rec.reapedAt != null;
   const root = projectRoot();
   // Release budget reservations against the same state root they were
   // reserved under in startRun, so estimates always match.
   const budgetRoot = budgetStateRoot(root);
-  const perModel = await buildPerModelEntries(runId, rec, entries, logger);
+  const perModel = await buildPerModelEntries(runId, rec, entries, logger, finalizationAttempt);
   await patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
   const allSuccess = perModel.every((m) => m.status === 'completed' && m.success !== false);
+  // A reaped dead-runner run whose models all lack a result has no evidence of
+  // success: 'errored' keeps that visible instead of a misleading 'completed'.
+  // Any completed model keeps the normal lifecycle-complete status.
+  const anyCompleted = perModel.some((m) => m.status === 'completed');
+  const finalStatus = reaped && !anyCompleted ? 'errored' : 'completed';
   logger.info('Run finalized', { runId, md: mdPath, status: allSuccess ? 'success' : 'failed' });
 
-  // Release budget reservations with actual costs, then best-effort
-  // post-finalize jobs: anomaly analysis, stats writeback, judge scoring,
-  // and completion notifications. All non-blocking, never fatal.
+  // Release budget reservations with actual costs, then run the post-finalize
+  // jobs (anomaly analysis, stats writeback, judge scoring, completion
+  // notification/webhooks) to completion before leaving 'finalizing'. A crash
+  // between the release and completion otherwise loses all of them silently.
+  // allSettled means one rejected job can never block the others or the
+  // completion transition; the job functions already log their own failures.
+  //
+  // Residual (accepted) window: a crash after the ledger write/budget release
+  // but before completeRunFinalization leaves the run reclaimable by the stale
+  // retry, which re-runs these effects. The ledger write is idempotent per
+  // finalization attempt (unique key + onConflictDoNothing), so the retry
+  // cannot duplicate a cost_ledger row; budget spend and notifications remain
+  // at-least-once. The atomic claim still guarantees only one finalizer runs
+  // at a time.
   releaseRunReservations(runId, entries, budgetRoot, logger);
-  void runAnomalyAnalysis(runId, logger);
-  void writebackRuntimeStats(runId, root, logger);
-  void runJudgeScoringPass(root, runId, rec, logger, judgeAdapter);
-  void notifyRunCompleted(root, runId, rec, allSuccess, logger);
+  const sideEffects = await Promise.allSettled([
+    runAnomalyAnalysis(runId, logger),
+    writebackRuntimeStats(runId, root, logger),
+    runJudgeScoringPass(root, runId, rec, logger, judgeAdapter),
+    notifyRunCompleted(root, runId, rec, allSuccess, logger),
+  ]);
+  for (const result of sideEffects) {
+    if (result.status === 'rejected') {
+      logger.warn('Finalize side effect failed (non-fatal)', {
+        runId,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    }
+  }
 
-  return { mdPath, jsonPath };
+  const completed = await completeRunFinalization(runId, finalStatus);
+  if (!completed) {
+    logger.warn('Run status left finalizing before completion transition; not marking completed', { runId });
+  }
+  return { mdPath, jsonPath, completed };
 }
 
-/** Read results, write comparison, update index. Used by the CLI (has a spec). */
+/**
+ * Aggregation + core for a run whose finalization claim was just won. Any throw
+ * here is logged at error level and rethrown: the run stays 'finalizing' so the
+ * dashboard watcher can retry it once the claim goes stale.
+ */
+async function finalizeClaimedRun(
+  runId: string,
+  scenario: string,
+  startedAt: string,
+  models: { model: string; resultPath: string }[],
+  logger: Logger,
+  finalizationAttempt: number,
+  judgeAdapter?: ModelAdapter,
+): Promise<{ entries: ComparisonEntry[]; mdPath: string; jsonPath: string; completed: boolean }> {
+  try {
+    const { entries, mdPath, jsonPath } = aggregate(projectRoot(), { runId, scenario, startedAt, models });
+    const core = await finalizeCore(runId, entries, mdPath, jsonPath, logger, finalizationAttempt, judgeAdapter);
+    return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath, completed: core.completed };
+  } catch (err) {
+    logger.error('Run finalization failed — leaving run finalizing for retry', {
+      runId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+/** Read results, write comparison, update index. Used by the CLI (has a spec).
+ *  The atomic claim runs before aggregation so a losing finalizer does no work. */
 export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{
   entries: ComparisonEntry[];
   mdPath: string;
   jsonPath: string;
 }> {
-  const { entries, mdPath, jsonPath } = aggregate(spec.root!, {
-    runId: spec.runId, scenario: spec.scenario, startedAt: spec.startedAt,
-    models: spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-  });
-  const core = await finalizeCore(spec.runId, entries, mdPath, jsonPath, logger, judgeAdapter);
-  return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath };
+  const attempt = await claimRunFinalization(spec.runId);
+  if (attempt === null) {
+    const existing = await getRunRecord(spec.runId);
+    if (!existing) throw new Error(`Run not found: ${spec.runId}`);
+    logger.info('Run finalization already claimed — skipping', { runId: spec.runId });
+    return { entries: [], mdPath: existing.comparisonMdPath ?? '', jsonPath: existing.comparisonJsonPath ?? '' };
+  }
+  const { entries, mdPath, jsonPath } = await finalizeClaimedRun(
+    spec.runId, spec.scenario, spec.startedAt,
+    spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
+    logger, attempt, judgeAdapter,
+  );
+  return { entries, mdPath, jsonPath };
 }
 
-/** Finalize by runId (resolves paths from the index). Used by the dashboard watcher. */
-export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<void> {
+/** Finalize by runId (resolves paths from the index). Used by the dashboard
+ *  watcher. Returns true only when this call won the atomic claim and the run
+ *  actually reached a terminal status ('completed', or 'errored' for a reaped
+ *  run with no successful model); false when the run is missing, another
+ *  finalizer holds a fresh claim, or the run was reset mid-finalize. The reap
+ *  marker is read from the run record (`reaped_at`), so a crash-retry started
+ *  by a fresh call still settles a dead-runner run with no completed model as
+ *  'errored'. */
+export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<boolean> {
   const rec = await getRunRecord(runId);
-  if (!rec) return;
-  const root = projectRoot();
-  const { entries, mdPath, jsonPath } = aggregate(root, {
-    runId, scenario: rec.scenario, startedAt: rec.startedAt,
-    models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-  });
-  await finalizeCore(runId, entries, mdPath, jsonPath, logger, judgeAdapter);
+  if (!rec) return false;
+  const attempt = await claimRunFinalization(runId);
+  if (attempt === null) {
+    logger.info('Run finalization already claimed — skipping', { runId });
+    return false;
+  }
+  const { completed } = await finalizeClaimedRun(
+    runId, rec.scenario, rec.startedAt,
+    rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
+    logger, attempt, judgeAdapter,
+  );
+  return completed;
 }
 
 import {
@@ -395,33 +691,63 @@ export function isRunCancelled(runId: string): Promise<boolean> { return isRunCa
 /** Mark a run's cancellation as acknowledged (cleared by runner after stopping). */
 export function clearRunCancelled(runId: string): Promise<void> { return clearRunCancelledSignal(runId); }
 
-/** Stop a running run (marks as stopped in the index and signals cancellation). */
+/** Stop a run (marks as stopped in the index and signals cancellation).
+ *  A single conditional UPDATE gates the transition: terminal statuses
+ *  ('completed' included) and 'finalizing' hold finalization state, so neither
+ *  may be regressed to 'stopped' (which would let the watcher finalize again —
+ *  duplicate ledger rows/notifications). When the UPDATE matches no row nothing
+ *  is written.
+ *  Per-model execution rows are deliberately NOT terminalized here: each runner
+ *  owns its model row and writes 'stopped' when it observes the cancel signal
+ *  (rows are the per-model acknowledgements). A runner that dies mid-stop is
+ *  recovered by the finalize grace window, which force-stops stale rows. */
 export async function stopRun(runId: string): Promise<void> {
-  const rec = await getRunRecord(runId);
-  if (!rec) throw new Error(`Run not found: ${runId}`);
+  const db = getDrizzleDb();
+  const stopped = await db.update(runs)
+    .set({ status: 'stopped', finished_at: new Date().toISOString() })
+    .where(and(eq(runs.run_id, runId), notInArray(runs.status, [...TERMINAL_STATUSES, 'finalizing'])))
+    .returning({ run_id: runs.run_id });
+  if (stopped.length === 0) {
+    const rec = await getRunRecord(runId);
+    if (!rec) throw new Error(`Run not found: ${runId}`);
+    return;
+  }
   await markRunCancelledSignal(runId);
-  await updateRun(runId, (r) => {
-    r.status = 'stopped';
-    r.finishedAt = new Date().toISOString();
-    for (const m of r.perModel) {
-      if (m.status === 'running' || m.status === 'unknown') m.status = 'stopped';
-    }
-  });
 }
 
 /** Restart a run by re-enqueuing tasks. */
 export async function restartRun(runId: string): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
+  // Reset the record BEFORE clearing the signal and enqueueing: a watcher tick
+  // racing the restart must not observe the old (possibly stopped/stale) record
+  // with the cancel signal already gone — it could reap/finalize it, only for
+  // the reset to clobber that finalization.
+  await updateRun(runId, (r) => {
+    r.status = 'running';
+    // Restarting restarts the stale-run clock: reusing the original start time
+    // would make the restarted run immediately reaper-eligible.
+    r.startedAt = new Date().toISOString();
+    r.finishedAt = null;
+    // A new execution begins: a previous reap must not settle it 'errored'.
+    r.reapedAt = null;
+    for (const m of r.perModel) { m.status = 'running'; m.success = undefined; }
+  });
   await clearRunCancelledSignal(runId);
   const queue = createQueue();
   const ts = timestamp();
   const idemKey = makeIdempotencyKey(rec.scenario, rec.perModel.map((m) => m.model));
   for (const m of rec.perModel) {
     const resolved = await resolveModelForRun(m.model);
+    // The runner persists the prompt reference on the run's session (ids are
+    // deterministic: `${runId}-${model}`), so a restart preserves the prompt
+    // instead of silently reverting to the scenario text.
+    const session = await getSessionById(`${runId}-${m.model}`);
     const task: Task = {
       taskId: `${runId}-${m.model}`,
       sessionId: `${runId}-${m.model}`,
+      promptId: session?.prompt_id ?? undefined,
+      promptVersion: session?.prompt_version ?? undefined,
       provider: resolved?.providerId ?? 'unknown',
       model: m.model,
       scenario: rec.scenario,
@@ -429,6 +755,7 @@ export async function restartRun(runId: string): Promise<void> {
         modelRunId: runId,
         outputDir: m.outputDir,
         maxTurns: resolved?.maxTurns ?? 20,
+        scenarioSource: rec.source,
       },
       enqueuedAt: new Date().toISOString(),
       attempts: 0,
@@ -438,9 +765,4 @@ export async function restartRun(runId: string): Promise<void> {
     };
     await queue.enqueue(task);
   }
-  await updateRun(runId, (r) => {
-    r.status = 'running';
-    r.finishedAt = null;
-    for (const m of r.perModel) { m.status = 'running'; m.success = undefined; }
-  });
 }
