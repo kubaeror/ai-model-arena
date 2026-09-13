@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { initDb, closeDb, getDb } from '../../src/db/client.js';
+import { initDb, closeDb, getDb, getDrizzleClient } from '../../src/db/client.js';
 import { fetchSync } from '../../src/catalog/sync.js';
 
 const FAKE_MODELS_DEV = {
@@ -271,6 +271,132 @@ test('fetchSync persists provider api URL as api_base and drops unsafe URLs', as
     await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
     const updated = getDb().prepare('SELECT api_base FROM providers WHERE id = ?').get('synth') as { api_base: string };
     assert.equal(updated.api_base, 'https://api.synth-v2.example/v1');
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
+test('fetchSync batches catalog upserts into a single transaction', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  const manyModels: Record<string, unknown> = {};
+  for (let i = 0; i < 12; i++) {
+    manyModels[`model-${i}`] = {
+      id: `model-${i}`, name: `Model ${i}`,
+      attachment: false, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 1, output: 2 }, limit: { context: 128000, output: 4096 },
+    };
+  }
+  const payload = {
+    openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: manyModels },
+  };
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response)) as typeof fetch;
+
+  const db = getDrizzleClient() as unknown as {
+    transaction: (...args: unknown[]) => unknown;
+    insert: (...args: unknown[]) => unknown;
+  };
+  const origTransaction = db.transaction;
+  const origInsert = db.insert;
+  let transactionCalls = 0;
+  let directInsertCalls = 0;
+  db.transaction = (...args: unknown[]) => {
+    transactionCalls++;
+    return origTransaction.apply(db, args);
+  };
+  db.insert = (...args: unknown[]) => {
+    directInsertCalls++;
+    return origInsert.apply(db, args);
+  };
+  try {
+    const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.count, 12);
+    assert.equal(transactionCalls, 1, 'all catalog upserts must run in one transaction');
+    assert.ok(
+      directInsertCalls < result.count,
+      `per-model inserts must be batched, got ${directInsertCalls} direct inserts for ${result.count} models`,
+    );
+    const models = getDb().prepare('SELECT COUNT(*) AS c FROM models').get() as { c: number };
+    assert.equal(models.c, 12);
+  } finally {
+    db.transaction = origTransaction;
+    db.insert = origInsert;
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
+test('fetchSync deduplicates duplicate cost tiers before batching', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  const payload = {
+    openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
+      'gpt-4o': {
+        id: 'gpt-4o', name: 'GPT-4o',
+        attachment: false, reasoning: false, temperature: true, tool_call: true,
+        cost: {
+          input: 2.5, output: 10,
+          tiers: [
+            { input: 1, output: 2, tier: { type: 'input', size: 128000 } },
+            { input: 1.5, output: 2.5, tier: { type: 'input', size: 128000 } },
+          ],
+        },
+        limit: { context: 200000, output: 16384 },
+      },
+    } },
+  };
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    assert.equal(result.ok, true, `sync must survive duplicate tiers: ${result.error ?? ''}`);
+    const rows = getDb().prepare(
+      'SELECT tier_size, input, output FROM pricing WHERE model_id = ? ORDER BY tier_size',
+    ).all('openai/gpt-4o') as Array<{ tier_size: number; input: number; output: number }>;
+    assert.deepEqual(rows, [
+      { tier_size: 0, input: 2.5, output: 10 },
+      { tier_size: 128000, input: 1.5, output: 2.5 },
+    ]);
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
+test('fetchSync prunes pricing snapshots older than the retention window', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => FAKE_MODELS_DEV,
+    text: async () => JSON.stringify(FAKE_MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    const oldVersion = '2020-01-01T00:00:00.000Z';
+    getDb().prepare(
+      'INSERT INTO pricing_snapshots (version, model_id, input, output, tier_size, snapshot_at) VALUES (?,?,?,?,?,?)',
+    ).run(oldVersion, 'openai/gpt-4o', 1, 2, 0, oldVersion);
+
+    const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    assert.equal(result.ok, true);
+
+    const stale = getDb().prepare('SELECT COUNT(*) AS c FROM pricing_snapshots WHERE version = ?').get(oldVersion) as { c: number };
+    assert.equal(stale.c, 0, 'snapshots older than the retention window must be pruned');
+    const recentCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const fresh = getDb().prepare('SELECT COUNT(*) AS c FROM pricing_snapshots WHERE snapshot_at >= ?').get(recentCutoff) as { c: number };
+    assert.ok(fresh.c >= 2, `expected fresh snapshots for both models, got ${fresh.c}`);
   } finally {
     globalThis.fetch = origFetch;
     closeDb();

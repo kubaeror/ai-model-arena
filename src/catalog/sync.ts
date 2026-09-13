@@ -1,5 +1,6 @@
-import { eq } from 'drizzle-orm';
-import { getDrizzleDb } from '../db/index.js';
+import { eq, lt, sql } from 'drizzle-orm';
+import type { InferInsertModel } from 'drizzle-orm';
+import { getDrizzleDb, getDriver } from '../db/index.js';
 import { isStale } from './cache.js';
 import { ModelsDevResponseSchema, type ModelsDevResponse } from './types.js';
 import { normalizeModelId } from './match.js';
@@ -38,6 +39,29 @@ const DEFAULT_API_URL = 'https://models.dev/api.json';
 const DEFAULT_REFRESH_DAYS = 30;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+/** Keep each INSERT well under SQLite's bound-variable limit. */
+const MAX_ROWS_PER_INSERT = 50;
+/** Pricing snapshots older than this are pruned on every refresh. */
+const SNAPSHOT_RETENTION_DAYS = 90;
+
+type ProviderInsert = InferInsertModel<typeof providers>;
+type ModelInsert = InferInsertModel<typeof models>;
+type ModelProviderInsert = InferInsertModel<typeof model_providers>;
+type PricingInsert = InferInsertModel<typeof pricing>;
+type PricingSnapshotInsert = InferInsertModel<typeof pricing_snapshots>;
+
+interface CatalogPlan {
+  providers: ProviderInsert[];
+  models: ModelInsert[];
+  modelProviders: ModelProviderInsert[];
+  pricing: PricingInsert[];
+  modelCount: number;
+}
+
+/** Drizzle query builders are thenable; the sync driver also exposes run(). */
+type BatchQuery = PromiseLike<unknown> & { run(): unknown };
+type CatalogStatement = (tx: BetterSQLite3Database) => BatchQuery;
+
 function getApiUrl(): string {
   return process.env.MODELS_DEV_API_URL ?? DEFAULT_API_URL;
 }
@@ -74,9 +98,16 @@ export async function fetchSync(source: 'models.dev', opts: SyncOpts = { apiUrl:
   }
 }
 
-async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse): Promise<number> {
-  const now = new Date().toISOString();
-  let modelCount = 0;
+function chunkRows<T>(rows: T[]): T[][] {
+  const batches: T[][] = [];
+  for (let i = 0; i < rows.length; i += MAX_ROWS_PER_INSERT) {
+    batches.push(rows.slice(i, i + MAX_ROWS_PER_INSERT));
+  }
+  return batches;
+}
+
+function buildCatalogPlan(data: ModelsDevResponse, now: string): CatalogPlan {
+  const plan: CatalogPlan = { providers: [], models: [], modelProviders: [], pricing: [], modelCount: 0 };
 
   for (const [providerId, provider] of Object.entries(data)) {
     const adapter = PROVIDER_ADAPTER_MAP[providerId] ?? 'openai-compat';
@@ -84,22 +115,16 @@ async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse)
     // models.dev is remote input: only persist an endpoint that passes the same
     // SSRF gate as dashboard-created providers (the registry re-validates too).
     const apiBase = provider.api && validateProviderUrl(provider.api).ok ? provider.api : null;
-    await db.insert(providers).values({
+    plan.providers.push({
       id: providerId, name: provider.name,
       api_base: apiBase, auth_scheme: authScheme,
       env_var: provider.env[0] ?? null, is_builtin: 1, adapter,
       header_name: null, created_at: now, updated_at: now,
-    }).onConflictDoUpdate({
-      target: providers.id,
-      set: { name: provider.name, api_base: apiBase, env_var: provider.env[0] ?? null, adapter, updated_at: now },
-      // Never let the catalog clobber a user-created provider that happens to
-      // share an id with a models.dev entry.
-      setWhere: eq(providers.is_builtin, 1),
     });
 
     for (const [modelId, model] of Object.entries(provider.models)) {
       const canonicalId = normalizeModelId(modelId, providerId);
-      await db.insert(models).values({
+      plan.models.push({
         id: canonicalId, name: model.name, family: model.family ?? null,
         provider_id: providerId, release_date: model.release_date ?? null,
         attachment: model.attachment ? 1 : 0, reasoning: model.reasoning ? 1 : 0,
@@ -110,32 +135,15 @@ async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse)
         modalities: model.modalities ? JSON.stringify(model.modalities) : null,
         reasoning_options: model.reasoning_options ? JSON.stringify(model.reasoning_options) : null,
         source_json: JSON.stringify(model), last_synced_at: now,
-      }).onConflictDoUpdate({
-        target: models.id,
-        set: {
-          name: model.name, family: model.family ?? null,
-          release_date: model.release_date ?? null, attachment: model.attachment ? 1 : 0,
-          reasoning: model.reasoning ? 1 : 0, temperature: model.temperature ? 1 : 0,
-          tool_call: model.tool_call ? 1 : 0,
-          interleaved: typeof model.interleaved === 'object' ? model.interleaved.field : (model.interleaved ? 'reasoning' : null),
-          status: model.status ?? null, context_limit: model.limit.context,
-          input_limit: model.limit.input ?? null, output_limit: model.limit.output,
-          modalities: model.modalities ? JSON.stringify(model.modalities) : null,
-          reasoning_options: model.reasoning_options ? JSON.stringify(model.reasoning_options) : null,
-          source_json: JSON.stringify(model), last_synced_at: now,
-        },
       });
 
-      await db.insert(model_providers).values({
+      plan.modelProviders.push({
         model_id: canonicalId, provider_id: providerId, api_model_id: modelId,
-      }).onConflictDoUpdate({
-        target: [model_providers.model_id, model_providers.provider_id],
-        set: { api_model_id: modelId },
       });
 
       const cost = model.cost ?? {};
       const contextOver200k = cost.context_over_200k;
-      await upsertPricingRow(db, {
+      plan.pricing.push({
         model_id: canonicalId, tier_size: 0,
         input: cost.input ?? null, output: cost.output ?? null,
         cache_read: cost.cache_read ?? null, cache_write: cost.cache_write ?? null,
@@ -146,7 +154,7 @@ async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse)
         updated_at: now,
       });
       for (const tier of cost.tiers ?? []) {
-        await upsertPricingRow(db, {
+        plan.pricing.push({
           model_id: canonicalId, tier_size: tier.tier.size,
           input: tier.input, output: tier.output,
           cache_read: tier.cache_read ?? null, cache_write: tier.cache_write ?? null,
@@ -155,48 +163,120 @@ async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse)
           updated_at: now,
         });
       }
-      modelCount++;
+      plan.modelCount++;
     }
+  }
+  // A batched INSERT ... ON CONFLICT cannot update the same row twice in one
+  // statement (Postgres rejects it; SQLite happens to tolerate it), so collapse
+  // duplicate (model_id, tier_size) rows with last-write-wins semantics.
+  const uniquePricing = new Map<string, PricingInsert>();
+  for (const row of plan.pricing) uniquePricing.set(`${row.model_id}:${row.tier_size}`, row);
+  plan.pricing = [...uniquePricing.values()];
+  return plan;
+}
+
+function buildStatements(plan: CatalogPlan): CatalogStatement[] {
+  const statements: CatalogStatement[] = [];
+  for (const rows of chunkRows(plan.providers)) {
+    statements.push((tx) => tx.insert(providers).values(rows).onConflictDoUpdate({
+      target: providers.id,
+      set: {
+        name: sql`excluded.name`, api_base: sql`excluded.api_base`,
+        env_var: sql`excluded.env_var`, adapter: sql`excluded.adapter`,
+        updated_at: sql`excluded.updated_at`,
+      },
+      // Never let the catalog clobber a user-created provider that happens to
+      // share an id with a models.dev entry.
+      setWhere: eq(providers.is_builtin, 1),
+    }) as BatchQuery);
+  }
+  for (const rows of chunkRows(plan.models)) {
+    statements.push((tx) => tx.insert(models).values(rows).onConflictDoUpdate({
+      target: models.id,
+      set: {
+        name: sql`excluded.name`, family: sql`excluded.family`,
+        release_date: sql`excluded.release_date`, attachment: sql`excluded.attachment`,
+        reasoning: sql`excluded.reasoning`, temperature: sql`excluded.temperature`,
+        tool_call: sql`excluded.tool_call`, interleaved: sql`excluded.interleaved`,
+        status: sql`excluded.status`, context_limit: sql`excluded.context_limit`,
+        input_limit: sql`excluded.input_limit`, output_limit: sql`excluded.output_limit`,
+        modalities: sql`excluded.modalities`, reasoning_options: sql`excluded.reasoning_options`,
+        source_json: sql`excluded.source_json`, last_synced_at: sql`excluded.last_synced_at`,
+      },
+    }) as BatchQuery);
+  }
+  for (const rows of chunkRows(plan.modelProviders)) {
+    statements.push((tx) => tx.insert(model_providers).values(rows).onConflictDoUpdate({
+      target: [model_providers.model_id, model_providers.provider_id],
+      set: { api_model_id: sql`excluded.api_model_id` },
+    }) as BatchQuery);
+  }
+  for (const rows of chunkRows(plan.pricing)) {
+    statements.push((tx) => tx.insert(pricing).values(rows).onConflictDoUpdate({
+      target: [pricing.model_id, pricing.tier_size],
+      set: {
+        input: sql`excluded.input`, output: sql`excluded.output`,
+        cache_read: sql`excluded.cache_read`, cache_write: sql`excluded.cache_write`,
+        over_200k_input: sql`excluded.over_200k_input`, over_200k_output: sql`excluded.over_200k_output`,
+        over_200k_cache_read: sql`excluded.over_200k_cache_read`, over_200k_cache_write: sql`excluded.over_200k_cache_write`,
+        updated_at: sql`excluded.updated_at`,
+      },
+    }) as BatchQuery);
+  }
+  return statements;
+}
+
+function runStatementsSync(tx: BetterSQLite3Database, statements: CatalogStatement[]): void {
+  for (const statement of statements) statement(tx).run();
+}
+
+async function runStatementsAsync(tx: BetterSQLite3Database, statements: CatalogStatement[]): Promise<void> {
+  for (const statement of statements) await statement(tx);
+}
+
+async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse): Promise<number> {
+  const now = new Date().toISOString();
+  const plan = buildCatalogPlan(data, now);
+  const statements = buildStatements(plan);
+
+  if (getDriver() === 'sqlite') {
+    // better-sqlite3 rejects a transaction callback that returns a promise, so
+    // the batched statements run synchronously through Drizzle's run().
+    db.transaction((tx) => {
+      runStatementsSync(tx as unknown as BetterSQLite3Database, statements);
+    });
+  } else {
+    await db.transaction(async (tx) => {
+      await runStatementsAsync(tx as unknown as BetterSQLite3Database, statements);
+    });
   }
 
   await capturePricingSnapshot(db, now);
-  return modelCount;
-}
-
-async function upsertPricingRow(db: BetterSQLite3Database, row: {
-  model_id: string; tier_size: number;
-  input: number | null; output: number | null;
-  cache_read: number | null; cache_write: number | null;
-  over_200k_input: number | null; over_200k_output: number | null;
-  over_200k_cache_read: number | null; over_200k_cache_write: number | null;
-  updated_at: string;
-}): Promise<void> {
-  await db.insert(pricing).values(row).onConflictDoUpdate({
-    target: [pricing.model_id, pricing.tier_size],
-    set: {
-      input: row.input, output: row.output,
-      cache_read: row.cache_read, cache_write: row.cache_write,
-      over_200k_input: row.over_200k_input, over_200k_output: row.over_200k_output,
-      over_200k_cache_read: row.over_200k_cache_read, over_200k_cache_write: row.over_200k_cache_write,
-      updated_at: row.updated_at,
-    },
-  });
+  await prunePricingSnapshots(db, now);
+  return plan.modelCount;
 }
 
 async function capturePricingSnapshot(db: BetterSQLite3Database, version: string): Promise<void> {
   const rows: DbPricing[] = await db.select().from(pricing);
-  for (const r of rows) {
-    await db.insert(pricing_snapshots).values({
-      version,
-      model_id: r.model_id,
-      input: r.input, output: r.output,
-      cache_read: r.cache_read, cache_write: r.cache_write,
-      tier_size: r.tier_size,
-      over_200k_input: r.over_200k_input, over_200k_output: r.over_200k_output,
-      over_200k_cache_read: r.over_200k_cache_read, over_200k_cache_write: r.over_200k_cache_write,
-      snapshot_at: version,
-    });
+  const snapshots: PricingSnapshotInsert[] = rows.map((r) => ({
+    version,
+    model_id: r.model_id,
+    input: r.input, output: r.output,
+    cache_read: r.cache_read, cache_write: r.cache_write,
+    tier_size: r.tier_size,
+    over_200k_input: r.over_200k_input, over_200k_output: r.over_200k_output,
+    over_200k_cache_read: r.over_200k_cache_read, over_200k_cache_write: r.over_200k_cache_write,
+    snapshot_at: version,
+  }));
+  for (const batch of chunkRows(snapshots)) {
+    await db.insert(pricing_snapshots).values(batch);
   }
+}
+
+/** Bound snapshot growth: each refresh used to append forever. */
+async function prunePricingSnapshots(db: BetterSQLite3Database, now: string): Promise<void> {
+  const cutoff = new Date(Date.parse(now) - SNAPSHOT_RETENTION_DAYS * MS_PER_DAY).toISOString();
+  await db.delete(pricing_snapshots).where(lt(pricing_snapshots.snapshot_at, cutoff));
 }
 
 async function updateCacheState(db: BetterSQLite3Database, source: string, status: string, error: string | undefined, count: number): Promise<void> {

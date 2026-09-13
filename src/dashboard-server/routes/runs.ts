@@ -51,12 +51,44 @@ async function getOwnedRunModelEntry(
  */
 const IGNORE_DIRS = ['dist', '.cache'];
 
-async function readTail(filePath: string, lines = 400): Promise<string> {
-  try {
-    const content = await fsp.readFile(filePath, 'utf8');
+/** Read backwards in chunks until enough line breaks are found. */
+const TAIL_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Read only the last `lines` lines of a file via a file descriptor. Equivalent
+ * to `(await readFile(p, 'utf8')).split(/\r?\n/).slice(-lines).join('\n')` but
+ * does not load the whole file (report/log tails can be tens of MB).
+ */
+export async function readTail(filePath: string, lines = 400): Promise<string> {
+  if (lines <= 0) {
+    const content = await fsp.readFile(filePath, 'utf8').catch(() => '');
     return content.split(/\r?\n/).slice(-lines).join('\n');
+  }
+  let fd: Awaited<ReturnType<typeof fsp.open>> | null = null;
+  try {
+    fd = await fsp.open(filePath, 'r');
+    const { size } = await fd.stat();
+    const chunks: Buffer[] = [];
+    let position = size;
+    let newlines = 0;
+    while (position > 0 && newlines < lines) {
+      const readSize = Math.min(TAIL_CHUNK_BYTES, position);
+      position -= readSize;
+      const buffer = Buffer.alloc(readSize);
+      const { bytesRead } = await fd.read(buffer, 0, readSize, position);
+      const chunk = buffer.subarray(0, bytesRead);
+      for (let i = 0; i < chunk.length; i++) {
+        if (chunk[i] === 0x0a) newlines++;
+      }
+      chunks.unshift(chunk);
+    }
+    // Decode only after all chunks are collected: a chunk boundary can split a
+    // multibyte character, which per-chunk decoding would corrupt.
+    return Buffer.concat(chunks).toString('utf8').split(/\r?\n/).slice(-lines).join('\n');
   } catch {
     return '';
+  } finally {
+    await fd?.close();
   }
 }
 

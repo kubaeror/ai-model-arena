@@ -206,6 +206,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
         if (onTurnComplete) {
           try { await onTurnComplete(turn, turnMessages, usage, durationMs); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
         }
+        // Turn boundary: persist the coalesced transcript on disk so the
+        // dashboard tail and crash recovery see everything up to this turn.
+        conv.flush();
         return true;
       },
     },

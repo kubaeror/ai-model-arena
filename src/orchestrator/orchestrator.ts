@@ -4,7 +4,7 @@ import { createLogger } from '../logger/pino-logger.js';
 import { outputRoot } from '../paths.js';
 import type { ComparisonEntry } from '../logger/comparison-logger.js';
 import { sleep } from './utils.js';
-import { listRuns, getRunRecord } from './run-index.js';
+import { listRuns, listLiveRuns, getRunRecord } from './run-index.js';
 import {
   startRun,
   isRunComplete,
@@ -37,6 +37,7 @@ export {
   stopRun,
   restartRun,
   listRuns,
+  listLiveRuns,
   getRunRecord,
   type RunStartOptions,
   type RunSpec,

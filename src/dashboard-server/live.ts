@@ -3,11 +3,12 @@ import type { Server } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import { promises as fsp } from 'node:fs';
 import {
-  listRuns,
+  listLiveRuns,
   getRunRecord,
   isRunCompleteByRunId,
   finalizeRunByRunId,
   shouldAttemptFinalize,
+  type RunIndexRecord,
 } from '../orchestrator/orchestrator.js';
 import { type AuthConfig } from './auth.js';
 import { verifyWsRequest } from './ws-auth.js';
@@ -50,6 +51,34 @@ export function selectLiveRuns<T extends { status: string }>(runs: T[]): T[] {
   return runs.filter((r) => r.status !== 'completed');
 }
 
+/** How long a live-run query result is reused across status/finalize polls. */
+const LIVE_RUN_CACHE_MS = 1500;
+
+/**
+ * Read new bytes appended to a log file. `offset` beyond the current size means
+ * the file was truncated or rotated: restart from byte 0 instead of allocating
+ * a negative-length buffer (which threw and permanently stalled the tail).
+ */
+export async function readLogAppend(
+  filePath: string,
+  offset: number,
+): Promise<{ offset: number; lines: string[] }> {
+  const stat = await fsp.stat(filePath);
+  const clamped = offset < 0 ? 0 : offset;
+  const start = clamped > stat.size ? 0 : clamped;
+  if (stat.size <= start) return { offset: start, lines: [] };
+  const length = stat.size - start;
+  const fd = await fsp.open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await fd.read(buffer, 0, length, start);
+    const lines = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/).filter(Boolean);
+    return { offset: start + bytesRead, lines };
+  } finally {
+    await fd.close();
+  }
+}
+
 /**
  * WebSocket gateway. Broadcasts real-time events to connected dashboard clients:
  *  - run_status (every 2s, from the runs DB index)
@@ -69,6 +98,7 @@ export class LiveHub {
   private logger = createLogger('ai-arena:live');
   private timers: NodeJS.Timeout[] = [];
   private pollTimer: NodeJS.Timeout | null = null;
+  private liveRunsCache: { at: number; runs: RunIndexRecord[] } | null = null;
 
   constructor(server: Server, auth: AuthConfig) {
     this.wss = new WebSocketServer({
@@ -100,9 +130,17 @@ export class LiveHub {
     }
   }
 
+  private async liveRuns(): Promise<RunIndexRecord[]> {
+    const cached = this.liveRunsCache;
+    if (cached && Date.now() - cached.at < LIVE_RUN_CACHE_MS) return cached.runs;
+    const runs = await listLiveRuns();
+    this.liveRunsCache = { at: Date.now(), runs };
+    return runs;
+  }
+
   private async getRunStatusList(): Promise<RunStatus[]> {
     try {
-      const recent = selectLiveRuns(await listRuns());
+      const recent = selectLiveRuns(await this.liveRuns());
       return recent.map(r => ({
         runId: r.runId,
         scenario: r.scenario,
@@ -124,8 +162,14 @@ export class LiveHub {
       .then((statuses) => this.send(ws, { type: 'run_status', runs: statuses }))
       .catch((err) => this.logger.warn('Failed to get run status on connect', { error: String(err) }));
     ws.on('message', (data) => this.onMessage(ws, data));
-    ws.on('close', () => { this.subs.delete(ws); this.clients.delete(ws); });
-    ws.on('error', () => { this.subs.delete(ws); this.clients.delete(ws); });
+    const release = (): void => {
+      const runs = this.subs.get(ws);
+      this.subs.delete(ws);
+      this.clients.delete(ws);
+      if (runs) for (const runId of runs) this.releaseRunState(runId);
+    };
+    ws.on('close', release);
+    ws.on('error', release);
   }
 
   private onMessage(ws: WebSocket, data: { toString: () => string }): void {
@@ -151,7 +195,24 @@ export class LiveHub {
           void this.sendRunSnapshot(ws, runId);
         });
     } else if (msg.type === 'unsubscribe' && typeof msg.runId === 'string') {
-      this.subs.get(ws)?.delete(msg.runId);
+      if (this.subs.get(ws)?.delete(msg.runId)) this.releaseRunState(msg.runId);
+    }
+  }
+
+  /** Delete all per-run tail state once no subscriber references the run. */
+  private releaseRunState(runId: string): void {
+    for (const set of this.subs.values()) {
+      if (set.has(runId)) return;
+    }
+    this.cleanupRunState(runId);
+  }
+
+  private cleanupRunState(runId: string): void {
+    const prefix = `${runId}:`;
+    for (const map of [this.convSeen, this.convMtime, this.logOffset, this.logMtime]) {
+      for (const key of map.keys()) {
+        if (key.startsWith(prefix)) map.delete(key);
+      }
     }
   }
 
@@ -192,54 +253,34 @@ export class LiveHub {
       if (!rec) continue;
       for (const m of rec.perModel) {
         const key = `${runId}:${m.model}`;
-        let stat: Awaited<ReturnType<typeof fsp.stat>>;
         try {
-          stat = await fsp.stat(m.conversationPath);
-        } catch {
-          continue;
-        }
-        if (this.convMtime.get(key) === stat.mtimeMs) continue;
-        this.convMtime.set(key, stat.mtimeMs);
-        let conv: { entries?: unknown[] };
-        try {
-          conv = JSON.parse(await fsp.readFile(m.conversationPath, 'utf8'));
-        } catch {
-          continue;
-        }
-        const entries = conv.entries ?? [];
-        const seen = this.convSeen.get(key) ?? 0;
-        if (entries.length > seen) {
-          this.convSeen.set(key, entries.length);
-          for (const entry of entries.slice(seen)) {
-            this.broadcastToSubscribers(runId, { type: 'conversation_update', runId, model: m.model, entry });
+          const stat = await fsp.stat(m.conversationPath);
+          if (this.convMtime.get(key) !== stat.mtimeMs) {
+            this.convMtime.set(key, stat.mtimeMs);
+            const conv = JSON.parse(await fsp.readFile(m.conversationPath, 'utf8')) as { entries?: unknown[] };
+            const entries = conv.entries ?? [];
+            const seen = this.convSeen.get(key) ?? 0;
+            if (entries.length > seen) {
+              this.convSeen.set(key, entries.length);
+              for (const entry of entries.slice(seen)) {
+                this.broadcastToSubscribers(runId, { type: 'conversation_update', runId, model: m.model, entry });
+              }
+            }
           }
+        } catch {
+          // Conversation may not exist yet — fall through to the log tail.
         }
 
         if (m.logFile) {
           try {
             const logStat = await fsp.stat(m.logFile);
-            if (this.logMtime.get(key) !== logStat.mtimeMs) {
-              const offset = this.logOffset.get(key) ?? 0;
-              const fd = await fsp.open(m.logFile, 'r');
-              try {
-                const { bytesRead, buffer } = await fd.read(
-                  Buffer.alloc(logStat.size - offset),
-                  0,
-                  logStat.size - offset,
-                  offset,
-                );
-                if (bytesRead > 0) {
-                  this.logOffset.set(key, offset + bytesRead);
-                  this.logMtime.set(key, logStat.mtimeMs);
-                  const lines = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/).filter(Boolean);
-                  if (lines.length > 0) {
-                    this.broadcastToSubscribers(runId, { type: 'log_line', runId, model: m.model, lines });
-                  }
-                } else {
-                  this.logMtime.set(key, logStat.mtimeMs);
-                }
-              } finally {
-                await fd.close();
+            const offset = this.logOffset.get(key) ?? 0;
+            if (this.logMtime.get(key) !== logStat.mtimeMs || logStat.size < offset) {
+              const appended = await readLogAppend(m.logFile, offset);
+              this.logOffset.set(key, appended.offset);
+              this.logMtime.set(key, logStat.mtimeMs);
+              if (appended.lines.length > 0) {
+                this.broadcastToSubscribers(runId, { type: 'log_line', runId, model: m.model, lines: appended.lines });
               }
             }
           } catch { /* log tailing is best-effort */ }
@@ -258,21 +299,20 @@ export class LiveHub {
     // an active finalizer is never raced. finalizeRunByRunId wins or loses the
     // atomic claim, so racing the runner is harmless; only the winner's call
     // returns true and gets the run_completed broadcast.
-    const active = (await listRuns()).filter((r) => shouldAttemptFinalize(r));
-    for (const rec of active) {
+    let candidates: RunIndexRecord[];
+    try {
+      candidates = (await this.liveRuns()).filter((r) => shouldAttemptFinalize(r));
+    } catch {
+      return;
+    }
+    for (const rec of candidates) {
       try {
         if (await isRunCompleteByRunId(rec.runId)) {
           const finalized = await finalizeRunByRunId(rec.runId, this.logger);
           if (!finalized) continue;
           this.broadcastToSubscribers(rec.runId, { type: 'run_completed', runId: rec.runId });
-          for (const [key] of this.convSeen) {
-            if (key.startsWith(rec.runId)) {
-              this.convSeen.delete(key);
-              this.convMtime.delete(key);
-              this.logOffset.delete(key);
-              this.logMtime.delete(key);
-            }
-          }
+          this.cleanupRunState(rec.runId);
+          this.liveRunsCache = null;
         }
       } catch { /* ignore */ }
     }
