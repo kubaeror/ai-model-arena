@@ -8,7 +8,10 @@ vi.stubGlobal('localStorage', {
   clear: () => store.clear(),
 });
 
-import { getToken, clearToken, getUser, login, api, updateSchedule } from '../../src/lib/api.js';
+import {
+  getToken, clearToken, getUser, login, api, updateSchedule,
+  getSessionMessages, getSessionCalls,
+} from '../../src/lib/api.js';
 
 describe('api namespace', () => {
   it('exposes put used by SecretsPanel', () => {
@@ -48,6 +51,43 @@ describe('getToken / clearToken / login', () => {
     clearToken();
     expect(getToken()).toBeNull();
     expect(getUser()).toBeNull();
+  });
+});
+
+describe('session transcript pagination', () => {
+  const okJson = (body: unknown) => ({
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => body,
+  });
+
+  it('getSessionMessages sends limit and unwraps the payload', async () => {
+    let captured: string | undefined;
+    vi.stubGlobal('fetch', async (url: string) => {
+      captured = url;
+      return okJson({ messages: [{ id: 'm1' }], limit: 200, offset: 0 });
+    });
+
+    const messages = await getSessionMessages('sess 1', { limit: 200 });
+
+    expect(captured).toBe('/api/sessions/sess%201/messages?limit=200');
+    expect(messages).toEqual([{ id: 'm1' }]);
+    vi.unstubAllGlobals();
+  });
+
+  it('getSessionCalls sends limit and offset', async () => {
+    let captured: string | undefined;
+    vi.stubGlobal('fetch', async (url: string) => {
+      captured = url;
+      return okJson({ calls: [{ id: 'c1' }], limit: 400, offset: 0 });
+    });
+
+    const calls = await getSessionCalls('s1', { limit: 400, offset: 0 });
+
+    expect(captured).toBe('/api/sessions/s1/calls?limit=400&offset=0');
+    expect(calls).toEqual([{ id: 'c1' }]);
+    vi.unstubAllGlobals();
   });
 });
 

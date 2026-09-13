@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Routes, Route } from 'react-router';
 import { Suspense } from 'react';
 import { Sessions } from '../../src/pages/Sessions';
 import { SessionDetail } from '../../src/pages/SessionDetail';
 import { Files } from '../../src/pages/Files';
 import { Audit } from '../../src/pages/Audit';
+import { getSessionMessages } from '../../src/lib/api';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
 
@@ -61,6 +62,23 @@ describe('SessionDetail', () => {
       expect(screen.getByRole('tab', { name: /Messages/i })).toBeInTheDocument();
       expect(screen.getByText(/user/)).toBeInTheDocument();
     });
+  });
+
+  it('requests an explicit limit and raises it on load more', async () => {
+    vi.mocked(getSessionMessages).mockResolvedValue([{ id: 'm1', role: 'user', turn: 0, content: 'hi' }]);
+    vi.mocked(getSessionMessages).mockClear();
+    renderWithProviders(
+      <Routes>
+        <Route path="/sessions/:sessionId" element={<SessionDetail />} />
+      </Routes>,
+      ['/sessions/sess-1'],
+    );
+
+    await waitFor(() => expect(getSessionMessages).toHaveBeenCalledWith('sess-1', { limit: 200 }));
+
+    fireEvent.click(await screen.findByRole('button', { name: /load more/i }));
+
+    await waitFor(() => expect(getSessionMessages).toHaveBeenCalledWith('sess-1', { limit: 400 }));
   });
 });
 

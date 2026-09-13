@@ -29,6 +29,8 @@ export function SessionDetail() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [tab, setTab] = useState<string>('messages');
+  const [messagesLimit, setMessagesLimit] = useState(200);
+  const [callsLimit, setCallsLimit] = useState(200);
 
   const sessionQuery = useQuery({
     queryKey: ['session', sessionId],
@@ -36,13 +38,13 @@ export function SessionDetail() {
     retry: false,
   });
   const messagesQuery = useQuery({
-    queryKey: ['session-messages', sessionId],
-    queryFn: () => getSessionMessages(sessionId),
+    queryKey: ['session-messages', sessionId, messagesLimit],
+    queryFn: () => getSessionMessages(sessionId, { limit: messagesLimit }),
     enabled: tab === 'messages',
   });
   const callsQuery = useQuery({
-    queryKey: ['session-calls', sessionId],
-    queryFn: () => getSessionCalls(sessionId),
+    queryKey: ['session-calls', sessionId, callsLimit],
+    queryFn: () => getSessionCalls(sessionId, { limit: callsLimit }),
     enabled: tab === 'calls',
   });
 
@@ -86,19 +88,28 @@ export function SessionDetail() {
             ) : (messagesQuery.data?.length ?? 0) === 0 ? (
               <EmptyState title="No messages" />
             ) : (
-              <div className="flex flex-col gap-2 font-mono text-12">
-                {(messagesQuery.data ?? []).map((m) => (
-                  <div key={String(m.id)} className="rounded-inner border border-border/50 p-2">
-                    <div className="flex gap-2 text-fg-1">
-                      <span className="text-accent">[{String(m.role)}]</span>
-                      <span>turn {String(m.turn)}</span>
-                      {m.tool_call_id ? <span>tool:{String(m.tool_name ?? m.tool_call_id).slice(0, 40)}</span> : null}
+              <>
+                <div className="flex flex-col gap-2 font-mono text-12">
+                  {(messagesQuery.data ?? []).map((m) => (
+                    <div key={String(m.id)} className="rounded-inner border border-border/50 p-2">
+                      <div className="flex gap-2 text-fg-1">
+                        <span className="text-accent">[{String(m.role)}]</span>
+                        <span>turn {String(m.turn)}</span>
+                        {m.tool_call_id ? <span>tool:{String(m.tool_name ?? m.tool_call_id).slice(0, 40)}</span> : null}
+                      </div>
+                      {m.content ? <pre className="mt-1 whitespace-pre-wrap text-fg-0">{jsonOrText(m.content)}</pre> : null}
+                      {m.tool_calls ? <pre className="mt-1 whitespace-pre-wrap text-fg-1">{jsonOrText(m.tool_calls)}</pre> : null}
                     </div>
-                    {m.content ? <pre className="mt-1 whitespace-pre-wrap text-fg-0">{jsonOrText(m.content)}</pre> : null}
-                    {m.tool_calls ? <pre className="mt-1 whitespace-pre-wrap text-fg-1">{jsonOrText(m.tool_calls)}</pre> : null}
+                  ))}
+                </div>
+                {(messagesQuery.data?.length ?? 0) < session.message_count && (
+                  <div className="flex justify-center py-2">
+                    <Button variant="ghost" size="sm" onClick={() => setMessagesLimit((l) => l + 200)} disabled={messagesQuery.isFetching}>
+                      {messagesQuery.isFetching ? 'Loading…' : 'Load more'}
+                    </Button>
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </PanelBody>
         </Panel>
@@ -112,28 +123,37 @@ export function SessionDetail() {
             ) : (callsQuery.data?.length ?? 0) === 0 ? (
               <EmptyState title="No model calls recorded" />
             ) : (
-              <table className="w-full font-mono text-12">
-                <thead>
-                  <tr className="border-b border-border text-left text-fg-1 text-12 uppercase">
-                    <th className="py-2 pr-4">Turn</th>
-                    <th className="py-2 pr-4">Provider</th>
-                    <th className="py-2 pr-4">Model</th>
-                    <th className="py-2 pr-4">Latency</th>
-                    <th className="py-2">Response</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(callsQuery.data ?? []).map((c) => (
-                    <tr key={String(c.id)} className="border-b border-border/50 align-top">
-                      <td className="py-2 pr-4 text-accent">{String(c.turn)}</td>
-                      <td className="py-2 pr-4 text-fg-1">{String(c.provider)}</td>
-                      <td className="py-2 pr-4 text-fg-1">{String(c.model)}</td>
-                      <td className="py-2 pr-4 text-fg-1" data-numeric>{c.latency_ms != null ? `${c.latency_ms}ms` : '—'}</td>
-                      <td className="py-2 text-fg-1 whitespace-pre-wrap max-w-400">{String(c.response_text ?? '').slice(0, 2000)}</td>
+              <>
+                <table className="w-full font-mono text-12">
+                  <thead>
+                    <tr className="border-b border-border text-left text-fg-1 text-12 uppercase">
+                      <th className="py-2 pr-4">Turn</th>
+                      <th className="py-2 pr-4">Provider</th>
+                      <th className="py-2 pr-4">Model</th>
+                      <th className="py-2 pr-4">Latency</th>
+                      <th className="py-2">Response</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(callsQuery.data ?? []).map((c) => (
+                      <tr key={String(c.id)} className="border-b border-border/50 align-top">
+                        <td className="py-2 pr-4 text-accent">{String(c.turn)}</td>
+                        <td className="py-2 pr-4 text-fg-1">{String(c.provider)}</td>
+                        <td className="py-2 pr-4 text-fg-1">{String(c.model)}</td>
+                        <td className="py-2 pr-4 text-fg-1" data-numeric>{c.latency_ms != null ? `${c.latency_ms}ms` : '—'}</td>
+                        <td className="py-2 text-fg-1 whitespace-pre-wrap max-w-400">{String(c.response_text ?? '').slice(0, 2000)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(callsQuery.data?.length ?? 0) < session.call_count && (
+                  <div className="flex justify-center py-2">
+                    <Button variant="ghost" size="sm" onClick={() => setCallsLimit((l) => l + 200)} disabled={callsQuery.isFetching}>
+                      {callsQuery.isFetching ? 'Loading…' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </PanelBody>
         </Panel>
