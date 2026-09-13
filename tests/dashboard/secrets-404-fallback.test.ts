@@ -30,6 +30,7 @@ function recordingK8sHttp(captured: CapturedK8sRequest[], missingStatus = 404): 
         {
           text: async () => (status >= 300 ? `{"kind":"Status","code":${status}}` : '{}'),
           binary: async () => Buffer.from(''),
+          stream: () => null,
         },
       )));
     },
