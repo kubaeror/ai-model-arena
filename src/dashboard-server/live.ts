@@ -7,6 +7,7 @@ import {
   getRunRecord,
   isRunCompleteByRunId,
   finalizeRunByRunId,
+  shouldAttemptFinalize,
 } from '../orchestrator/orchestrator.js';
 import { type AuthConfig } from './auth.js';
 import { verifyWsRequest } from './ws-auth.js';
@@ -38,6 +39,15 @@ interface ClientInfo {
   req: IncomingMessage;
   secure: boolean;
   origin: string;
+}
+
+/**
+ * Status feed policy: 'completed' is the only terminal status that leaves the
+ * live list. A 'finalizing' run is still in flight (aggregation/ledger/
+ * notification) and must stay visible until it completes.
+ */
+export function selectLiveRuns<T extends { status: string }>(runs: T[]): T[] {
+  return runs.filter((r) => r.status !== 'completed');
 }
 
 /**
@@ -92,8 +102,7 @@ export class LiveHub {
 
   private async getRunStatusList(): Promise<RunStatus[]> {
     try {
-      const runs = await listRuns();
-      const recent = runs.filter(r => r.status !== 'completed' || r.finishedAt == null);
+      const recent = selectLiveRuns(await listRuns());
       return recent.map(r => ({
         runId: r.runId,
         scenario: r.scenario,
@@ -242,10 +251,14 @@ export class LiveHub {
   private async finalizeRuns(): Promise<void> {
     // 'stopped' runs are included: stopRun marks their per-model rows
     // terminal, and a stopped run whose runner died would otherwise never
-    // finalize (no aggregation, no reservation release). finalizeRunByRunId
-    // wins or loses the atomic claim, so racing the runner is harmless; only
-    // the winner's call returns true and gets the run_completed broadcast.
-    const active = (await listRuns()).filter((r) => r.status === 'running' || r.status === 'stopped');
+    // finalize (no aggregation, no reservation release). Stale 'finalizing'
+    // runs are also included so a crash after the claim (aggregation/ledger/
+    // notification) is retried instead of stranding the run; shouldAttemptFinalize
+    // only admits a finalizing run whose claim exceeded FINALIZE_STALE_MS, so
+    // an active finalizer is never raced. finalizeRunByRunId wins or loses the
+    // atomic claim, so racing the runner is harmless; only the winner's call
+    // returns true and gets the run_completed broadcast.
+    const active = (await listRuns()).filter((r) => shouldAttemptFinalize(r));
     for (const rec of active) {
       try {
         if (await isRunCompleteByRunId(rec.runId)) {

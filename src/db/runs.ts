@@ -26,7 +26,7 @@ export interface RunIndexRecord {
   models: string[];
   startedAt: string;
   finishedAt: string | null;
-  status: 'running' | 'completed' | 'stopped' | 'errored' | 'unknown';
+  status: 'running' | 'finalizing' | 'completed' | 'stopped' | 'errored' | 'unknown';
   source: 'cli' | 'dashboard' | 'scheduler';
   perModel: RunIndexModelEntry[];
   comparisonMdPath: string | null;

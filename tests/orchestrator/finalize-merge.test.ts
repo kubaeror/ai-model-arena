@@ -16,9 +16,12 @@ import {
   registerRun,
   isRunComplete,
   isRunCompleteByRunId,
+  isRunCancelled,
+  stopRun,
   type RunSpec,
   type PerModelSpec,
 } from '../../src/orchestrator/run-lifecycle.js';
+import { claimRunFinalization } from '../../src/orchestrator/finalize/aggregate.js';
 import { getRunRecord, updateRun, upsertRun } from '../../src/orchestrator/run-index.js';
 import { writeJudgeResult } from '../../src/evaluation/judge.js';
 
@@ -299,6 +302,95 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.strictEqual(ledger.length, 1, 'exactly one cost_ledger row for the stopped run');
 
     assert.strictEqual(await finalizeRunByRunId(runId, logger), false, 'second finalize loses the claim');
+  });
+
+  it('a throw after the claim leaves the run finalizing; a stale retry completes exactly once', async () => {
+    const runId = 'run_finalize_recovery';
+    const alpha = makePerModel(runId, 'alpha', root, 't-recovery');
+    writeResult(alpha, { costUsd: 0.05 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+
+    // Force the aggregation write to throw: comparisons/ exists as a file, so
+    // writeComparison's mkdir fails after the claim has been taken.
+    const comparisonsDir = path.join(root, 'outputs', 'comparisons');
+    fs.rmSync(comparisonsDir, { recursive: true, force: true });
+    fs.writeFileSync(comparisonsDir, 'not a directory');
+    try {
+      await assert.rejects(finalizeRun(spec, logger), 'aggregation failure must propagate, not be swallowed');
+    } finally {
+      fs.rmSync(comparisonsDir, { force: true });
+    }
+
+    let rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.status, 'finalizing', 'a failed finalize leaves the run reclaimable, not completed');
+    assert.ok(rec?.finishedAt, 'the claim stamps finishedAt');
+
+    // A young claim is held by the (possibly still alive) original finalizer.
+    assert.strictEqual(await claimRunFinalization(runId), false, 'a fresh finalizing claim must not be stolen');
+
+    // Age the claim past the stale window, as the watcher does for a crashed finalizer.
+    await updateRun(runId, (r) => { r.finishedAt = new Date(Date.now() - 3 * 60_000).toISOString(); });
+    assert.strictEqual(await finalizeRunByRunId(runId, logger), true, 'stale finalizing run is reclaimed');
+
+    rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.status, 'completed');
+    const db = getDrizzleDb();
+    const ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'exactly one ledger row after recovery');
+    await waitForRunNotifications(runId, 1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.strictEqual(await countRunNotifications(runId), 1, 'exactly one notification after recovery');
+  });
+
+  it('stopRun during finalization is a no-op and cannot trigger a second finalization', async () => {
+    const runId = 'run_stop_during_finalize';
+    const alpha = makePerModel(runId, 'alpha', root, 't-stop-fin');
+    writeResult(alpha, { costUsd: 0.06 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'dashboard');
+
+    assert.strictEqual(await claimRunFinalization(runId), true);
+    const claimedAt = (await getRunRecord(runId))?.finishedAt;
+
+    await stopRun(runId);
+
+    let rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.status, 'finalizing', 'stop must not regress a finalizing run');
+    assert.strictEqual(rec?.finishedAt, claimedAt, 'no-op stop must not move finishedAt');
+    assert.strictEqual(await isRunCancelled(runId), false, 'no-op stop must not record a cancellation signal');
+
+    await updateRun(runId, (r) => { r.finishedAt = new Date(Date.now() - 3 * 60_000).toISOString(); });
+    assert.strictEqual(await finalizeRunByRunId(runId, logger), true);
+    rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.status, 'completed');
+
+    await stopRun(runId);
+    rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.status, 'completed', 'stop after completion stays a no-op');
+    assert.strictEqual(await finalizeRunByRunId(runId, logger), false, 'no second finalization');
+
+    const db = getDrizzleDb();
+    const ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'exactly one ledger row');
+  });
+
+  it('concurrent stop and finalize settle on exactly one completed finalization', async () => {
+    const runId = 'run_stop_race_finalize';
+    const alpha = makePerModel(runId, 'alpha', root, 't-stop-race');
+    writeResult(alpha, { costUsd: 0.07 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'dashboard');
+
+    await Promise.all([stopRun(runId), finalizeRunByRunId(runId, logger)]);
+
+    const rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.status, 'completed', 'the race must settle on a completed finalization');
+    assert.strictEqual(await finalizeRunByRunId(runId, logger), false, 're-finalize loses the claim');
+
+    const db = getDrizzleDb();
+    const ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'exactly one ledger row');
   });
 
   it('judge_score.json is NOT written when judge is disabled', async () => {

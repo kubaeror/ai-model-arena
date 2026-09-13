@@ -7,7 +7,9 @@ import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, computeCost, recordRunReservations, releaseRunReservations, budgetStateRoot } from '../cost-tracking/index.js';
 import { projectRoot, timestamp } from './utils.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
-import { initDb } from '../db/index.js';
+import { initDb, getDrizzleDb } from '../db/index.js';
+import { runs, run_models } from '../db/schema.js';
+import { and, eq, inArray, notInArray } from 'drizzle-orm';
 import { outputRoot, dbPath, assertSafeId, modelDirSegment } from '../paths.js';
 import { isWithin } from '../sandbox/sandbox.js';
 import { createQueue } from '../queue/index.js';
@@ -22,8 +24,10 @@ import type { ModelAdapter } from '../providers/adapters/base.js';
 import {
   aggregate,
   claimRunFinalization,
+  completeRunFinalization,
   patchIndexAfterFinalize,
   buildPerModelEntries,
+  FINALIZE_STALE_MS,
 } from './finalize/aggregate.js';
 import { runJudgeScoringPass } from './finalize/judge.js';
 import { runAnomalyAnalysis, writebackRuntimeStats } from './finalize/anomalies.js';
@@ -198,10 +202,12 @@ export async function createRunSpec(opts: RunStartOptions): Promise<RunSpec> {
 
 /** Register a run (status=running) in the index. Never clobbers a terminal
  *  run or model: a fail-fast finalize may have written 'failed'/'stopped'
- *  before this upsert lands (e.g. crash between finalize and register). */
+ *  before this upsert lands (e.g. crash between finalize and register). A
+ *  run in 'finalizing' is equally protected: resetting it to 'running' would
+ *  let the watcher finalize it a second time. */
 export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | 'scheduler' = 'cli', createdBy?: string): Promise<void> {
   const existing = await getRunRecord(spec.runId);
-  if (existing && TERMINAL_STATUSES.has(existing.status)) return;
+  if (existing && (TERMINAL_STATUSES.has(existing.status) || existing.status === 'finalizing')) return;
   const perModel: RunIndexModelEntry[] = spec.models
     .filter((m) => {
       const ex = existing?.perModel.find((p) => p.model === m.model);
@@ -363,16 +369,32 @@ export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
 }
 
 /**
+ * Watcher-side eligibility: running/stopped runs are always finalization
+ * candidates; a 'finalizing' run is only retried once its claim is older than
+ * the stale window, so the watcher never races an active finalizer.
+ */
+export function shouldAttemptFinalize(
+  run: { status: string; finishedAt: string | null },
+  now = Date.now(),
+): boolean {
+  if (run.status === 'running' || run.status === 'stopped') return true;
+  if (run.status !== 'finalizing') return false;
+  const claimedAt = run.finishedAt ? Date.parse(run.finishedAt) : NaN;
+  return !Number.isFinite(claimedAt) || now - claimedAt >= FINALIZE_STALE_MS;
+}
+
+/**
  * Single finalize core shared by the CLI (spec) and dashboard watcher (runId) paths.
  * Aggregates results, patches the index, releases budget, records spend/ledger,
- * runs anomaly analysis + stats writeback, persists judge scores, and dispatches
- * the run_completed notification + webhook. Never throws on ancillary failures.
+ * runs anomaly analysis + stats writeback, persists judge scores, dispatches the
+ * run_completed notification + webhook, then flips the claim to 'completed'.
+ * Never throws on ancillary failures.
  *
  * Callers must hold the atomic claim from `claimRunFinalization` before calling
  * this: it is the only guard that prevents a concurrent finalizer from
  * duplicating ledger rows, notifications, and stats.
  */
-async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string }> {
+async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string; completed: boolean }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   const root = projectRoot();
@@ -393,7 +415,37 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: s
   void runJudgeScoringPass(root, runId, rec, logger, judgeAdapter);
   void notifyRunCompleted(root, runId, rec, allSuccess, logger);
 
-  return { mdPath, jsonPath };
+  const completed = await completeRunFinalization(runId);
+  if (!completed) {
+    logger.warn('Run status left finalizing before completion transition; not marking completed', { runId });
+  }
+  return { mdPath, jsonPath, completed };
+}
+
+/**
+ * Aggregation + core for a run whose finalization claim was just won. Any throw
+ * here is logged at error level and rethrown: the run stays 'finalizing' so the
+ * dashboard watcher can retry it once the claim goes stale.
+ */
+async function finalizeClaimedRun(
+  runId: string,
+  scenario: string,
+  startedAt: string,
+  models: { model: string; resultPath: string }[],
+  logger: Logger,
+  judgeAdapter?: ModelAdapter,
+): Promise<{ entries: ComparisonEntry[]; mdPath: string; jsonPath: string; completed: boolean }> {
+  try {
+    const { entries, mdPath, jsonPath } = aggregate(projectRoot(), { runId, scenario, startedAt, models });
+    const core = await finalizeCore(runId, entries, mdPath, jsonPath, logger, judgeAdapter);
+    return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath, completed: core.completed };
+  } catch (err) {
+    logger.error('Run finalization failed — leaving run finalizing for retry', {
+      runId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 /** Read results, write comparison, update index. Used by the CLI (has a spec).
@@ -406,34 +458,34 @@ export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: 
   if (!(await claimRunFinalization(spec.runId))) {
     const existing = await getRunRecord(spec.runId);
     if (!existing) throw new Error(`Run not found: ${spec.runId}`);
-    logger.info('Run already finalized — skipping', { runId: spec.runId });
+    logger.info('Run finalization already claimed — skipping', { runId: spec.runId });
     return { entries: [], mdPath: existing.comparisonMdPath ?? '', jsonPath: existing.comparisonJsonPath ?? '' };
   }
-  const { entries, mdPath, jsonPath } = aggregate(spec.root!, {
-    runId: spec.runId, scenario: spec.scenario, startedAt: spec.startedAt,
-    models: spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-  });
-  const core = await finalizeCore(spec.runId, entries, mdPath, jsonPath, logger, judgeAdapter);
-  return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath };
+  const { entries, mdPath, jsonPath } = await finalizeClaimedRun(
+    spec.runId, spec.scenario, spec.startedAt,
+    spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
+    logger, judgeAdapter,
+  );
+  return { entries, mdPath, jsonPath };
 }
 
 /** Finalize by runId (resolves paths from the index). Used by the dashboard
- *  watcher. Returns true when this call won the atomic claim (and finalized);
- *  false when the run is missing or another finalizer already claimed it. */
+ *  watcher. Returns true only when this call won the atomic claim and the run
+ *  actually reached 'completed'; false when the run is missing, another
+ *  finalizer holds a fresh claim, or the run was reset mid-finalize. */
 export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<boolean> {
   const rec = await getRunRecord(runId);
   if (!rec) return false;
   if (!(await claimRunFinalization(runId))) {
-    logger.info('Run already finalized — skipping', { runId });
+    logger.info('Run finalization already claimed — skipping', { runId });
     return false;
   }
-  const root = projectRoot();
-  const { entries, mdPath, jsonPath } = aggregate(root, {
-    runId, scenario: rec.scenario, startedAt: rec.startedAt,
-    models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-  });
-  await finalizeCore(runId, entries, mdPath, jsonPath, logger, judgeAdapter);
-  return true;
+  const { completed } = await finalizeClaimedRun(
+    runId, rec.scenario, rec.startedAt,
+    rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
+    logger, judgeAdapter,
+  );
+  return completed;
 }
 
 import {
@@ -459,21 +511,26 @@ export function isRunCancelled(runId: string): Promise<boolean> { return isRunCa
 /** Mark a run's cancellation as acknowledged (cleared by runner after stopping). */
 export function clearRunCancelled(runId: string): Promise<void> { return clearRunCancelledSignal(runId); }
 
-/** Stop a running run (marks as stopped in the index and signals cancellation).
- *  A completed run is terminal: re-marking it stopped would let the dashboard
- *  watcher finalize it again (duplicate ledger rows/notifications). */
+/** Stop a run (marks as stopped in the index and signals cancellation).
+ *  A single conditional UPDATE gates the transition: 'completed' is terminal
+ *  and 'finalizing' holds the finalization claim, so neither may be regressed
+ *  to 'stopped' (which would let the watcher finalize again — duplicate ledger
+ *  rows/notifications). When the UPDATE matches no row nothing is written. */
 export async function stopRun(runId: string): Promise<void> {
-  const rec = await getRunRecord(runId);
-  if (!rec) throw new Error(`Run not found: ${runId}`);
-  if (rec.status === 'completed') return;
+  const db = getDrizzleDb();
+  const stopped = await db.update(runs)
+    .set({ status: 'stopped', finished_at: new Date().toISOString() })
+    .where(and(eq(runs.run_id, runId), notInArray(runs.status, ['completed', 'finalizing'])))
+    .returning({ run_id: runs.run_id });
+  if (stopped.length === 0) {
+    const rec = await getRunRecord(runId);
+    if (!rec) throw new Error(`Run not found: ${runId}`);
+    return;
+  }
   await markRunCancelledSignal(runId);
-  await updateRun(runId, (r) => {
-    r.status = 'stopped';
-    r.finishedAt = new Date().toISOString();
-    for (const m of r.perModel) {
-      if (m.status === 'running' || m.status === 'unknown') m.status = 'stopped';
-    }
-  });
+  await db.update(run_models)
+    .set({ status: 'stopped' })
+    .where(and(eq(run_models.run_id, runId), inArray(run_models.status, ['running', 'unknown'])));
 }
 
 /** Restart a run by re-enqueuing tasks. */

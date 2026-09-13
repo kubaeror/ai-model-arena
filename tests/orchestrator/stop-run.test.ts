@@ -6,7 +6,7 @@ import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
 import { transitionTaskState } from '../../src/db/query.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
-import { stopRun, registerRun, isRunCancelled, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
+import { stopRun, restartRun, registerRun, isRunCancelled, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
 
 const ORIG_ENV = { ...process.env };
 
@@ -64,6 +64,35 @@ test('stopRun on a completed run is a no-op (never regresses to stopped)', async
     assert.equal(rec?.finishedAt, finishedAt, 'finishedAt must not change');
     assert.equal(rec?.perModel[0]?.status, 'completed', 'terminal model rows must not be regressed');
     assert.equal(await isRunCancelled('stop-2'), false, 'no-op stop must not record a cancellation signal');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('restartRun resets a finalizing run to running', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-restart-fin-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'restart-fin', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      status: 'finalizing', source: 'cli',
+      perModel: [{ model: 'gpt-4o', runId: 'restart-fin', status: 'completed' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    await restartRun('restart-fin');
+
+    const rec = await getRunRecord('restart-fin');
+    assert.equal(rec?.status, 'running', 'restart must clear the finalizing claim');
+    assert.equal(rec?.finishedAt, null, 'restart must clear finishedAt');
+    assert.equal(rec?.perModel[0]?.status, 'running', 'restart must reset model rows');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });

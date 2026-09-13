@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, isNull, lt, ne, or } from 'drizzle-orm';
 import type { Logger } from '../../types.js';
 import { writeComparison, type ComparisonEntry } from '../../logger/comparison-logger.js';
 import { updateRun, type RunIndexRecord, type RunIndexModelEntry } from '../run-index.js';
@@ -41,26 +41,64 @@ export function aggregate(_root: string, input: AggregateInput): {
 }
 
 /**
- * Atomically claim finalization of `runId`: one conditional UPDATE flips any
- * non-completed run to 'completed' and stamps `finished_at`. Exactly one
- * concurrent finalizer (runner self-finalize vs dashboard watcher) observes a
- * returned row; losers must skip aggregation, ledger writes, and notifications.
- * A single UPDATE ... WHERE status != 'completed' is portable across SQLite and
- * Postgres — unlike the read-then-check it replaces, it cannot double-finalize.
+ * How long a 'finalizing' claim is trusted before recovery may steal it. The
+ * finalizer is a short in-process sequence (aggregate + ledger + index patch),
+ * so a claim older than this is treated as a crashed finalizer.
  */
-export async function claimRunFinalization(runId: string): Promise<boolean> {
+export const FINALIZE_STALE_MS = 2 * 60 * 1000;
+
+/**
+ * Atomically claim finalization of `runId`: one conditional UPDATE flips a
+ * non-completed run to 'finalizing' and stamps `finished_at`. Exactly one
+ * concurrent finalizer (runner self-finalize vs dashboard watcher vs CLI)
+ * observes a returned row; losers must skip aggregation, ledger writes, and
+ * notifications.
+ *
+ * A fresh 'finalizing' row is owned by the finalizer that set it, so a second
+ * concurrent claim loses. A claim older than `FINALIZE_STALE_MS` is assumed to
+ * belong to a crashed finalizer and may be reclaimed (finalizing -> finalizing);
+ * every claim also restamps `finished_at`, which is what the comparison report
+ * and the watcher's stale check read.
+ */
+export async function claimRunFinalization(runId: string, staleMs = FINALIZE_STALE_MS): Promise<boolean> {
   const db = getDrizzleDb();
+  const now = Date.now();
+  const staleBefore = new Date(now - staleMs).toISOString();
   const claimed = await db.update(runs)
-    .set({ status: 'completed', finished_at: new Date().toISOString() })
-    .where(and(eq(runs.run_id, runId), ne(runs.status, 'completed')))
+    .set({ status: 'finalizing', finished_at: new Date(now).toISOString() })
+    .where(and(
+      eq(runs.run_id, runId),
+      ne(runs.status, 'completed'),
+      or(
+        ne(runs.status, 'finalizing'),
+        isNull(runs.finished_at),
+        lt(runs.finished_at, staleBefore),
+      ),
+    ))
     .returning({ run_id: runs.run_id });
   return claimed.length > 0;
+}
+
+/**
+ * Flip a claimed run finalizing -> completed after every finalization side
+ * effect landed. Conditional on the run still being 'finalizing': a restart
+ * that reset the run mid-finalize is not clobbered, and `finished_at` keeps the
+ * claim-time value.
+ */
+export async function completeRunFinalization(runId: string): Promise<boolean> {
+  const db = getDrizzleDb();
+  const completed = await db.update(runs)
+    .set({ status: 'completed' })
+    .where(and(eq(runs.run_id, runId), eq(runs.status, 'finalizing')))
+    .returning({ run_id: runs.run_id });
+  return completed.length > 0;
 }
 
 /** Patch the run index with final status + comparison paths after finalize. */
 export async function patchIndexAfterFinalize(runId: string, mdPath: string, jsonPath: string, perModel: RunIndexModelEntry[]): Promise<void> {
   await updateRun(runId, (rec) => {
-    rec.status = 'completed';
+    // Status stays 'finalizing' until completeRunFinalization; a crash here must
+    // leave the run reclaimable by the watcher.
     // The claim already stamped finished_at once; never move it on a later write.
     rec.finishedAt = rec.finishedAt ?? new Date().toISOString();
     rec.comparisonMdPath = mdPath;
