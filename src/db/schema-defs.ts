@@ -455,9 +455,28 @@ export const tables = [
     ],
   },
   { name: 'webhooks', columns: webhooksColumns },
-  { name: 'runs', columns: runsColumns },
-  { name: 'cost_ledger', columns: costLedgerColumns },
-  { name: 'run_models', columns: runModelsColumns },
+  {
+    name: 'runs',
+    columns: runsColumns,
+    indexes: [
+      { name: 'idx_runs_status', on: ['status'] },
+      { name: 'idx_runs_started', on: ['started_at'] },
+      { name: 'idx_runs_created_by', on: ['created_by'] },
+    ],
+  },
+  {
+    name: 'cost_ledger',
+    columns: costLedgerColumns,
+    indexes: [{ name: 'idx_cost_ledger_model_time', on: ['model', 'recorded_at'] }],
+  },
+  {
+    name: 'run_models',
+    columns: runModelsColumns,
+    indexes: [
+      { name: 'uq_run_models_run_model', unique: true, on: ['run_id', 'model'] },
+      { name: 'idx_run_models_status', on: ['status'] },
+    ],
+  },
   {
     name: 'tool_call_stats',
     columns: toolCallStatsColumns,
@@ -467,8 +486,19 @@ export const tables = [
       { name: 'idx_tool_stats_recorded', on: ['recorded_at'] },
     ],
   },
-  { name: 'sessions', columns: sessionsColumns },
-  { name: 'messages', columns: messagesColumns },
+  {
+    name: 'sessions',
+    columns: sessionsColumns,
+    indexes: [
+      { name: 'idx_sessions_created', on: ['created_at'] },
+      { name: 'idx_sessions_status_model', on: ['status', 'model'] },
+    ],
+  },
+  {
+    name: 'messages',
+    columns: messagesColumns,
+    indexes: [{ name: 'idx_messages_session', on: ['session_id'] }],
+  },
   {
     name: 'model_calls',
     columns: modelCallsColumns,
@@ -476,9 +506,31 @@ export const tables = [
   },
   { name: 'users', columns: usersColumns },
   { name: 'roles', columns: rolesColumns },
-  { name: 'user_roles', columns: userRolesColumns },
-  { name: 'audit_log', columns: auditLogColumns },
-  { name: 'files', columns: filesColumns },
+  {
+    name: 'user_roles',
+    columns: userRolesColumns,
+    indexes: [{ name: 'uq_user_roles_user_role', unique: true, on: ['user_id', 'role_id'] }],
+  },
+  {
+    name: 'audit_log',
+    columns: auditLogColumns,
+    indexes: [
+      { name: 'idx_audit_actor_at', on: ['actor', 'at'] },
+      { name: 'idx_audit_entity', on: ['entity_type', 'entity_id'] },
+      { name: 'idx_audit_at', on: ['at'] },
+      { name: 'idx_audit_action', on: ['action'] },
+    ],
+  },
+  {
+    name: 'files',
+    columns: filesColumns,
+    indexes: [
+      { name: 'idx_files_run', on: ['run_id'] },
+      { name: 'idx_files_model_produced', on: ['model', 'produced_at'] },
+      { name: 'idx_files_tool_produced', on: ['produced_by_tool', 'produced_at'] },
+      { name: 'idx_files_prompt_produced', on: ['prompt_id', 'produced_at'] },
+    ],
+  },
   { name: 'prompts', columns: promptsColumns },
   { name: 'prompt_versions', columns: promptVersionsColumns },
   { name: 'output_mappings', columns: outputMappingsColumns },

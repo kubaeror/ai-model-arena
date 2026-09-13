@@ -85,6 +85,13 @@
       "when": 1786010916333,
       "tag": "0011_mushy_strong_guy",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789277456950,
+      "tag": "0012_supreme_rogue",
+      "breakpoints": true
     }
   ]
 }

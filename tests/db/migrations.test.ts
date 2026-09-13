@@ -5,8 +5,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initDb, closeDb } from '../../src/db/client.js';
+import { tables } from '../../src/db/schema-defs.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+
+type IndexRow = { name: string; tbl_name: string; sql: string | null };
+
+function listNamedIndexes(db: ReturnType<typeof initDb>): IndexRow[] {
+  return db.prepare(
+    "SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY name"
+  ).all() as IndexRow[];
+}
+
+function indexColumns(db: ReturnType<typeof initDb>, name: string): string[] {
+  const rows = db.prepare(`PRAGMA index_info('${name}')`).all() as { name: string }[];
+  return rows.map((r) => r.name);
+}
 
 function readJournal(dir: string): { entries: { idx: number; tag: string }[] } {
   const raw = fs.readFileSync(path.join(ROOT, dir, 'meta', '_journal.json'), 'utf-8');
@@ -89,5 +103,66 @@ test('pg migration journal and migration files are mutually consistent', () => {
   }
   for (const tag of fileTags) {
     assert.ok(journalTags.has(tag), `orphan migration file drizzle/pg/${tag}.sql is not referenced by the pg journal`);
+  }
+});
+
+const HOT_QUERY_INDEXES: { name: string; columns: string[] }[] = [
+  { name: 'idx_files_model_produced', columns: ['model', 'produced_at'] },
+  { name: 'idx_files_tool_produced', columns: ['produced_by_tool', 'produced_at'] },
+  { name: 'idx_files_prompt_produced', columns: ['prompt_id', 'produced_at'] },
+  { name: 'idx_runs_created_by', columns: ['created_by'] },
+  { name: 'idx_runs_status', columns: ['status'] },
+  { name: 'idx_run_models_status', columns: ['status'] },
+];
+
+test('migrated DB has the hot-query indexes', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-db-'));
+  const dbPath = path.join(tmp, 'test.db');
+  try {
+    const db = initDb(dbPath);
+    const names = new Set(listNamedIndexes(db).map((r) => r.name));
+    for (const expected of HOT_QUERY_INDEXES) {
+      assert.ok(names.has(expected.name), `missing index: ${expected.name}`);
+      assert.deepEqual(
+        indexColumns(db, expected.name),
+        expected.columns,
+        `index ${expected.name} columns differ`,
+      );
+    }
+    closeDb();
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('schema-defs index declarations match indexes created by migrations', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-db-'));
+  const dbPath = path.join(tmp, 'test.db');
+  try {
+    const db = initDb(dbPath);
+    const declared = new Map<string, { table: string; columns: string[] }>();
+    for (const table of tables) {
+      for (const ix of 'indexes' in table ? table.indexes : []) {
+        declared.set(ix.name, { table: table.name, columns: ix.on });
+      }
+      for (const [column, def] of Object.entries(table.columns)) {
+        if (def.unique && !def.primaryKey) {
+          declared.set(`${table.name}_${column}_unique`, { table: table.name, columns: [column] });
+        }
+      }
+    }
+
+    const actual = listNamedIndexes(db);
+    const actualNames = new Set(actual.map((r) => r.name));
+    for (const [name, spec] of declared) {
+      assert.ok(actualNames.has(name), `schema-defs declares ${name} but migrations do not create it`);
+      assert.deepEqual(indexColumns(db, name), spec.columns, `index ${name} columns differ between schema-defs and migrations`);
+    }
+    for (const row of actual) {
+      assert.ok(declared.has(row.name), `migration creates ${row.name} (${row.tbl_name}) but schema-defs does not declare it`);
+    }
+    closeDb();
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
