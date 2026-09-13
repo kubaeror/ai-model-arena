@@ -11,15 +11,18 @@ export interface RunLimitState {
 export type RunLimitStopReason = 'max_execution_time_exceeded' | 'max_cost_exceeded';
 
 /**
- * Wall-clock budget anchor: prefer the persisted run start so retries and
- * dashboard restarts cannot reset the cap; direct enqueues without a run
- * record fall back to this attempt's start (queue wait then counts).
+ * Wall-clock budget anchor: prefer the session's creation time — sessions are
+ * created at first dequeue with a deterministic id (`${runId}-${model}`), so
+ * this marks the run's first execution per model. Queue wait and sibling-model
+ * runtime do not count toward the cap, while nack retries and runner restarts
+ * cannot reset it. A missing/unparseable session falls back to this attempt's
+ * start, so direct enqueues still get a budget.
  */
 export function resolveExecutionStartMs(
-  persistedStartedAt: string | null | undefined,
+  sessionCreatedAt: string | null | undefined,
   attemptStartedAtMs: number,
 ): number {
-  const parsed = persistedStartedAt ? Date.parse(persistedStartedAt) : NaN;
+  const parsed = sessionCreatedAt ? Date.parse(sessionCreatedAt) : NaN;
   return Number.isFinite(parsed) ? parsed : attemptStartedAtMs;
 }
 

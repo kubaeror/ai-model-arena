@@ -10,6 +10,7 @@ import type { Task } from '../../src/queue/types.js';
 import { startRunner } from '../../src/runner.js';
 import { evaluateRunLimits, resolveExecutionStartMs } from '../../src/runner/limits.js';
 import { upsertRun } from '../../src/db/runs.js';
+import { createSession as insertSession } from '../../src/db/query.js';
 import { ProviderRegistry } from '../../src/providers/index.js';
 import type { ModelAdapter } from '../../src/providers/adapters/base.js';
 import type { ChatMessage, ModelResponse, ToolDefinition } from '../../src/types.js';
@@ -82,6 +83,14 @@ async function registerRun(runId: string, outputs: string, startedAt = new Date(
       logFile: path.join(modelRunDir, 'runner.log'),
     }],
     comparisonMdPath: null, comparisonJsonPath: null,
+  });
+}
+
+/** Pre-creates the session at a chosen time, as if a prior attempt ran then. */
+async function seedSession(sessionId: string, createdAt: string): Promise<void> {
+  await insertSession({
+    id: sessionId, model: 'GPT-4o', status: 'active',
+    createdAt, updatedAt: createdAt,
   });
 }
 
@@ -158,7 +167,7 @@ test('evaluateRunLimits stays silent exactly at both limits (strict > semantics)
   ), null);
 });
 
-test('resolveExecutionStartMs prefers a valid persisted start and falls back to the attempt start', () => {
+test('resolveExecutionStartMs prefers a valid persisted session start and falls back to the attempt start', () => {
   const persisted = Date.parse('2026-01-01T00:00:00.000Z');
   assert.equal(resolveExecutionStartMs('2026-01-01T00:00:00.000Z', 123), persisted);
   assert.equal(resolveExecutionStartMs(undefined, 123), 123);
@@ -263,11 +272,11 @@ test('maxExecutionSec breach stops the run with a distinct stop reason', { timeo
 
   // read-only-analysis caps execution at 600s; jump the wall clock past it
   // inside the first send so the next turn's check trips deterministically.
-  // node:test's mock Date epoch starts at 0, so the persisted run start must
-  // be epoch-aligned for the wall-clock anchor to see the jump.
+  // node:test's mock Date epoch starts at 0, so the first attempt anchors at
+  // epoch 0 and the jump is visible.
   t.mock.timers.enable({ apis: ['Date'] });
   fake.onCall = () => { t.mock.timers.setTime(Date.now() + 601_000); };
-  await registerRun('run-time', outputs, new Date(0).toISOString());
+  await registerRun('run-time', outputs);
 
   const runnerDone = startRunner({ queue, signal: ac.signal });
 
@@ -297,18 +306,20 @@ test('maxExecutionSec breach stops the run with a distinct stop reason', { timeo
   }
 });
 
-test('maxExecutionSec counts from the persisted run start, not the attempt start', { timeout: 30000 }, async () => {
-  const { tmp, outputs } = setupEnvironment('arena-runstart-');
+test('maxExecutionSec anchors at the session created at first execution, not the run record', { timeout: 30000 }, async () => {
+  const { tmp, outputs } = setupEnvironment('arena-session-anchor-');
   await syncCatalog();
-  const scenarioPath = path.join(tmp, 'run-start.yaml');
+  const scenarioPath = path.join(tmp, 'session-anchor.yaml');
   fs.writeFileSync(scenarioPath, [
-    'name: run-start',
+    'name: session-anchor',
     'systemPrompt: You are a test agent.',
     'task: Loop forever.',
   ].join('\n'));
-  // read-only-analysis caps execution at 600s; the run started 601s ago, so a
-  // fresh attempt start would hide the breach in every retry/restart.
-  await registerRun('run-old', outputs, new Date(Date.now() - 601_000).toISOString());
+  // read-only-analysis caps execution at 600s. The run record is fresh (as on
+  // a restart) but the session was created 601s ago: a retry/restart must not
+  // reset the cap, so the session start is the anchor.
+  await registerRun('run-anchor', outputs);
+  await seedSession('run-anchor-session', new Date(Date.now() - 601_000).toISOString());
 
   const fake = new LoopingAdapter();
   const restore = stubAdapter(fake);
@@ -318,16 +329,97 @@ test('maxExecutionSec counts from the persisted run start, not the attempt start
 
   try {
     const task: Task = {
-      taskId: 'run-old-task', sessionId: 'run-old-session',
+      taskId: 'run-anchor-task', sessionId: 'run-anchor-session',
       provider: 'openai', model: 'GPT-4o', scenario: scenarioPath,
-      config: { modelRunId: 'run-old', maxTurns: 20, scenarioSource: 'cli' },
-      enqueuedAt: new Date().toISOString(), attempts: 0,
+      config: { modelRunId: 'run-anchor', maxTurns: 20, scenarioSource: 'cli' },
+      enqueuedAt: new Date().toISOString(), attempts: 1,
     };
     await queue.enqueue(task);
     await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
 
     const result = JSON.parse(
-      fs.readFileSync(path.join(outputs, MODEL_DIR, 'run-old', 'result.json'), 'utf8'),
+      fs.readFileSync(path.join(outputs, MODEL_DIR, 'run-anchor', 'result.json'), 'utf8'),
+    ) as { stopReason: string; turnsUsed: number };
+    assert.equal(result.stopReason, 'max_execution_time_exceeded');
+    assert.equal(result.turnsUsed, 0, 'an already-exceeded cap trips before the first send');
+    assert.equal(fake.calls, 0);
+  } finally {
+    await teardown(ac, runnerDone, restore, queue, tmp);
+  }
+});
+
+test('maxExecutionSec excludes queue wait when the run record predates first execution', { timeout: 30000 }, async () => {
+  const { tmp, outputs } = setupEnvironment('arena-queue-wait-');
+  await syncCatalog();
+  const scenarioPath = path.join(tmp, 'queue-wait.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: queue-wait',
+    'systemPrompt: You are a test agent.',
+    'task: Loop forever.',
+    'maxTurns: 2',
+  ].join('\n'));
+  // The run was submitted 601s ago, but its first dequeue (and therefore the
+  // session) is happening now: budget only starts counting at execution.
+  await registerRun('run-wait', outputs, new Date(Date.now() - 601_000).toISOString());
+
+  const fake = new LoopingAdapter();
+  const restore = stubAdapter(fake);
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  try {
+    const task: Task = {
+      taskId: 'run-wait-task', sessionId: 'run-wait-session',
+      provider: 'openai', model: 'GPT-4o', scenario: scenarioPath,
+      config: { modelRunId: 'run-wait', maxTurns: 20, scenarioSource: 'cli' },
+      enqueuedAt: new Date(Date.now() - 601_000).toISOString(), attempts: 0,
+    };
+    await queue.enqueue(task);
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+
+    const result = JSON.parse(
+      fs.readFileSync(path.join(outputs, MODEL_DIR, 'run-wait', 'result.json'), 'utf8'),
+    ) as { stopReason: string; turnsUsed: number };
+    assert.equal(result.stopReason, 'max_turns', 'queue wait must not trip the wall-clock cap');
+    assert.equal(result.turnsUsed, 2);
+    assert.equal(fake.calls, 2);
+  } finally {
+    await teardown(ac, runnerDone, restore, queue, tmp);
+  }
+});
+
+test('direct enqueue without a run record anchors at the first session creation', { timeout: 30000 }, async () => {
+  const { tmp, outputs } = setupEnvironment('arena-direct-anchor-');
+  await syncCatalog();
+  const scenarioPath = path.join(tmp, 'direct-anchor.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: direct-anchor',
+    'systemPrompt: You are a test agent.',
+    'task: Loop forever.',
+  ].join('\n'));
+  // No run row exists; the old session (first execution) is the only anchor
+  // that can keep a direct-enqueue retry from resetting the cap.
+  await seedSession('direct-anchor-session', new Date(Date.now() - 601_000).toISOString());
+
+  const fake = new LoopingAdapter();
+  const restore = stubAdapter(fake);
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  try {
+    const task: Task = {
+      taskId: 'direct-anchor-task', sessionId: 'direct-anchor-session',
+      provider: 'openai', model: 'GPT-4o', scenario: scenarioPath,
+      config: { modelRunId: 'direct-anchor', maxTurns: 20, scenarioSource: 'cli' },
+      enqueuedAt: new Date().toISOString(), attempts: 1,
+    };
+    await queue.enqueue(task);
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+
+    const result = JSON.parse(
+      fs.readFileSync(path.join(outputs, MODEL_DIR, 'direct-anchor', 'result.json'), 'utf8'),
     ) as { stopReason: string; turnsUsed: number };
     assert.equal(result.stopReason, 'max_execution_time_exceeded');
     assert.equal(result.turnsUsed, 0, 'an already-exceeded cap trips before the first send');

@@ -342,17 +342,6 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       logger.info('Task dequeued', { taskId: task.taskId, model: task.model, scenario: task.scenario });
 
-      // Wall-clock cap is per run, not per attempt: seed from the persisted
-      // run start so retries and dashboard restarts cannot reset the budget.
-      // A direct enqueue with no run record falls back to this attempt's start.
-      let executionStartedAtMs = startedAt.getTime();
-      try {
-        const persistedStart = (await getRunRecord(runId))?.startedAt;
-        executionStartedAtMs = resolveExecutionStartMs(persistedStart, executionStartedAtMs);
-      } catch (e) {
-        logger.warn('Failed to read persisted run start; using attempt start for wall-clock cap', { runId, err: String(e) });
-      }
-
       // Transition task to 'claimed' state (persisted in DB). Awaited so the
       // ordering contract holds on Postgres (queries spread across pool
       // connections): terminal writes must never land before the claimed/
@@ -369,7 +358,13 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       // Seeded from persisted model calls on resume so a restarted run does
       // not lose sight of what the pre-crash attempt already spent.
       let prevRunCost = 0;
+      // Wall-clock cap anchor: the session is created at first dequeue with a
+      // deterministic id (`${runId}-${model}`), so session.created_at marks the
+      // first execution for this run+model. Queue wait and sibling-model runtime
+      // do not count toward the cap, while nack retries and runner restarts
+      // cannot reset it. First attempt (no session yet) falls back to now.
       let session = await store.loadSession(task.sessionId);
+      const executionStartedAtMs = resolveExecutionStartMs(session?.createdAt, startedAt.getTime());
       let resumedMessages: ChatMessage[] | undefined;
       if (!session) {
         session = await store.createSession({
