@@ -96,7 +96,6 @@ export interface RunStartOptions {
   logger?: Logger;
   source?: 'cli' | 'dashboard' | 'scheduler';
   forceBudget?: boolean;
-  timeoutMs?: number;
   createdBy?: string;
   promptId?: string;
   promptVersion?: number;

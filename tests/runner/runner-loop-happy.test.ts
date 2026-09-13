@@ -9,6 +9,7 @@ import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import type { Task } from '../../src/queue/types.js';
 import { startRunner } from '../../src/runner.js';
 import { upsertRun } from '../../src/db/runs.js';
+import { insertPrompt, insertPromptVersion } from '../../src/db/query.js';
 import { ProviderRegistry } from '../../src/providers/index.js';
 import type { CreateAdapterOpts } from '../../src/providers/registry.js';
 import type { ModelAdapter, SendOpts } from '../../src/providers/adapters/base.js';
@@ -49,10 +50,12 @@ async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 10000
 class FakeAdapter implements ModelAdapter {
   calls = 0;
   lastOpts: SendOpts | undefined;
+  lastMessages: ChatMessage[] | undefined;
 
-  async sendMessage(_messages: ChatMessage[], _tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
+  async sendMessage(messages: ChatMessage[], _tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     this.calls++;
     this.lastOpts = opts;
+    this.lastMessages = messages.map((m) => ({ ...m }));
     return {
       text: 'I verified the work and I am done.',
       toolCalls: [{ id: 'fake-tc-1', name: 'task_complete', arguments: { summary: 'finished by fake adapter' } }],
@@ -330,6 +333,115 @@ test('runner finalizes its own run when the dashboard watcher is absent', { time
     ProviderRegistry.prototype.createAdapter = origCreateAdapter;
     const active = await activeTasks.get();
     assert.equal(active.values[0]?.value, 0, 'no task should leak after shutdown');
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner uses the stored prompt version instead of the scenario text when promptId is set', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-prompt-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: Scenario system prompt.',
+    'task: Scenario task.',
+  ].join('\n'));
+
+  const ts = new Date().toISOString();
+  await insertPrompt({ id: 'prompt-1', name: 'Stored prompt', description: null, createdAt: ts, updatedAt: ts });
+  await insertPromptVersion({
+    id: 'prompt-version-2', promptId: 'prompt-1', version: 2,
+    systemPrompt: 'Stored system prompt.', task: 'Stored task prompt.',
+    config: null, tag: null, createdAt: ts, createdBy: 'test',
+  });
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-prompt';
+  const modelRunDir = path.join(outputs, MODEL_DIR, runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'GPT-4o', runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  const task: Task = {
+    taskId: 'prompt-task',
+    sessionId: 'prompt-session',
+    promptId: 'prompt-1',
+    promptVersion: 2,
+    provider: 'openai',
+    model: 'GPT-4o',
+    scenario: scenarioPath,
+    config: { modelRunId: runId, scenarioSource: 'cli' },
+    enqueuedAt: new Date().toISOString(),
+    attempts: 0,
+  };
+
+  try {
+    await queue.enqueue(task);
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+
+    assert.equal(fake.lastMessages?.[0]?.content, 'Stored system prompt.', 'loop must send the stored system prompt');
+    assert.equal(fake.lastMessages?.[1]?.content, 'Stored task prompt.', 'loop must send the stored task');
+
+    const session = getDb().prepare('SELECT prompt_id, prompt_version FROM sessions WHERE id = ?')
+      .get('prompt-session') as { prompt_id: string | null; prompt_version: number | null } | undefined;
+    assert.equal(session?.prompt_id, 'prompt-1');
+    assert.equal(session?.prompt_version, 2);
+
+    const turnZero = getDb().prepare('SELECT role, content FROM messages WHERE session_id = ? AND turn = 0 ORDER BY rowid')
+      .all('prompt-session') as { role: string; content: string }[];
+    assert.deepEqual(turnZero, [
+      { role: 'system', content: 'Stored system prompt.' },
+      { role: 'user', content: 'Stored task prompt.' },
+    ]);
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
     await queue.close();
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });

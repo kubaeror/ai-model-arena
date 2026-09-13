@@ -58,18 +58,17 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
     } else {
       try {
         // Route through startRun() for proper budget check + run registration.
-        // Per-schedule options (timeoutMs/forceBudget) come from the YAML config,
-        // not the DB row — join via the in-memory schedule record.
+        // Per-schedule options (forceBudget) come from the YAML config, not the
+        // DB row — join via the in-memory schedule record.
         const schedule = getSchedule(scheduleId);
         if (!schedule) {
-          logger.warn('Schedule due in DB but missing from loaded schedules config; options (timeoutMs/forceBudget) will not be applied', { scheduleId });
+          logger.warn('Schedule due in DB but missing from loaded schedules config; options (forceBudget) will not be applied', { scheduleId });
         }
         const runOptions: RunStartOptions = {
           scenario: String(row.scenario),
           models,
           source: 'scheduler',
         };
-        if (schedule?.options?.timeoutMs !== undefined) runOptions.timeoutMs = schedule.options.timeoutMs;
         if (schedule?.options?.forceBudget !== undefined) runOptions.forceBudget = schedule.options.forceBudget;
         await start(runOptions);
       } catch (err) {

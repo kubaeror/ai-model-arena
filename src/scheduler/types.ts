@@ -8,7 +8,6 @@ const ScheduleSchema = z.object({
   enabled: z.boolean().default(true),
   options: z.object({
     forceBudget: z.boolean().optional(),
-    timeoutMs: z.number().optional(),
   }).optional(),
 });
 

@@ -30,8 +30,11 @@ export interface AgentLoopOptions {
   initialTurn?: number;
   /** Called after each turn with ONLY the messages appended this turn. */
   onTurnComplete?: (turn: number, newMessages: ChatMessage[], tokenUsage: TokenUsage, durationMs?: number) => Promise<void>;
-  /** If provided, called after each turn to check budget. Return false to abort the run. */
-  onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean>;
+  /**
+   * If provided, called after each turn to check budget. Return false to abort
+   * the run ('budget_exceeded') or a string to abort with that stop reason.
+   */
+  onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean | string>;
   /** Model-send options forwarded to every adapter.sendMessage call (e.g. reasoning). */
   sendOpts?: SendOpts;
 }
@@ -174,8 +177,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       onTurnStart: async (turn, usage) => {
         if (onBudgetCheck) {
           try {
-            const ok = await onBudgetCheck(turn, usage);
-            if (!ok) {
+            const outcome = await onBudgetCheck(turn, usage);
+            if (typeof outcome === 'string') {
+              logger.warn('Agent stopped: run limit exceeded', { turn, reason: outcome });
+              return outcome;
+            }
+            if (outcome === false) {
               logger.warn('Agent stopped: budget exceeded', { turn, tokens: usage.total });
               return false;
             }

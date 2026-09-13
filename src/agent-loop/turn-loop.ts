@@ -23,10 +23,13 @@ interface TurnLoopErrorFormatters {
   toolThrew: (turn: number, name: string, content: string) => string;
 }
 
-/** Per-turn hooks. Returning false aborts the loop. */
+/** Per-turn hooks. Returning false or a stop-reason string aborts the loop. */
 interface TurnLoopHooks {
-  /** Called before each model send; return false to abort the loop ('budget_exceeded'). */
-  onTurnStart?: (turn: number, usage: TokenUsage) => Promise<boolean>;
+  /**
+   * Called before each model send; return false to abort the loop
+   * ('budget_exceeded') or a string to abort with that stop reason.
+   */
+  onTurnStart?: (turn: number, usage: TokenUsage) => Promise<boolean | string>;
   /**
    * Called after each completed turn, before the stop-reason breaks. `newMessages`
    * is the slice appended this turn (snapshotted before any caller-side compaction
@@ -157,9 +160,13 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
 
   for (let turn = startTurn; turn <= maxTurns; turn++) {
     if (hooks.onTurnStart) {
-      const ok = await hooks.onTurnStart(turn, usage);
-      if (!ok) {
+      const outcome = await hooks.onTurnStart(turn, usage);
+      if (outcome === false) {
         stopReason = 'budget_exceeded';
+        break;
+      }
+      if (typeof outcome === 'string') {
+        stopReason = outcome;
         break;
       }
     }

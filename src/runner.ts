@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { outputRoot, dbPath, findProjectRoot, modelDirSegment } from './paths.js';
 import { initDb } from './db/index.js';
-import { transitionTaskState, listModelCallsForSession, listMessagesBySession } from './db/query.js';
+import { transitionTaskState, listModelCallsForSession, listMessagesBySession, getPromptVersion } from './db/query.js';
 import { getRunRecord } from './db/runs.js';
 import { resumeFrom } from './runner/checkpoint.js';
 import { createQueue, type TaskQueue, type Task, DEFAULT_MAX_ATTEMPTS, isTerminalAttempt } from './queue/index.js';
@@ -21,6 +21,7 @@ import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
 import { generateManifest, writeManifest, buildProducedByTool } from './sandbox/artifact-manifest.js';
 import { getProfile, getAllowedTools } from './profiles/definitions.js';
+import { evaluateRunLimits } from './runner/limits.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
@@ -360,7 +361,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       let session = await store.loadSession(task.sessionId);
       let resumedMessages: ChatMessage[] | undefined;
       if (!session) {
-        session = await store.createSession({ id: task.sessionId, model: task.model });
+        session = await store.createSession({
+          id: task.sessionId, model: task.model,
+          promptId: task.promptId, promptVersion: task.promptVersion,
+        });
         // Nothing to resume — nothing persisted yet.
       } else {
         const resumed = await resumeFrom(session.id);
@@ -381,6 +385,18 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       const scenario = loadScenario(resolveScenarioPath(scenarioDir, scenarioName, {
         allowPath: task.config.scenarioSource === 'cli',
       }));
+
+      // A prompt-version run uses the stored prompt text instead of the
+      // scenario's; a prompt that no longer exists fails the run rather than
+      // silently executing different instructions.
+      const storedPrompt = task.promptId
+        ? await getPromptVersion(task.promptId, task.promptVersion ?? 1)
+        : null;
+      if (task.promptId && !storedPrompt) {
+        throw new Error(`Prompt version not found: ${task.promptId}@${task.promptVersion ?? 1}`);
+      }
+      const systemPrompt = storedPrompt?.system_prompt ?? scenario.systemPrompt;
+      const taskPrompt = storedPrompt?.task ?? scenario.task;
 
       // Resolve the model before any fs write so a catalog miss cannot leave
       // an output directory behind.
@@ -425,8 +441,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       if (!resumedMessages) {
         const t0 = new Date().toISOString();
         const turnZero: StoredMessage[] = [
-          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'system', content: scenario.systemPrompt, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
-          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'user', content: scenario.task, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
+          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'system', content: systemPrompt, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
+          { id: crypto.randomUUID(), sessionId: session.id, turn: 0, role: 'user', content: taskPrompt, toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: t0 },
         ];
         for (const m of turnZero) await store.appendMessage(session.id, m);
       }
@@ -590,12 +606,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             adapter,
             tools: TOOL_DEFINITIONS,
             executors,
-            systemPrompt: scenario.systemPrompt,
-            task: scenario.task,
-            maxTurns: Math.min(
-              (task!.config.maxTurns as number) ?? scenario.maxTurns ?? profile.maxTurns,
-              profile.maxTurns,
-            ),
+            systemPrompt,
+            task: taskPrompt,
+            maxTurns: scenario.maxTurns ?? profile.maxTurns ?? resolved.maxTurns,
             toolCtx,
             conv,
             logger: logger.child('loop'),
@@ -680,6 +693,18 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               if (await isRunCancelled(cancelledRunId)) {
                 logger.info('Run cancelled during execution', { runId: cancelledRunId });
                 return false;
+              }
+              const elapsedMs = Date.now() - startedAt.getTime();
+              const limitReason = evaluateRunLimits(
+                { maxExecutionSec: profile.maxExecutionSec, maxCostUsd: profile.maxCostUsd },
+                { elapsedMs, runCostUsd: prevRunCost },
+              );
+              if (limitReason) {
+                logger.warn('Run limit exceeded during run', {
+                  runId: modelRunId, reason: limitReason, elapsedMs, spentUsd: prevRunCost,
+                  maxExecutionSec: profile.maxExecutionSec, maxCostUsd: profile.maxCostUsd,
+                });
+                return limitReason;
               }
               const budgetCheck = checkBudget(modelName, budgetStateRoot(root), false, logger, prevRunCost);
               if (!budgetCheck.allowed) {

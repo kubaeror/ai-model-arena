@@ -12,15 +12,11 @@ const KNOWN_TOOLS = [
   'todo_read', 'todo_write', 'task', 'task_complete',
 ];
 
-test('every profile with shellAllowed=true includes run_shell_command in allowedTools', () => {
+test('profiles no longer declare the removed shellAllowed/requiresApproval fields', () => {
   for (const name of EXECUTION_PROFILES) {
-    const profile = PROFILES[name];
-    if (profile.shellAllowed) {
-      assert.ok(
-        profile.allowedTools.includes('run_shell_command'),
-        `${name} allows shell but omits run_shell_command`,
-      );
-    }
+    const profile = PROFILES[name] as unknown as Record<string, unknown>;
+    assert.equal(profile.shellAllowed, undefined, `${name} must not declare shellAllowed`);
+    assert.equal(profile.requiresApproval, undefined, `${name} must not declare requiresApproval`);
   }
 });
 
