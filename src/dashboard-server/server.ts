@@ -102,14 +102,10 @@ async function start(): Promise<void> {
   const { syncSchedulesToDb } = await import('../scheduler/manager.js');
   await syncSchedulesToDb(path.join(root, 'configs', 'schedules.yaml'), logger);
 
-  // Notification outbox: retry failed deliveries every 30s (non-fatal).
-  const { deliverDueNotifications } = await import('../notifications/outbox.js');
-  const outboxTimer = setInterval(() => {
-    deliverDueNotifications(logger).catch((e) =>
-      logger.warn('Notification outbox delivery failed', { error: String(e) }),
-    );
-  }, 30_000);
-  if (outboxTimer.unref) outboxTimer.unref();
+  // Notification outbox: load channel config, then retry failed deliveries
+  // every 30s (non-fatal; ticks are single-flight so slow sweeps don't stack).
+  const { startNotificationOutboxTimer } = await import('../notifications/outbox.js');
+  const outboxTimer = startNotificationOutboxTimer(logger, path.join(root, 'configs', 'notifications.yaml'));
 
   const app = express();
   const corsOrigins = allowedOrigins.length
@@ -395,7 +391,7 @@ async function start(): Promise<void> {
 
   const shutdown = (): void => {
     logger.info('Shutting down dashboard server...');
-    clearInterval(outboxTimer);
+    outboxTimer.stop();
     hub.close();
     stopCatalogCron();
     stopOtelMetrics();

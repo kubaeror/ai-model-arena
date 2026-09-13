@@ -1,12 +1,14 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { initDb, closeDb } from '../../src/db/index.js';
+import { initDb, closeDb, getDrizzleDb } from '../../src/db/index.js';
+import { notifications } from '../../src/db/schema.js';
 import {
   persistNotification,
   deliverDueNotifications,
   listNotifications,
   retryNotification,
   getNotificationById,
+  MAX_DELIVERY_ATTEMPTS,
 } from '../../src/notifications/outbox.js';
 import { DispatchEventType } from '../../src/notifications/types.js';
 
@@ -105,4 +107,105 @@ test('retryNotification resets a failed row to pending (clears backoff gate)', a
   }));
   assert.equal(r.delivered, 1, 'retried row is immediately due again');
   assert.equal((await getNotificationById(id))?.status, 'delivered');
+});
+
+test('concurrent sweeps claim a due row so it is delivered exactly once', async () => {
+  initDb(':memory:');
+  const id = await persistNotification(
+    { type: DispatchEventType.onRunCompleted, data: { runId: 'race' } },
+    'slack',
+  );
+
+  let sends = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const sender = async () => {
+    sends++;
+    await gate;
+    return { channel: 'slack', success: true, timestamp: new Date().toISOString() };
+  };
+
+  const first = deliverDueNotifications(undefined, sender);
+  const second = deliverDueNotifications(undefined, sender);
+  await new Promise((r) => setImmediate(r));
+  release();
+  const [a, b] = await Promise.all([first, second]);
+
+  assert.equal(sends, 1, 'exactly one sweep wins the atomic claim');
+  assert.equal(a.delivered + b.delivered, 1);
+  assert.equal(a.failed + b.failed, 0);
+  assert.equal((await getNotificationById(id))?.status, 'delivered');
+
+  const again = await deliverDueNotifications(undefined, sender);
+  assert.equal(again.delivered, 0, 'sequential re-sweep must not redeliver');
+  assert.equal(sends, 1);
+});
+
+test('a corrupt payload row fails alone without aborting the sweep', async () => {
+  initDb(':memory:');
+  const db = getDrizzleDb();
+  const badId = 'corrupt-row';
+  await db.insert(notifications).values({
+    id: badId,
+    event_type: 'onRunCompleted',
+    channel: 'slack',
+    payload_json: '{ definitely not json',
+    status: 'pending',
+    attempts: 0,
+    last_error: null,
+    created_at: new Date().toISOString(),
+    next_attempt_at: null,
+    delivered_at: null,
+  });
+  const goodId = await persistNotification(
+    { type: DispatchEventType.onRunCompleted, data: { runId: 'good' } },
+    'slack',
+  );
+
+  const r = await deliverDueNotifications(undefined, async () => ({
+    channel: 'slack',
+    success: true,
+    timestamp: new Date().toISOString(),
+  }));
+
+  assert.equal(r.delivered, 1, 'the healthy row is still delivered');
+  assert.equal(r.failed, 1, 'the corrupt row is counted as a failure');
+  assert.equal((await getNotificationById(goodId))?.status, 'delivered');
+
+  const bad = await getNotificationById(badId);
+  assert.equal(bad?.status, 'pending', 'corrupt row stays retryable until max attempts');
+  assert.equal(bad?.attempts, 1);
+  assert.ok(bad?.lastError, 'corrupt row records the parse error');
+  assert.match(bad?.lastError ?? '', /payload|json/i);
+  assert.ok(bad?.nextAttemptAt, 'corrupt row gets a backoff window');
+});
+
+test('a row that exhausts max attempts is dead-lettered and stops retrying', async () => {
+  initDb(':memory:');
+  const id = await persistNotification(
+    { type: DispatchEventType.onAnomalyDetected, data: { runId: 'poison' } },
+    'slack',
+  );
+  const sender = async () => ({
+    channel: 'slack',
+    success: false,
+    error: 'poison',
+    timestamp: new Date().toISOString(),
+  });
+
+  for (let i = 0; i < MAX_DELIVERY_ATTEMPTS; i++) {
+    await retryNotification(id); // clear the backoff gate so each sweep sees the row
+    const r = await deliverDueNotifications(undefined, sender);
+    assert.equal(r.failed, 1, `attempt ${i + 1} fails`);
+  }
+
+  const row = await getNotificationById(id);
+  assert.equal(row?.status, 'dead');
+  assert.equal(row?.attempts, MAX_DELIVERY_ATTEMPTS);
+  assert.equal(row?.lastError, 'poison');
+  assert.equal(row?.nextAttemptAt, null, 'dead rows are never due again');
+
+  const after = await deliverDueNotifications(undefined, sender);
+  assert.equal(after.failed, 0, 'dead-lettered rows are excluded from sweeps');
+  assert.equal((await getNotificationById(id))?.attempts, MAX_DELIVERY_ATTEMPTS, 'no further attempts');
 });
