@@ -19,6 +19,7 @@ import {
   DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS,
   DEFAULT_LOCK_STALE_MS,
 } from '../../src/cost-tracking/budget.js';
+import type { Logger } from '../../src/types.js';
 
 const CONFIG = `
 global:
@@ -28,6 +29,11 @@ stateFile: outputs/.budget-state.json
 
 const LOCK_FILE = '.budget.lock';
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Files a rename-verify-restore left behind (`.budget.lock.stale.<pid>.<ts>` / `.release.`). */
+function lockSideFiles(rootDir: string): string[] {
+  return fs.readdirSync(rootDir).filter((name) => /\.(stale|release)\./.test(name));
+}
 
 function setup() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-budget-'));
@@ -573,6 +579,220 @@ test('releaseLock restores the lock when its token changes between read and rena
   } finally {
     resetBudgetCache();
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a break mismatch with a free lock path restores the lock and removes the side file', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  const observedToken = 'stale-observed-token';
+  const replacementToken = 'fresh-replacement-token';
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 4242, createdAt: Date.now() - 10 * 60 * 1000, token: observedToken,
+    }));
+
+    const token = tryAcquireLock(rootDir, undefined, {
+      onBeforeRename: () => {
+        fs.writeFileSync(lockPath, JSON.stringify({
+          pid: 5252, createdAt: Date.now(), token: replacementToken,
+        }));
+      },
+    });
+
+    assert.equal(token, null, 'the mismatched break abandons without acquiring');
+    assert.equal(fs.existsSync(lockPath), true, 'the replacement is restored when the path is free');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, replacementToken);
+    assert.deepEqual(lockSideFiles(rootDir), [], 'no .stale side file remains');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a break mismatch with an occupied lock path keeps the newer lock and drops the side file', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  const observedToken = 'stale-observed-token';
+  const replacementToken = 'fresh-replacement-token';
+  const thirdToken = 'third-holder-token';
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 4242, createdAt: Date.now() - 10 * 60 * 1000, token: observedToken,
+    }));
+
+    // The rename grabs a replacement written before it; before the verify, a
+    // third process acquires a fresh lock at the now-free path. The mismatch
+    // restore must not clobber that third lock.
+    const token = tryAcquireLock(rootDir, undefined, {
+      onBeforeRename: () => {
+        fs.writeFileSync(lockPath, JSON.stringify({
+          pid: 5252, createdAt: Date.now(), token: replacementToken,
+        }));
+      },
+      onAfterRenameBeforeVerify: () => {
+        fs.writeFileSync(lockPath, JSON.stringify({
+          pid: 6363, createdAt: Date.now(), token: thirdToken,
+        }));
+      },
+    });
+
+    assert.equal(token, null, 'the mismatched break abandons without acquiring');
+    assert.equal(fs.existsSync(lockPath), true, 'the newer holder lock is not removed');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, thirdToken,
+      "the third holder's lock content is unchanged");
+    assert.deepEqual(lockSideFiles(rootDir), [], 'the .stale side file is cleaned up');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a release mismatch with a free lock path restores the lock and removes the side file', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  const replacementToken = 'fresh-newer-token';
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 5252, createdAt: Date.now(), token: 'our-token',
+    }));
+
+    releaseLock(rootDir, 'our-token', {
+      onBeforeRename: () => {
+        fs.writeFileSync(lockPath, JSON.stringify({
+          pid: 6363, createdAt: Date.now(), token: replacementToken,
+        }));
+      },
+    });
+
+    assert.equal(fs.existsSync(lockPath), true, 'the replacement is restored when the path is free');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, replacementToken);
+    assert.deepEqual(lockSideFiles(rootDir), [], 'no .release side file remains');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a release mismatch with an occupied lock path keeps the newer lock and drops the side file', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  const replacementToken = 'fresh-newer-token';
+  const thirdToken = 'third-holder-token';
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 5252, createdAt: Date.now(), token: 'our-token',
+    }));
+
+    // The rename grabs a replacement written before it; before the verify, a
+    // third process acquires a fresh lock at the now-free path. The mismatch
+    // restore must not clobber that third lock.
+    releaseLock(rootDir, 'our-token', {
+      onBeforeRename: () => {
+        fs.writeFileSync(lockPath, JSON.stringify({
+          pid: 6363, createdAt: Date.now(), token: replacementToken,
+        }));
+      },
+      onAfterRenameBeforeVerify: () => {
+        fs.writeFileSync(lockPath, JSON.stringify({
+          pid: 7373, createdAt: Date.now(), token: thirdToken,
+        }));
+      },
+    });
+
+    assert.equal(fs.existsSync(lockPath), true, 'the newer holder lock is not removed');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, thirdToken,
+      "the third holder's lock content is unchanged");
+    assert.deepEqual(lockSideFiles(rootDir), [], 'the .release side file is cleaned up');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('verified break/release successes leave no .stale/.release side files', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 4242, createdAt: Date.now() - 10 * 60 * 1000, token: 'aged-token',
+    }));
+    assert.equal(tryAcquireLock(rootDir), null, 'the verified stale lock is broken');
+    assert.deepEqual(lockSideFiles(rootDir), [], 'no .stale file after a verified break');
+
+    const token = tryAcquireLock(rootDir);
+    assert.ok(token, 'the next attempt acquires the lock');
+    releaseLock(rootDir, token!);
+    assert.equal(fs.existsSync(lockPath), false, 'the owner release removes its lock');
+    assert.deepEqual(lockSideFiles(rootDir), [], 'no .release file after a verified release');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('lock file removal failures still clean up the side file via the catch path', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 5252, createdAt: Date.now(), token: 'catch-path-token',
+    }));
+
+    // Force the post-rename verify to throw: the catch path must restore the
+    // lock (path free) through the non-clobbering helper and drop the side file.
+    const throwingHooks = {
+      onAfterRenameBeforeVerify: () => {
+        throw new Error('injected verify failure');
+      },
+    };
+    releaseLock(rootDir, 'catch-path-token', throwingHooks);
+
+    assert.equal(fs.existsSync(lockPath), true, 'the lock is restored by the catch path');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, 'catch-path-token');
+    assert.deepEqual(lockSideFiles(rootDir), [], 'no .release side file after the catch path');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a stale window >= the acquire timeout is clamped to half the timeout with one warning', () => {
+  resetBudgetCache();
+  const prevTimeout = process.env.BUDGET_LOCK_TIMEOUT_MS;
+  const prevStale = process.env.BUDGET_LOCK_STALE_MS;
+  try {
+    process.env.BUDGET_LOCK_TIMEOUT_MS = '10000';
+    process.env.BUDGET_LOCK_STALE_MS = '10000';
+    const warnings: string[] = [];
+    const logger: Logger = {
+      info: () => {}, warn: (msg) => { warnings.push(msg); }, error: () => {}, debug: () => {},
+      child: () => logger,
+    };
+
+    assert.equal(lockStaleMs(logger), 5_000, 'stale is clamped to half the timeout');
+    assert.equal(warnings.length, 1, 'the clamp warns once');
+    lockStaleMs(logger);
+    assert.equal(warnings.length, 1, 'repeat calls do not spam the warning');
+    assert.match(warnings[0] ?? '', /BUDGET_LOCK_STALE_MS/);
+  } finally {
+    if (prevTimeout === undefined) delete process.env.BUDGET_LOCK_TIMEOUT_MS;
+    else process.env.BUDGET_LOCK_TIMEOUT_MS = prevTimeout;
+    if (prevStale === undefined) delete process.env.BUDGET_LOCK_STALE_MS;
+    else process.env.BUDGET_LOCK_STALE_MS = prevStale;
+    resetBudgetCache();
   }
 });
 

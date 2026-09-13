@@ -12,6 +12,7 @@ let budgetConfig: BudgetConfig | null = null;
 // on the event loop. Both paths take the cross-process lockfile.
 let mutationQueue: Promise<unknown> = Promise.resolve();
 let tmpCounter = 0;
+let staleClampWarned = false;
 
 const DAY_KEY = () => new Date().toISOString().slice(0, 10);
 const MONTH_KEY = () => new Date().toISOString().slice(0, 7);
@@ -29,7 +30,8 @@ function safeLedgerModel(modelName: string): boolean {
 const LOCK_FILE = '.budget.lock';
 /** Give up on a lock only after the stale timeout has had a chance to break it. */
 export const DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
-/** Locks older than this belong to a crashed holder and can be broken. */
+/** Locks older than this belong to a crashed holder and can be broken.
+ *  Must stay below the acquire timeout; values >= it are clamped by lockStaleMs(). */
 export const DEFAULT_LOCK_STALE_MS = 5_000;
 const LOCK_RETRY_MS = 25;
 
@@ -52,17 +54,59 @@ export function lockAcquireTimeoutMs(): number {
   return positiveIntEnv('BUDGET_LOCK_TIMEOUT_MS', DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS);
 }
 
-export function lockStaleMs(): number {
-  return positiveIntEnv('BUDGET_LOCK_STALE_MS', DEFAULT_LOCK_STALE_MS);
+/**
+ * Stale window used to break crashed holders. Clamped to half the acquire
+ * timeout when the override is >= the timeout: otherwise a waiter always times
+ * out before any lock can go stale, so a crashed holder would stall every
+ * caller forever. The clamp is warned once per process.
+ */
+export function lockStaleMs(logger?: Logger): number {
+  const stale = positiveIntEnv('BUDGET_LOCK_STALE_MS', DEFAULT_LOCK_STALE_MS);
+  const timeout = lockAcquireTimeoutMs();
+  if (stale < timeout) return stale;
+
+  const clamped = Math.max(1, Math.floor(timeout / 2));
+  if (!staleClampWarned) {
+    staleClampWarned = true;
+    logger?.warn('BUDGET_LOCK_STALE_MS >= BUDGET_LOCK_TIMEOUT_MS; clamping the stale window to half the acquire timeout', {
+      staleMs: stale,
+      timeoutMs: timeout,
+      effectiveStaleMs: clamped,
+    });
+  }
+  return clamped;
 }
 
 /**
- * Test seam: `onBeforeRename` runs in the read→rename window that cannot be
- * interleaved on a single-threaded event loop, letting tests inject a
+ * Test seam: the hooks run inside the read→rename→verify windows that cannot
+ * be interleaved on a single-threaded event loop, letting tests inject a
  * concurrent replacement deterministically.
  */
 export interface LockRaceHooks {
   onBeforeRename?: () => void;
+  onAfterRenameBeforeVerify?: () => void;
+}
+
+/**
+ * Restore a lock file that was renamed aside for verification, without
+ * clobbering a newer holder that claimed `lockPath` in the meantime: link()
+ * fails with EEXIST when the path is occupied, in which case the newer lock
+ * wins and the renamed file is dropped. The side file is always unlinked, so
+ * neither outcome can leave an orphan behind.
+ */
+function restoreSideFile(sidePath: string, lockPath: string): void {
+  if (!fs.existsSync(sidePath)) return;
+  try {
+    fs.linkSync(sidePath, lockPath);
+  } catch {
+    // EEXIST (or any other failure): leave the current lock at the path alone.
+  } finally {
+    try {
+      fs.rmSync(sidePath, { force: true });
+    } catch {
+      // Best effort; a leftover side file is diagnostic clutter, not a lock.
+    }
+  }
 }
 
 function getEmptyState(): BudgetState {
@@ -155,8 +199,16 @@ function lockTokenAt(lockPath: string): string | null {
  * Stale breaks are rename-then-verify: the lock is renamed to a unique path,
  * the renamed file is re-read, and the break only completes when its token
  * still matches the one observed before the rename. A mismatch means another
- * process replaced the lock in between, so the file is renamed back and the
- * break is abandoned.
+ * process replaced the lock in between, so the file is restored via a
+ * non-overwriting link() and the break is abandoned; when the path is occupied
+ * by a newer lock the older file is dropped instead of clobbering it.
+ *
+ * Bounded guarantee: a mismatched break never unlinks or rewrites whatever
+ * currently occupies `lockPath`. Because this function only ever returns a
+ * token it wrote itself with O_EXCL, restoring a file cannot mint a second
+ * holder; strict mutual exclusion for tokens already handed out still relies
+ * on the token + rename protocol (a holder whose token fails verification
+ * abandons without modifying the path).
  */
 export function tryAcquireLock(rootDir: string, logger?: Logger, hooks?: LockRaceHooks): string | null {
   const lockPath = budgetLockPath(rootDir);
@@ -182,22 +234,24 @@ export function tryAcquireLock(rootDir: string, logger?: Logger, hooks?: LockRac
       // Unparsable lock content — fall back to the file mtime.
     }
     const age = Date.now() - (typeof createdAt === 'number' ? createdAt : fs.statSync(lockPath).mtimeMs);
-    if (age > lockStaleMs()) {
+    if (age > lockStaleMs(logger)) {
       const stalePath = `${lockPath}.stale.${process.pid}.${Date.now()}`;
       try {
         hooks?.onBeforeRename?.();
         // Rename before deleting so a lock another process just re-created is never removed.
         fs.renameSync(lockPath, stalePath);
+        hooks?.onAfterRenameBeforeVerify?.();
         // The rename may have grabbed a replacement written after our staleness
         // read: only a token that still matches the observed one is really stale.
         if (lockTokenAt(stalePath) !== observedToken) {
-          fs.renameSync(stalePath, lockPath);
+          restoreSideFile(stalePath, lockPath);
           return null;
         }
         fs.rmSync(stalePath, { force: true });
         logger?.warn('Broke stale budget lock', { path: lockPath, ageMs: age });
       } catch {
-        // Another process broke the stale lock first.
+        // A failed break (e.g. the lock vanished) must not orphan the renamed file.
+        restoreSideFile(stalePath, lockPath);
       }
     }
   } catch {
@@ -211,7 +265,9 @@ export function tryAcquireLock(rootDir: string, logger?: Logger, hooks?: LockRac
  * the lock is renamed to a unique path and the renamed file is re-read; it is
  * only unlinked when its token still matches. Read-verify-unlink alone leaves a
  * read→unlink window where a stale break plus a new acquisition could hand us a
- * fresh holder's lock, which this closes. A mismatch restores the file.
+ * fresh holder's lock, which this closes. A mismatch restores the file only
+ * through a non-overwriting link(), so a newer lock that claimed the path in
+ * the meantime keeps its content; the renamed file is dropped in that case.
  */
 export function releaseLock(rootDir: string, token: string, hooks?: LockRaceHooks): void {
   const lockPath = budgetLockPath(rootDir);
@@ -221,18 +277,16 @@ export function releaseLock(rootDir: string, token: string, hooks?: LockRaceHook
   try {
     hooks?.onBeforeRename?.();
     fs.renameSync(lockPath, releasePath);
+    hooks?.onAfterRenameBeforeVerify?.();
     if (lockTokenAt(releasePath) !== token) {
-      fs.renameSync(releasePath, lockPath);
+      restoreSideFile(releasePath, lockPath);
       return;
     }
     fs.rmSync(releasePath, { force: true });
   } catch {
-    // Best effort: a failed rename/unlink must not fail an already-written mutation.
-    try {
-      if (!fs.existsSync(lockPath) && fs.existsSync(releasePath)) fs.renameSync(releasePath, lockPath);
-    } catch {
-      // Another process holds the path now; leave the renamed file to the OS.
-    }
+    // Best effort: a failed rename/unlink must not fail an already-written
+    // mutation, but it must not orphan the renamed file either.
+    restoreSideFile(releasePath, lockPath);
   }
 }
 
@@ -655,5 +709,6 @@ export function releaseRunReservations(
 export function resetBudgetCache(): void {
   budgetConfig = null;
   mutationQueue = Promise.resolve();
+  staleClampWarned = false;
   clearConfigCache();
 }
