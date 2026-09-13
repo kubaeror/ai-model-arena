@@ -92,6 +92,13 @@
       "when": 1789277456950,
       "tag": "0012_supreme_rogue",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789287860162,
+      "tag": "0013_keen_squadron_supreme",
+      "breakpoints": true
     }
   ]
 }

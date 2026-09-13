@@ -18,10 +18,11 @@ import {
   isRunCompleteByRunId,
   isRunCancelled,
   stopRun,
+  restartRun,
   type RunSpec,
   type PerModelSpec,
 } from '../../src/orchestrator/run-lifecycle.js';
-import { claimRunFinalization } from '../../src/orchestrator/finalize/aggregate.js';
+import { claimRunFinalization, buildPerModelEntries } from '../../src/orchestrator/finalize/aggregate.js';
 import { getRunRecord, updateRun, upsertRun } from '../../src/orchestrator/run-index.js';
 import { writeJudgeResult } from '../../src/evaluation/judge.js';
 
@@ -327,7 +328,7 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.ok(rec?.finishedAt, 'the claim stamps finishedAt');
 
     // A young claim is held by the (possibly still alive) original finalizer.
-    assert.strictEqual(await claimRunFinalization(runId), false, 'a fresh finalizing claim must not be stolen');
+    assert.strictEqual(await claimRunFinalization(runId), null, 'a fresh finalizing claim must not be stolen');
 
     // Age the claim past the stale window, as the watcher does for a crashed finalizer.
     await updateRun(runId, (r) => { r.finishedAt = new Date(Date.now() - 3 * 60_000).toISOString(); });
@@ -343,6 +344,63 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.strictEqual(await countRunNotifications(runId), 1, 'exactly one notification after recovery');
   });
 
+  it('a stale-reclaim retry reuses the attempt and drops the duplicate ledger write', async () => {
+    const runId = 'run_ledger_attempt_retry';
+    const alpha = makePerModel(runId, 'alpha', root, 't-attempt');
+    writeResult(alpha, { costUsd: 0.09 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'dashboard');
+
+    // First finalizer wins the claim and writes its ledger row, then "crashes"
+    // before completeRunFinalization (never called here).
+    const attempt = await claimRunFinalization(runId, 0);
+    assert.strictEqual(typeof attempt, 'number', 'a won claim returns the attempt number');
+
+    const rec = (await getRunRecord(runId))!;
+    const entries = [{
+      model: 'alpha', runId, resultPath: alpha.resultPath,
+      result: JSON.parse(fs.readFileSync(alpha.resultPath, 'utf8')),
+    }];
+    const db = getDrizzleDb();
+    await buildPerModelEntries(runId, rec, entries, logger, attempt!);
+    let ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'the first finalizer writes one ledger row');
+
+    // staleMs=0 makes the crashed finalizer's claim immediately reclaimable.
+    // The retry continues the same finalization attempt, so re-running the
+    // ledger write for that attempt is a silent no-op (not a second row).
+    const retryAttempt = await claimRunFinalization(runId, 0);
+    assert.strictEqual(retryAttempt, attempt, 'a stale reclaim continues the same finalization attempt');
+    await assert.doesNotReject(buildPerModelEntries(runId, rec, entries, logger, retryAttempt!));
+    ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'the retry must not duplicate the ledger row for the same attempt');
+  });
+
+  it('a new finalization attempt after restartRun records its own ledger row', async () => {
+    const runId = 'run_ledger_new_attempt';
+    const alpha = makePerModel(runId, 'alpha', root, 't-new-attempt');
+    writeResult(alpha, { costUsd: 0.1 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'dashboard');
+
+    await finalizeRun(spec, logger);
+    const db = getDrizzleDb();
+    let ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'first attempt writes one ledger row');
+    assert.deepStrictEqual(ledger.map((r: { finalization_attempt: number }) => Number(r.finalization_attempt)), [1]);
+
+    // A restart starts a new claim cycle: the next finalization is a new
+    // attempt and legitimately records its own row.
+    await restartRun(runId);
+    assert.strictEqual(await finalizeRunByRunId(runId, logger), true, 'restarted run finalizes');
+    ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.deepStrictEqual(
+      ledger.map((r: { finalization_attempt: number }) => Number(r.finalization_attempt)).sort((a: number, b: number) => a - b),
+      [1, 2],
+      'a new attempt records a second row',
+    );
+  });
+
   it('stopRun during finalization is a no-op and cannot trigger a second finalization', async () => {
     const runId = 'run_stop_during_finalize';
     const alpha = makePerModel(runId, 'alpha', root, 't-stop-fin');
@@ -350,7 +408,7 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const spec = buildSpec(runId, root, [alpha]);
     await registerRun(spec, 'dashboard');
 
-    assert.strictEqual(await claimRunFinalization(runId), true);
+    assert.strictEqual(typeof await claimRunFinalization(runId), 'number', 'a won claim returns its attempt number');
     const claimedAt = (await getRunRecord(runId))?.finishedAt;
 
     await stopRun(runId);

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { and, eq, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, eq, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Logger } from '../../types.js';
 import { writeComparison, type ComparisonEntry } from '../../logger/comparison-logger.js';
 import { updateRun, type RunIndexRecord, type RunIndexModelEntry } from '../run-index.js';
@@ -59,13 +59,24 @@ export const FINALIZE_STALE_MS = 2 * 60 * 1000;
  * belong to a crashed finalizer and may be reclaimed (finalizing -> finalizing);
  * every claim also restamps `finished_at`, which is what the comparison report
  * and the watcher's stale check read.
+ *
+ * Returns the finalization attempt number the caller must attribute its ledger
+ * writes to, or null when the claim was lost. A stale reclaim of an already
+ * finalizing run continues the crashed finalizer's attempt, so a retry writes
+ * the same ledger key and cannot duplicate rows; a claim from any other status
+ * opens a new attempt (restartRun resets the run to 'running'), which
+ * legitimately records its own ledger row.
  */
-export async function claimRunFinalization(runId: string, staleMs = FINALIZE_STALE_MS): Promise<boolean> {
+export async function claimRunFinalization(runId: string, staleMs = FINALIZE_STALE_MS): Promise<number | null> {
   const db = getDrizzleDb();
   const now = Date.now();
   const staleBefore = new Date(now - staleMs).toISOString();
   const claimed = await db.update(runs)
-    .set({ status: 'finalizing', finished_at: new Date(now).toISOString() })
+    .set({
+      status: 'finalizing',
+      finished_at: new Date(now).toISOString(),
+      finalization_attempt: sql<number>`case when ${runs.status} = 'finalizing' then ${runs.finalization_attempt} else ${runs.finalization_attempt} + 1 end`,
+    })
     .where(and(
       eq(runs.run_id, runId),
       ne(runs.status, 'completed'),
@@ -75,8 +86,8 @@ export async function claimRunFinalization(runId: string, staleMs = FINALIZE_STA
         lt(runs.finished_at, staleBefore),
       ),
     ))
-    .returning({ run_id: runs.run_id });
-  return claimed.length > 0;
+    .returning({ attempt: runs.finalization_attempt });
+  return claimed.length > 0 ? claimed[0].attempt : null;
 }
 
 /**
@@ -119,6 +130,7 @@ export async function buildPerModelEntries(
   rec: RunIndexRecord,
   entries: ComparisonEntry[],
   logger: Logger,
+  finalizationAttempt: number,
 ): Promise<RunIndexModelEntry[]> {
   return Promise.all(rec.perModel.map(async (m) => {
     const r = entries.find((x) => x.model === m.model)?.result;
@@ -131,10 +143,11 @@ export async function buildPerModelEntries(
     if (typeof r.costUsd === 'number' && r.costUsd > 0) {
       try {
         const { insertCostLedgerEntry } = await import('../../db/query.js');
-        // Only the caller holding claimRunFinalization reaches this insert, so
-        // it cannot be raced by a second finalizer. A row-existence guard is
-        // deliberately not used: a restarted run legitimately accrues a new
-        // ledger row for its new attempt.
+        // Only the caller holding claimRunFinalization reaches this insert. A
+        // retry of the same finalization attempt carries the same attempt
+        // number, so the unique (run_id, model, finalization_attempt) key makes
+        // the re-write a silent no-op; a genuinely new attempt (restartRun)
+        // records its own ledger row.
         const tokens = r.tokenUsage ?? {};
         await insertCostLedgerEntry({
           runId, model: m.model, costUsd: r.costUsd,
@@ -144,6 +157,7 @@ export async function buildPerModelEntries(
           totalTokens: tokens.total ?? null,
           pricingVersion: null,
           recordedAt: new Date().toISOString(),
+          finalizationAttempt,
         });
       } catch (e) {
         logger.warn('cost ledger write failed (non-fatal)', { runId, model: m.model, err: String(e) });

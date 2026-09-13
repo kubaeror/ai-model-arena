@@ -467,17 +467,18 @@ export async function prepareRunFinalization(runId: string): Promise<boolean> {
  * Never throws on ancillary failures.
  *
  * Callers must hold the atomic claim from `claimRunFinalization` before calling
- * this: it is the only guard that prevents a concurrent finalizer from
- * duplicating ledger rows, notifications, and stats.
+ * this: that claim is what serializes concurrent finalizers, and the attempt
+ * number it returned keys the ledger writes so a stale-retry of the same
+ * attempt cannot duplicate rows.
  */
-async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string; completed: boolean }> {
+async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, finalizationAttempt: number, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string; completed: boolean }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   const root = projectRoot();
   // Release budget reservations against the same state root they were
   // reserved under in startRun, so estimates always match.
   const budgetRoot = budgetStateRoot(root);
-  const perModel = await buildPerModelEntries(runId, rec, entries, logger);
+  const perModel = await buildPerModelEntries(runId, rec, entries, logger, finalizationAttempt);
   await patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
   const allSuccess = perModel.every((m) => m.status === 'completed' && m.success !== false);
   logger.info('Run finalized', { runId, md: mdPath, status: allSuccess ? 'success' : 'failed' });
@@ -491,9 +492,11 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: s
   //
   // Residual (accepted) window: a crash after the ledger write/budget release
   // but before completeRunFinalization leaves the run reclaimable by the stale
-  // retry, which re-runs these effects. Finalization is at-least-once — a
-  // retry may duplicate a cost_ledger row and re-apply spend. The atomic claim
-  // still guarantees only one finalizer runs at a time.
+  // retry, which re-runs these effects. The ledger write is idempotent per
+  // finalization attempt (unique key + onConflictDoNothing), so the retry
+  // cannot duplicate a cost_ledger row; budget spend and notifications remain
+  // at-least-once. The atomic claim still guarantees only one finalizer runs
+  // at a time.
   releaseRunReservations(runId, entries, budgetRoot, logger);
   const sideEffects = await Promise.allSettled([
     runAnomalyAnalysis(runId, logger),
@@ -528,11 +531,12 @@ async function finalizeClaimedRun(
   startedAt: string,
   models: { model: string; resultPath: string }[],
   logger: Logger,
+  finalizationAttempt: number,
   judgeAdapter?: ModelAdapter,
 ): Promise<{ entries: ComparisonEntry[]; mdPath: string; jsonPath: string; completed: boolean }> {
   try {
     const { entries, mdPath, jsonPath } = aggregate(projectRoot(), { runId, scenario, startedAt, models });
-    const core = await finalizeCore(runId, entries, mdPath, jsonPath, logger, judgeAdapter);
+    const core = await finalizeCore(runId, entries, mdPath, jsonPath, logger, finalizationAttempt, judgeAdapter);
     return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath, completed: core.completed };
   } catch (err) {
     logger.error('Run finalization failed — leaving run finalizing for retry', {
@@ -550,7 +554,8 @@ export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: 
   mdPath: string;
   jsonPath: string;
 }> {
-  if (!(await claimRunFinalization(spec.runId))) {
+  const attempt = await claimRunFinalization(spec.runId);
+  if (attempt === null) {
     const existing = await getRunRecord(spec.runId);
     if (!existing) throw new Error(`Run not found: ${spec.runId}`);
     logger.info('Run finalization already claimed — skipping', { runId: spec.runId });
@@ -559,7 +564,7 @@ export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: 
   const { entries, mdPath, jsonPath } = await finalizeClaimedRun(
     spec.runId, spec.scenario, spec.startedAt,
     spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-    logger, judgeAdapter,
+    logger, attempt, judgeAdapter,
   );
   return { entries, mdPath, jsonPath };
 }
@@ -571,14 +576,15 @@ export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: 
 export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<boolean> {
   const rec = await getRunRecord(runId);
   if (!rec) return false;
-  if (!(await claimRunFinalization(runId))) {
+  const attempt = await claimRunFinalization(runId);
+  if (attempt === null) {
     logger.info('Run finalization already claimed — skipping', { runId });
     return false;
   }
   const { completed } = await finalizeClaimedRun(
     runId, rec.scenario, rec.startedAt,
     rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-    logger, judgeAdapter,
+    logger, attempt, judgeAdapter,
   );
   return completed;
 }

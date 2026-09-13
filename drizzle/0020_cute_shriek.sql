@@ -1,0 +1,4 @@
+ALTER TABLE `cost_ledger` ADD `finalization_attempt` integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+CREATE INDEX `idx_cost_ledger_run` ON `cost_ledger` (`run_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_cost_ledger_run_model_attempt` ON `cost_ledger` (`run_id`,`model`,`finalization_attempt`);--> statement-breakpoint
+ALTER TABLE `runs` ADD `finalization_attempt` integer DEFAULT 0 NOT NULL;

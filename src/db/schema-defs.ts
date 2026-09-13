@@ -200,6 +200,7 @@ const runsColumns = {
   comparison_md_path: { type: 'text' as const },
   comparison_json_path: { type: 'text' as const },
   created_by: { type: 'text' as const },
+  finalization_attempt: { type: 'int' as const, notNull: true, default: 0 },
 } satisfies Record<string, ColumnDef>;
 
 const costLedgerColumns = {
@@ -214,6 +215,7 @@ const costLedgerColumns = {
   total_tokens: { type: 'int' as const },
   pricing_version: { type: 'text' as const },
   recorded_at: { type: 'text' as const, notNull: true },
+  finalization_attempt: { type: 'int' as const, notNull: true, default: 0 },
 } satisfies Record<string, ColumnDef>;
 
 const runModelsColumns = {
@@ -467,7 +469,11 @@ export const tables = [
   {
     name: 'cost_ledger',
     columns: costLedgerColumns,
-    indexes: [{ name: 'idx_cost_ledger_model_time', on: ['model', 'recorded_at'] }],
+    indexes: [
+      { name: 'idx_cost_ledger_model_time', on: ['model', 'recorded_at'] },
+      { name: 'idx_cost_ledger_run', on: ['run_id'] },
+      { name: 'uq_cost_ledger_run_model_attempt', unique: true, on: ['run_id', 'model', 'finalization_attempt'] },
+    ],
   },
   {
     name: 'run_models',

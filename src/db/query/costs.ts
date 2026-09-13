@@ -8,15 +8,21 @@ export async function insertCostLedgerEntry(data: {
   runId: string; model: string; costUsd: number; currency?: string;
   inputTokens?: number | null; outputTokens?: number | null;
   cacheReadTokens?: number | null; totalTokens?: number | null;
-  pricingVersion?: string | null; recordedAt: string;
+  pricingVersion?: string | null; recordedAt: string; finalizationAttempt?: number;
 }): Promise<void> {
   const db = getDrizzleDb();
+  // One ledger row per (run, model, finalization attempt): a finalize retry
+  // that re-runs the same attempt's ledger write conflicts and is silently
+  // dropped.
   await db.insert(cost_ledger).values({
     run_id: data.runId, model: data.model, cost_usd: data.costUsd,
     currency: data.currency ?? 'USD', input_tokens: data.inputTokens ?? null,
     output_tokens: data.outputTokens ?? null, cache_read_tokens: data.cacheReadTokens ?? null,
     total_tokens: data.totalTokens ?? null, pricing_version: data.pricingVersion ?? null,
     recorded_at: data.recordedAt,
+    finalization_attempt: data.finalizationAttempt ?? 0,
+  }).onConflictDoNothing({
+    target: [cost_ledger.run_id, cost_ledger.model, cost_ledger.finalization_attempt],
   });
 }
 
