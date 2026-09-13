@@ -16,6 +16,7 @@ tests/catalog/cron.test.ts
 tests/catalog/match.test.ts
 tests/catalog/sync.test.ts
 tests/cli/export.test.ts
+tests/config-loader.test.ts
 tests/config/scenario-reasoning.test.ts
 tests/configs/validate.test.ts
 tests/cost-tracking/budget.test.ts
