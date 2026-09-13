@@ -47,7 +47,7 @@ test.afterAll(async () => {
 
 test('login with dev credentials lands on Home with stat tiles', async ({ page }) => {
   await login(page);
-  await expect(page.getByText('Active runs', { exact: true })).toBeVisible();
+  await expect(page.getByText('Recent runs', { exact: true })).toBeVisible();
   await expect(page.getByText('Models in DB', { exact: true })).toBeVisible();
   await expect(page.getByText('Cache sources', { exact: true })).toBeVisible();
 });

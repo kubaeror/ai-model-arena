@@ -6,10 +6,8 @@ const ScheduleSchema = z.object({
   models: z.array(z.string()).min(1),
   cron: z.string(),
   enabled: z.boolean().default(true),
-  notifications: z.array(z.string()).optional(),
   options: z.object({
     forceBudget: z.boolean().optional(),
-    timeoutMs: z.number().optional(),
   }).optional(),
 });
 

@@ -3,6 +3,7 @@ import { anomalies } from '../schema.js';
 import type { DbAnomaly } from '../schema.js';
 import { eq, and, desc, sql, count, sum } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
+import { chunkedIn } from './chunked.js';
 
 export type AnomalyType =
   | 'latency'
@@ -78,6 +79,8 @@ export interface AnomalyQuery {
   to?: string;
   limit?: number;
   offset?: number;
+  /** Restrict to anomalies whose run is in this set (ownership filter). */
+  runIds?: string[];
 }
 
 function rowToRecord(row: Record<string, unknown>): AnomalyRecord {
@@ -105,9 +108,14 @@ export async function listAnomalies(q: AnomalyQuery = {}): Promise<AnomalyRecord
   if (q.resolved !== undefined) conditions.push(eq(anomalies.resolved, q.resolved ? 1 : 0));
   if (q.from) conditions.push(sql`${anomalies.detected_at} >= ${q.from}`);
   if (q.to) conditions.push(sql`${anomalies.detected_at} <= ${q.to}`);
+  if (q.runIds) {
+    // chunkedIn keeps the bound-variable count bounded and maps an empty set
+    // to a match-nothing predicate (drizzle's inArray on [] is dialect-dependent).
+    conditions.push(chunkedIn(anomalies.run_id, q.runIds));
+  }
   const rows = await db.select().from(anomalies)
     .where(conditions.length ? and(...conditions) : undefined)
-    .orderBy(desc(anomalies.detected_at))
+    .orderBy(desc(anomalies.detected_at), desc(anomalies.id))
     .limit(q.limit ?? 100)
     .offset(q.offset ?? 0);
   return rows.map((r: DbAnomaly) => rowToRecord(r));

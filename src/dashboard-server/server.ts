@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import http from 'node:http';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -10,6 +9,7 @@ import rateLimit from 'express-rate-limit';
 import { findProjectRoot, dbPath } from '../paths.js';
 import { createLogger } from '../logger/pino-logger.js';
 import { startOtel } from '../observability/otel.js';
+import { startOtelMetrics } from '../observability/otel-metrics.js';
 import { metricsHandler } from '../observability/metrics.js';
 import { initDb, closeDb, pingDb } from '../db/index.js';
 import { ensureFresh } from '../catalog/cache.js';
@@ -34,6 +34,7 @@ import { createCatalogRouter } from './routes/catalog.js';
 import { createMetricsRouter } from './routes/metrics.js';
 import { createCacheRouter } from './routes/cache.js';
 import { createBudgetRouter } from './routes/budget.js';
+import { createCostRouter } from './routes/cost.js';
 import { createSchedulesRouter } from './routes/schedules.js';
 import { createRegressionRouter } from './routes/regression.js';
 import { createSecretsRouter } from './routes/secrets.js';
@@ -67,6 +68,7 @@ async function start(): Promise<void> {
     process.exit(1);
   }
   startOtel();
+  const stopOtelMetrics = startOtelMetrics('ai-arena-dashboard');
   const port = Number(process.env.DASHBOARD_PORT ?? 4000);
   // loadAuthConfig() throws in production if DASHBOARD_PASSWORD is unset, and
   // writes a generated dev password to <OUTPUT_ROOT>/.admin-password in dev.
@@ -99,26 +101,15 @@ async function start(): Promise<void> {
   const { syncSchedulesToDb } = await import('../scheduler/manager.js');
   await syncSchedulesToDb(path.join(root, 'configs', 'schedules.yaml'), logger);
 
-  // Notification outbox: retry failed deliveries every 30s (non-fatal).
-  const { deliverDueNotifications } = await import('../notifications/outbox.js');
-  const outboxTimer = setInterval(() => {
-    deliverDueNotifications(logger).catch((e) =>
-      logger.warn('Notification outbox delivery failed', { error: String(e) }),
-    );
-  }, 30_000);
-  if (outboxTimer.unref) outboxTimer.unref();
+  // Notification outbox: load channel config, then retry failed deliveries
+  // every 30s (non-fatal; ticks are single-flight so slow sweeps don't stack).
+  const { startNotificationOutboxTimer } = await import('../notifications/outbox.js');
+  const outboxTimer = startNotificationOutboxTimer(logger, path.join(root, 'configs', 'notifications.yaml'));
 
   const app = express();
   const corsOrigins = allowedOrigins.length
     ? allowedOrigins
     : ['http://localhost:4000', 'http://127.0.0.1:4000'];
-
-  // ── Correlation ID ──────────────────────────────────────────────────────
-  app.use((req, _res, next) => {
-    (req as AuthedRequest).correlationId = (req.headers['x-request-id'] as string) ?? crypto.randomUUID();
-    (req as AuthedRequest).clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.ip ?? '';
-    next();
-  });
 
   app.use(cors({ origin: corsOrigins, credentials: true }));
   app.use(helmet({
@@ -302,7 +293,7 @@ async function start(): Promise<void> {
   app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
 
   // ── Cost ledger (viewer for reads) ────────────────────────────────────
-
+  app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
   // ── Files listing (viewer for reads) ─────────────────────────────────
   app.use('/api/files', requireAuth(auth), requireRole('viewer'), createFilesRouter());
 
@@ -346,6 +337,7 @@ async function start(): Promise<void> {
 
   // ── v1 for newly added modules ──────────────────────────────────────────
   app.use('/api/v1/budget', requireApiKey(['budget:read']), createBudgetRouter());
+  app.use('/api/v1/cost', requireApiKey(['cost:read']), createCostRouter());
   app.use('/api/v1/schedules', requireApiKey(['schedules:read']), createSchedulesRouter());
   app.use('/api/v1/regression', requireApiKey(['regression:execute']), createRegressionRouter());
   app.use('/api/v1/files', requireApiKey(['files:read']), createFilesRouter());
@@ -391,9 +383,10 @@ async function start(): Promise<void> {
 
   const shutdown = (): void => {
     logger.info('Shutting down dashboard server...');
-    clearInterval(outboxTimer);
+    outboxTimer.stop();
     hub.close();
     stopCatalogCron();
+    stopOtelMetrics();
     server.close(() => {
       logger.info('Server closed cleanly');
       try { void closeDb(); } catch { /* ignore */ }

@@ -9,10 +9,10 @@ import type {
 import type { ModelAdapter, SendOpts } from '../providers/adapters/base.js';
 import type { ConversationLogger } from '../logger/conversation-logger.js';
 import { TASK_COMPLETE_TOOL } from '../tools/schema.js';
-import { detectInjection, scanToolResult } from '../security/prompt-injection.js';
+import { detectInjection } from '../security/prompt-injection.js';
 import { startAgentSpan, startToolSpan, endSpan, setSpanAttributes } from '../observability/instrumentation-helpers.js';
 import type { Span } from '@opentelemetry/api';
-import { runTurnLoop } from './turn-loop.js';
+import { runTurnLoop, remapStopReason } from './turn-loop.js';
 
 export interface AgentLoopOptions {
   adapter: ModelAdapter;
@@ -30,10 +30,15 @@ export interface AgentLoopOptions {
   initialTurn?: number;
   /** Called after each turn with ONLY the messages appended this turn. */
   onTurnComplete?: (turn: number, newMessages: ChatMessage[], tokenUsage: TokenUsage, durationMs?: number) => Promise<void>;
-  /** If provided, called after each turn to check budget. Return false to abort the run. */
-  onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean>;
+  /**
+   * If provided, called after each turn to check budget. Return false to abort
+   * the run ('budget_exceeded') or a string to abort with that stop reason.
+   */
+  onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean | string>;
   /** Model-send options forwarded to every adapter.sendMessage call (e.g. reasoning). */
   sendOpts?: SendOpts;
+  /** Serving model stamped on each per-call usage entry for billing. */
+  billingModel?: string;
 }
 
 export interface AgentLoopResult {
@@ -44,6 +49,8 @@ export interface AgentLoopResult {
   /** Per-tool success/fail breakdown. Keyed by tool name, values are {success, fail} counts. */
   toolSuccessRates: Record<string, { success: number; fail: number }>;
   tokenUsage: TokenUsage;
+  /** Usage of each completed model call, in send order (for per-call billing). */
+  usagePerCall: TokenUsage[];
   stopReason: string;
   errors: string[];
 }
@@ -65,18 +72,22 @@ export function compactMessages(messages: ChatMessage[], protectedTail: number):
   let total = messages.reduce((acc, m) => acc + (m.content?.length ?? 0), 0);
   if (total <= MAX_CONTEXT_CHARS || messages.length <= 2) return;
 
-  const keepHead = Math.min(2, messages.length - protectedTail);
+  const tail = Math.max(0, protectedTail);
+  const keepHead = Math.max(0, Math.min(2, messages.length - tail));
   const droppableStart = keepHead;
-  const droppableEnd = Math.max(keepHead, messages.length - protectedTail);
 
-  while (droppableEnd > droppableStart && total > MAX_CONTEXT_CHARS) {
+  while (total > MAX_CONTEXT_CHARS) {
+    const end = Math.max(droppableStart, messages.length - tail);
+    if (end <= droppableStart) break;
+
     let droppedChars = 0;
     let dropped = 0;
-    for (let i = droppableStart; i < droppableEnd; i++) {
+    for (let i = droppableStart; i < end; i++) {
       droppedChars += messages[i]?.content?.length ?? 0;
       dropped++;
       if (total - droppedChars <= MAX_CONTEXT_CHARS) break;
     }
+    if (dropped === 0 || droppedChars === 0) break;
     messages.splice(droppableStart, dropped);
     total -= droppedChars;
   }
@@ -146,7 +157,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     });
     endSpan(loopSpan);
     conv.flush();
-    return { turnsUsed: 0, maxTurns, totalToolCalls: 0, toolsCalled: [], toolSuccessRates: {}, tokenUsage: usage, stopReason, errors: [] };
+    return { turnsUsed: 0, maxTurns, totalToolCalls: 0, toolsCalled: [], toolSuccessRates: {}, tokenUsage: usage, usagePerCall: [], stopReason, errors: [] };
   }
 
   // Tracks the in-flight tool span so onToolEnd closes the exact span that
@@ -164,12 +175,17 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     startTurn: opts.initialTurn ?? 1,
     taskCompleteToolName: TASK_COMPLETE_TOOL,
     sendOpts,
+    billingModel: opts.billingModel,
     hooks: {
       onTurnStart: async (turn, usage) => {
         if (onBudgetCheck) {
           try {
-            const ok = await onBudgetCheck(turn, usage);
-            if (!ok) {
+            const outcome = await onBudgetCheck(turn, usage);
+            if (typeof outcome === 'string') {
+              logger.warn('Agent stopped: run limit exceeded', { turn, reason: outcome });
+              return outcome;
+            }
+            if (outcome === false) {
               logger.warn('Agent stopped: budget exceeded', { turn, tokens: usage.total });
               return false;
             }
@@ -193,6 +209,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
         if (onTurnComplete) {
           try { await onTurnComplete(turn, turnMessages, usage, durationMs); } catch (e) { logger.warn('onTurnComplete failed', { turn, err: String(e) }); }
         }
+        // Turn boundary: persist the coalesced transcript on disk so the
+        // dashboard tail and crash recovery see everything up to this turn.
+        conv.flush();
         return true;
       },
     },
@@ -224,11 +243,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
         }
         activeToolSpan = undefined;
       },
-      onToolResult: (turn, toolCallId, toolName, content, isError) => {
+      onToolResult: (turn, toolCallId, toolName, content, isError, scan) => {
         conv.append({ type: 'tool_result', turn, toolCallId, toolName, toolResult: content, isError });
 
-        // Scan tool output for indirect prompt injection patterns
-        const scan = scanToolResult(content);
+        // Scan result comes from the raw tool output, before hardening escaped
+        // the markers the injection detector matches.
         if (scan.flagged) {
           logger.warn('Tool output flagged for injection patterns', {
             toolName,
@@ -260,7 +279,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     },
   });
 
-  const stopReason = result.turnsUsed >= maxTurns && result.stopReason === 'unknown' ? 'max_turns' : result.stopReason;
+  const stopReason = remapStopReason(result.stopReason, result.turnsUsed, maxTurns);
   if (stopReason === 'max_turns') {
     logger.warn('Agent stopped: max_turns reached', { turnsUsed: result.turnsUsed, maxTurns });
   }
@@ -283,6 +302,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     toolsCalled: result.toolsCalled,
     toolSuccessRates: result.toolSuccessRates,
     tokenUsage: result.tokenUsage,
+    usagePerCall: result.usagePerCall,
     stopReason,
     errors: result.errors,
   };

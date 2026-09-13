@@ -9,7 +9,7 @@ Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscalin
 
 - **Runtime**: Node.js >= 22, TypeScript (ESM, strict)
 - **Backend**: Express.js REST API + WebSocket (port 4000)
-- **Frontend**: React 18 + Vite + TanStack Query + Tailwind CSS + CodeMirror
+- **Frontend**: React 19 + Vite + TanStack Query + Tailwind CSS + CodeMirror
 - **Queue**: Redis Streams (production) or in-memory (dev)
 - **DB**: SQLite (dev, single-node) or Postgres (production, via Drizzle ORM)
 - **Infra**: Docker, docker-compose (dev), minikube + KEDA (k8s)
@@ -48,7 +48,7 @@ Long-lived, queue-driven Kubernetes runners with Redis Streams + KEDA autoscalin
 ## Deployment
 
 - `docker compose up -d` — Local dev (Postgres + Redis + runner + dashboard)
-- `minikube start && bash scripts/k8s/bootstrap.sh && bash scripts/k8s/deploy.sh` — k8s deploy
+- `minikube start && bash scripts/k8s/bootstrap.sh && bash scripts/k8s/deploy.sh` — k8s deploy (includes the observability stack: Tempo/Prometheus/Loki/Grafana)
 - `minikube service dashboard -n ai-arena --url` — Access dashboard on minikube
 
 ## Code Conventions

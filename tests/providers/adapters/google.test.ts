@@ -94,6 +94,28 @@ test('GoogleAdapter.sendMessage leaves body unchanged when reasoning is absent',
   }
 });
 
+test('GoogleAdapter.sendMessage excludes thought parts from visible text', async () => {
+  const adapter = new GoogleAdapter(googleDescriptor, 'gemini-2.5-pro', { apiKey: 'AIza-test' });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => mockResponse({
+    candidates: [{
+      content: { parts: [
+        { text: 'visible answer' },
+        { text: 'internal chain of thought', thought: true },
+        { text: ' more visible' },
+      ] },
+      finishReason: 'STOP',
+    }],
+    usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+  }) as Response) as typeof fetch;
+  try {
+    const result = await adapter.sendMessage([{ role: 'user', content: 'think' }], []);
+    assert.equal(result.text, 'visible answer more visible', 'thought parts must not leak into text');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test('GoogleAdapter.sendMessage parses functionCall', async () => {
   const adapter = new GoogleAdapter(googleDescriptor, 'gemini-1.5-pro', { apiKey: 'AIza-test' });
   const origFetch = globalThis.fetch;

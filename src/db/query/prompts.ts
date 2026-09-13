@@ -1,4 +1,4 @@
-import { eq, desc, max, asc, inArray } from 'drizzle-orm';
+import { eq, desc, max, asc, inArray, and } from 'drizzle-orm';
 import { getDrizzleDb } from '../index.js';
 import { prompts, prompt_versions } from '../schema.js';
 import type { DbPrompt, DbPromptVersion } from '../schema.js';
@@ -24,6 +24,14 @@ export async function getLatestPromptVersion(promptId: string): Promise<number> 
     .from(prompt_versions)
     .where(eq(prompt_versions.prompt_id, promptId));
   return rows[0]?.maxVer ?? 1;
+}
+
+export async function getPromptVersion(promptId: string, version: number): Promise<DbPromptVersion | null> {
+  const db = getDrizzleDb();
+  const rows = await db.select().from(prompt_versions)
+    .where(and(eq(prompt_versions.prompt_id, promptId), eq(prompt_versions.version, version)))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 // ── Dashboard: prompts helpers ────────────────────────────────────────────

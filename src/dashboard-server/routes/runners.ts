@@ -1,10 +1,14 @@
 import type { Router, Request, Response } from 'express';
-import { KubeConfig, AppsV1Api, CoreV1Api } from '@kubernetes/client-node';
+import { KubeConfig, AppsV1Api, CoreV1Api, setHeaderOptions } from '@kubernetes/client-node';
 import type { RequestHandler } from 'express';
 import { requireRole } from '../../auth/rbac.js';
 import { asyncHandler } from '../helpers.js';
 
 const NAMESPACE = process.env.KUBE_NAMESPACE ?? 'ai-arena';
+
+// The generated k8s client prefers application/json-patch+json, but the
+// bodies below are merge patches (object diffs), not JSON Patch arrays.
+const MERGE_PATCH_OPTIONS = setHeaderOptions('Content-Type', 'application/merge-patch+json');
 
 let cachedKube: KubeConfig | null = null;
 
@@ -77,7 +81,7 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
       name,
       namespace: NAMESPACE,
       body: { spec: { replicas } },
-    });
+    }, MERGE_PATCH_OPTIONS);
     res.json({ name, replicas });
   }));
 
@@ -94,7 +98,7 @@ export function registerRunnerRoutes(router: Router, auth: RequestHandler): void
       name,
       namespace: NAMESPACE,
       body: { spec: { replicas: 0 } },
-    });
+    }, MERGE_PATCH_OPTIONS);
     res.json({ name, drained: true });
   }));
 

@@ -11,10 +11,10 @@
  *     entries with descriptions, and no other ws entries may exist.
  *
  * The mounted-router list below mirrors src/dashboard-server/server.ts
- * (mounts at lines 261-346, direct routes at 126-321, docs at 349, WS at
- * 372-382). Per-router paths are extracted from the real router factories so
- * route drift inside a router is caught automatically; only the mount
- * prefixes are mirrored.
+ * (JWT mounts at lines 259-303, API-key v1 mounts at 324-346, direct routes
+ * at 138-321, docs at 349, WS at 372-382). Per-router paths are extracted
+ * from the real router factories so route drift inside a router is caught
+ * automatically; only the mount prefixes are mirrored.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -48,13 +48,15 @@ import { createOutputMappingsRouter } from '../../src/dashboard-server/routes/ou
 import { createSessionsRouter } from '../../src/dashboard-server/routes/sessions.js';
 import { createUsersRouter } from '../../src/dashboard-server/routes/users.js';
 import { createAuditRouter } from '../../src/dashboard-server/routes/audit.js';
+import { createCostRouter } from '../../src/dashboard-server/routes/cost.js';
+import { createNotificationsRouter } from '../../src/dashboard-server/routes/notifications.js';
 import { createFilesRouter } from '../../src/dashboard-server/routes/files.js';
 import { registerRunnerRoutes } from '../../src/dashboard-server/routes/runners.js';
 import { registerQueueRoutes } from '../../src/dashboard-server/routes/queues.js';
 
 const SPEC_PATH = fileURLToPath(new URL('../../openapi.yaml', import.meta.url));
 
-/** Mirror of server.ts:261-285 — JWT-authenticated /api/* router mounts. */
+/** Mirror of server.ts:259-303 — JWT-authenticated /api/* router mounts. */
 const JWT_MOUNTS: Array<[string, () => Router]> = [
   ['/api/models', createModelsRouter],
   ['/api/scenarios', createScenariosRouter],
@@ -65,6 +67,7 @@ const JWT_MOUNTS: Array<[string, () => Router]> = [
   ['/api/webhooks', createWebhooksRouter],
   ['/api/providers', createProvidersRouter],
   ['/api/secrets', createSecretsRouter],
+  ['/api/notifications', createNotificationsRouter],
   ['/api/catalog', createCatalogRouter],
   ['/api/metrics', createMetricsRouter],
   ['/api/cache', createCacheRouter],
@@ -75,13 +78,14 @@ const JWT_MOUNTS: Array<[string, () => Router]> = [
   ['/api/sessions', createSessionsRouter],
   ['/api/users', createUsersRouter],
   ['/api/audit', createAuditRouter],
+  ['/api/cost', createCostRouter],
   ['/api/files', createFilesRouter],
   ['/api/budget', createBudgetRouter],
   ['/api/schedules', createSchedulesRouter],
   ['/api/regression', createRegressionRouter],
 ];
 
-/** Mirror of server.ts:325-346 — API-key-authenticated /api/v1/* mounts. */
+/** Mirror of server.ts:324-346 — API-key-authenticated /api/v1/* mounts. */
 const V1_MOUNTS: Array<[string, () => Router]> = [
   ['/api/v1/models', createModelsRouter],
   ['/api/v1/scenarios', createScenariosRouter],
@@ -97,6 +101,7 @@ const V1_MOUNTS: Array<[string, () => Router]> = [
   ['/api/v1/metrics', createMetricsRouter],
   ['/api/v1/cache', createCacheRouter],
   ['/api/v1/budget', createBudgetRouter],
+  ['/api/v1/cost', createCostRouter],
   ['/api/v1/schedules', createSchedulesRouter],
   ['/api/v1/regression', createRegressionRouter],
   ['/api/v1/files', createFilesRouter],

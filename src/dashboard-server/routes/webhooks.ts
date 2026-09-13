@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { insertWebhook, listWebhooks, deleteWebhook, type NewWebhook } from '../../db/query.js';
 import { auditSafe } from '../../auth/rbac.js';
+import { assertPublicUrl } from '../../providers/url-validator.js';
 import type { AuthedRequest } from '../auth.js';
 import { asyncHandler, notFound } from '../helpers.js';
 
@@ -18,6 +19,12 @@ export function createWebhooksRouter(): Router {
     const secret = typeof body.secret === 'string' ? body.secret : undefined;
     if (!url || !/^https?:\/\//.test(url)) {
       res.status(400).json({ error: 'A valid http(s) "url" is required' });
+      return;
+    }
+    try {
+      await assertPublicUrl(url);
+    } catch (err) {
+      res.status(400).json({ error: `Webhook URL rejected: ${err instanceof Error ? err.message : String(err)}` });
       return;
     }
     if (events.length === 0) {

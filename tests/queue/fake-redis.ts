@@ -8,6 +8,8 @@
  *  - XDEL removes entries from the stream (PEL entries linger until XACK/XAUTOCLAIM, like real Redis)
  *  - XAUTOCLAIM reassigns PEL entries idle longer than minIdleMs and drops stale PEL
  *    entries for messages deleted from the stream (returned as deleted ids)
+ *  - XCLAIM reassigns listed PEL entries idle longer than minIdleMs to a consumer
+ *    and resets their idle clock (JUSTID returns the claimed ids)
  *  - XRANGE returns entries by id range
  *  - eval() runs the three Lua scripts redis.ts uses, dispatched on script signature:
  *      * dedup (SETNX, 1 key, returns 0|1)  — dispatched on its script marker
@@ -43,10 +45,20 @@ export class FakeRedis {
   /** Number of rotation-script evals executed (0 = rotations went the non-atomic path). */
   rotationEvalCount = 0;
 
+  /** Number of XCLAIM calls executed. */
+  xclaimCount = 0;
+
+  /** Raw argument lists of every XREADGROUP call. */
+  xreadgroupCalls: (string | number)[][] = [];
+
   // ---- test-side read helpers (not part of the ioredis surface) ----
 
   getDedup(key: string): string | undefined {
     return this.dedup.get(key);
+  }
+
+  getPendingDeliveredAt(stream: string, group: string, id: string): number | undefined {
+    return this.pel.get(`${stream}|${group}`)?.get(id)?.deliveredAt;
   }
 
   getStreamIds(stream: string): string[] {
@@ -121,6 +133,7 @@ export class FakeRedis {
   async xreadgroup(
     ...args: (string | number)[]
   ): Promise<Array<[string, StreamEntry[]]> | null> {
+    this.xreadgroupCalls.push([...args]);
     const group = args[1] as string;
     const consumer = args[2] as string;
     const count = Number(args[4]);
@@ -151,6 +164,36 @@ export class FakeRedis {
     let acked = 0;
     for (const id of ids) if (pel.delete(id)) acked += 1;
     return acked;
+  }
+
+  async xclaim(
+    stream: string,
+    group: string,
+    consumer: string,
+    minIdleMs: number | string,
+    ...args: (string | number)[]
+  ): Promise<string[] | StreamEntry[]> {
+    this.requireGroup(stream, group);
+    this.xclaimCount += 1;
+    const pel = this.pelFor(stream, group);
+    const justIdIdx = args.indexOf('JUSTID');
+    const ids = (justIdIdx >= 0 ? args.slice(0, justIdIdx) : args).map(String);
+    const minIdle = Number(minIdleMs);
+    const out: (string | StreamEntry)[] = [];
+    for (const id of ids) {
+      const entry = pel.get(id);
+      if (!entry) continue;
+      if (Date.now() - entry.deliveredAt < minIdle) continue;
+      entry.consumer = consumer;
+      entry.deliveredAt = Date.now();
+      if (justIdIdx >= 0) {
+        out.push(id);
+      } else {
+        const fields = this.streamMap(stream).get(id);
+        if (fields) out.push([id, [...fields]]);
+      }
+    }
+    return out as string[] | StreamEntry[];
   }
 
   async xdel(stream: string, ...ids: string[]): Promise<number> {

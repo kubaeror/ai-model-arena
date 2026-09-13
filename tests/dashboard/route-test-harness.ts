@@ -149,17 +149,33 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
 
   const bust = `?bust=${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const { createModelsRouter } = await import(`../../src/dashboard-server/routes/models.js${bust}`);
+  const { createProvidersRouter } = await import(`../../src/dashboard-server/routes/providers.js${bust}`);
   const { createScenariosRouter } = await import(`../../src/dashboard-server/routes/scenarios.js${bust}`);
   const { createRunsRouter } = await import(`../../src/dashboard-server/routes/runs.js${bust}`);
   const { createSecretsRouter } = await import(`../../src/dashboard-server/routes/secrets.js${bust}`);
   const { createAuditRouter } = await import(`../../src/dashboard-server/routes/audit.js${bust}`);
+  const { createFilesRouter } = await import(`../../src/dashboard-server/routes/files.js${bust}`);
+  const { createUsersRouter } = await import(`../../src/dashboard-server/routes/users.js${bust}`);
+  const { createCostRouter } = await import(`../../src/dashboard-server/routes/cost.js${bust}`);
+  const { createSessionsRouter } = await import(`../../src/dashboard-server/routes/sessions.js${bust}`);
+  const { createExportRouter } = await import(`../../src/dashboard-server/routes/export.js${bust}`);
+  const { createAnomaliesRouter } = await import(`../../src/dashboard-server/routes/anomalies.js${bust}`);
+  const { createPromptsRouter } = await import(`../../src/dashboard-server/routes/prompts.js${bust}`);
   const { registerQueueRoutes } = await import(`../../src/dashboard-server/routes/queues.js${bust}`);
 
   app.use('/api/models', requireAuth(auth), requireRole('viewer'), createModelsRouter());
+  app.use('/api/providers', requireAuth(auth), requireRole('admin'), createProvidersRouter());
   app.use('/api/scenarios', requireAuth(auth), requireRole('viewer'), createScenariosRouter());
   app.use('/api/runs', requireAuth(auth), requireRole('viewer'), createRunsRouter());
   app.use('/api/secrets', requireAuth(auth), requireRole('admin'), createSecretsRouter());
   app.use('/api/audit', requireAuth(auth), requireRole('admin'), createAuditRouter());
+  app.use('/api/files', requireAuth(auth), requireRole('viewer'), createFilesRouter());
+  app.use('/api/users', requireAuth(auth), requireRole('admin'), createUsersRouter());
+  app.use('/api/cost', requireAuth(auth), requireRole('viewer'), createCostRouter());
+  app.use('/api/sessions', requireAuth(auth), requireRole('viewer'), createSessionsRouter());
+  app.use('/api/export', requireAuth(auth), requireRole('viewer'), createExportRouter());
+  app.use('/api/anomalies', requireAuth(auth), requireRole('viewer'), createAnomaliesRouter());
+  app.use('/api/prompts', requireAuth(auth), requireRole('viewer'), createPromptsRouter());
   app.get('/api/roles', requireAuth(auth), requireRole('viewer'), async (_req, res) => {
     const { listRoles } = await import('../../src/db/query.js');
     res.json({ roles: await listRoles() });

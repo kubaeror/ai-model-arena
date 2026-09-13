@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { Schedules } from '../../src/pages/Schedules';
+import * as api from '../../src/lib/api';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
 
@@ -53,9 +54,33 @@ describe('Schedules', () => {
     const checkboxes = await screen.findAllByRole('checkbox');
     expect(checkboxes).toHaveLength(2);
 
-    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[0]!);
     await waitFor(() => {
       expect(updateScheduleMock).toHaveBeenCalledWith('s1', { enabled: false });
     });
+  });
+
+  it('surfaces toggle failures', async () => {
+    updateScheduleMock.mockRejectedValueOnce(new Error('toggle exploded'));
+    renderWithProviders(<Schedules />);
+    const checkboxes = await screen.findAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+
+    fireEvent.click(checkboxes[0]!);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('toggle exploded');
+  });
+
+  it('surfaces delete failures', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(api.deleteSchedule).mockRejectedValueOnce(new Error('delete exploded'));
+    renderWithProviders(<Schedules />);
+    await waitFor(() => {
+      expect(screen.getByText(/express-rest/)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]!);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('delete exploded');
   });
 });

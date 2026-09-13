@@ -103,22 +103,14 @@ export function useCommandPalette() {
     setQuery('');
   }, [navigate]);
 
-  const toggle = useCallback(() => {
-    setOpen(v => !v);
-    setQuery('');
-    setSelectedIndex(0);
-  }, []);
-
   return {
     open,
     setOpen,
-    toggle,
     query,
     setQuery,
     selectedIndex,
     setSelectedIndex,
     filtered,
-    selected,
     inputRef,
     handleKeyDown,
     execute,
@@ -132,7 +124,6 @@ interface CommandPaletteProps {
   onQueryChange: (q: string) => void;
   filtered: CommandItem[];
   selectedIndex: number;
-  selected: CommandItem | undefined;
   inputRef: React.RefObject<HTMLInputElement | null>;
   onKeyDown: (e: React.KeyboardEvent) => void;
   onSelect: (item: CommandItem) => void;
@@ -140,10 +131,9 @@ interface CommandPaletteProps {
 
 export function CommandPalette({
   open, onClose, query, onQueryChange, filtered,
-  selectedIndex, selected, inputRef, onKeyDown, onSelect,
+  selectedIndex, inputRef, onKeyDown, onSelect,
 }: CommandPaletteProps) {
   if (!open) return null;
-  void selected; // unused but kept for potential future use
 
   return (
     <div className="fixed inset-0 z-200 flex items-start justify-center pt-[20vh]" onClick={onClose}>
@@ -153,6 +143,7 @@ export function CommandPalette({
         aria-modal="true"
         aria-label="Command palette"
         className="relative z-10 w-full max-w-lg rounded-panel border border-border bg-bg-1 shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <div className="flex items-center border-b border-border px-4">

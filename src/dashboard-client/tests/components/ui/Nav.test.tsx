@@ -58,7 +58,8 @@ describe('Nav', () => {
     expect(screen.getByText('admin')).toBeInTheDocument();
   });
 
-  it('logs out and navigates to /login', () => {
+  it('logs out and navigates to /login', async () => {
+    logoutMock.mockResolvedValue(undefined);
     render(
       <MemoryRouter initialEntries={['/']}>
         <Routes>
@@ -69,6 +70,6 @@ describe('Nav', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Logout' }));
     expect(logoutMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('login-page')).toBeInTheDocument();
+    expect(await screen.findByText('login-page')).toBeInTheDocument();
   });
 });

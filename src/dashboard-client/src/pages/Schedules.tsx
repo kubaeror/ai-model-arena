@@ -17,6 +17,7 @@ export function Schedules() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ id: '', scenario: '', models: '', cron: '', enabled: true });
   const [formError, setFormError] = useState('');
+  const [actionError, setActionError] = useState('');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['schedules'],
@@ -53,12 +54,20 @@ export function Schedules() {
 
   const deleteMut = useMutation({
     mutationFn: deleteSchedule,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['schedules'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['schedules'] });
+      setActionError('');
+    },
+    onError: (e) => setActionError((e as Error).message),
   });
 
   const updateMut = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => updateSchedule(id, { enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['schedules'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['schedules'] });
+      setActionError('');
+    },
+    onError: (e) => setActionError((e as Error).message),
   });
 
   const columns: Column<Schedule>[] = [
@@ -95,6 +104,9 @@ export function Schedules() {
       <Panel>
         <PanelHeader title="Scheduled Jobs" actions={<Button variant="primary" size="sm" onClick={() => setShowCreate(true)}>New Schedule</Button>} />
         <PanelBody>
+          {actionError && (
+            <p role="alert" className="px-3 pt-3 text-12 text-danger">{actionError}</p>
+          )}
           {(!data || data.length === 0) ? <EmptyState title="No schedules configured" /> : (
             <DataTable columns={columns} data={data} />
           )}

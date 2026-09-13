@@ -166,6 +166,7 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix src/dashboard-client
       - run: npm --prefix src/dashboard-client run typecheck
+      - run: npm --prefix src/dashboard-client run typecheck:tests
       - run: npm --prefix src/dashboard-client run test
 
   e2e:
@@ -202,28 +203,28 @@ jobs:
         run: kubectl kustomize k8s/observability > .tmp/k8s-observability.yaml
       - name: Render kustomize (e2e)
         run: kubectl kustomize k8s/overlays/e2e > .tmp/k8s-e2e.yaml
-      - uses: docker://ghcr.io/yannh/kubeconform:latest
+      - uses: docker://ghcr.io/yannh/kubeconform:v0.8.0
         with:
           args: >-
             -verbose -summary
             -schema-location default
             -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
             .tmp/k8s-dev.yaml
-      - uses: docker://ghcr.io/yannh/kubeconform:latest
+      - uses: docker://ghcr.io/yannh/kubeconform:v0.8.0
         with:
           args: >-
             -verbose -summary
             -schema-location default
             -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
             .tmp/k8s-prod.yaml
-      - uses: docker://ghcr.io/yannh/kubeconform:latest
+      - uses: docker://ghcr.io/yannh/kubeconform:v0.8.0
         with:
           args: >-
             -verbose -summary
             -schema-location default
             -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
             .tmp/k8s-e2e.yaml
-      - uses: docker://ghcr.io/yannh/kubeconform:latest
+      - uses: docker://ghcr.io/yannh/kubeconform:v0.8.0
         with:
           args: >-
             -verbose -summary
@@ -245,16 +246,16 @@ jobs:
         run: kubectl kustomize k8s/observability > .tmp/k8s-observability.yaml
       - name: Render kustomize (e2e)
         run: kubectl kustomize k8s/overlays/e2e > .tmp/k8s-e2e.yaml
-      - uses: docker://openpolicyagent/conftest:latest
+      - uses: docker://openpolicyagent/conftest:v0.70.0
         with:
           args: test -p policy/k8s .tmp/k8s-dev.yaml
-      - uses: docker://openpolicyagent/conftest:latest
+      - uses: docker://openpolicyagent/conftest:v0.70.0
         with:
           args: test -p policy/k8s .tmp/k8s-prod.yaml
-      - uses: docker://openpolicyagent/conftest:latest
+      - uses: docker://openpolicyagent/conftest:v0.70.0
         with:
           args: test -p policy/k8s .tmp/k8s-observability.yaml
-      - uses: docker://openpolicyagent/conftest:latest
+      - uses: docker://openpolicyagent/conftest:v0.70.0
         with:
           args: test -p policy/k8s .tmp/k8s-e2e.yaml
 
@@ -274,7 +275,7 @@ jobs:
         # checked-out repo mirrors the local invocation exactly.
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo \
-            koalaman/shellcheck:stable \
+            koalaman/shellcheck:v0.11.0 \
             -x scripts/backup/*.sh scripts/k8s/*.sh scripts/restore/*.sh
 
   yaml-markdown-lint:
@@ -286,14 +287,14 @@ jobs:
         # checked-out repo mirrors the local invocation exactly.
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo \
-            cytopia/yamllint:latest -f parsable \
+            giantswarm/yamllint:1.37.1 -f parsable \
             k8s configs .github/workflows .github/dependabot.yml docker-compose.yml
       - name: Markdownlint
         # Vendored skill trees (.agents/, .opencode/, .superpowers/), docs/
         # and node_modules are excluded by linting project docs explicitly.
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo \
-            davidanson/markdownlint-cli2:latest --config .markdownlint.json \
+            davidanson/markdownlint-cli2:v0.23.2 --config .markdownlint.json \
             README.md AGENTS.md k8s/README.md src/dashboard-client/DESIGN.md
 
   dockerfile-lint:
@@ -308,4 +309,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker://rhysd/actionlint:latest
+      - uses: docker://rhysd/actionlint:1.7.12

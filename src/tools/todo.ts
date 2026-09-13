@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod/v4';
 import { validateArgs } from './util.js';
+import { safeResolve, assertSafeWriteTarget } from '../sandbox/sandbox.js';
 import type { ToolExecutor } from '../types.js';
 
 interface TodoItem {
@@ -24,17 +25,79 @@ const TodoWriteArgs = z.object({
 
 const TodoReadArgs = z.object({}).strict();
 
-function todosPath(sandboxDir: string): string {
-  const arenaDir = path.join(sandboxDir, '.arena');
-  fs.mkdirSync(arenaDir, { recursive: true });
-  return path.join(arenaDir, 'todos.json');
+/**
+ * Resolve the `.arena` directory inside `sandboxDir`, rejecting a pre-existing
+ * symlink (or non-directory) that a write could follow outside the sandbox.
+ * `create` is true on the write path only — reads must not create the dir.
+ */
+function arenaDir(sandboxDir: string, create: boolean): string {
+  const dir = path.join(sandboxDir, '.arena');
+  try {
+    const st = fs.lstatSync(dir);
+    if (st.isSymbolicLink()) {
+      throw new Error('Refusing to use a symlinked .arena directory.');
+    }
+    if (!st.isDirectory()) {
+      throw new Error('Refusing to use a non-directory .arena path.');
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (create) fs.mkdirSync(dir, { recursive: true });
+    } else {
+      throw err;
+    }
+  }
+  return dir;
+}
+
+/**
+ * Write-path resolution: `.arena` must exist (created on demand), the resolved
+ * todos path must stay in the sandbox, and the inode must be a regular
+ * single-link file so a hardlink cannot redirect the write outside.
+ */
+function todosWritePath(sandboxDir: string): string {
+  arenaDir(sandboxDir, true);
+  const abs = safeResolve(sandboxDir, '.arena/todos.json');
+  assertSafeWriteTarget(abs);
+  return abs;
+}
+
+/** Read-path resolution: same symlink-dir rejection, but never opens O_WRONLY
+ *  (a legitimately read-only todos.json must still be readable). */
+function todosReadPath(sandboxDir: string): string {
+  arenaDir(sandboxDir, false);
+  return safeResolve(sandboxDir, '.arena/todos.json');
 }
 
 function readTodos(dir: string): TodoItem[] {
-  const fp = todosPath(dir);
-  if (!fs.existsSync(fp)) return [];
+  let fp: string;
   try {
-    const raw = fs.readFileSync(fp, 'utf8');
+    fp = todosReadPath(dir);
+  } catch {
+    // Unsafe path (symlinked .arena, …): report no todos rather than reading
+    // through the link.
+    return [];
+  }
+  let raw: string;
+  try {
+    // Read-path mirror of assertSafeWriteTarget: O_NONBLOCK keeps a model-made
+    // FIFO from blocking the open, and fstat rejects non-regular or hardlinked
+    // inodes so a link inside .arena cannot read an outside file.
+    const fd = fs.openSync(
+      fp,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0),
+    );
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.nlink > 1) return [];
+      raw = fs.readFileSync(fd, 'utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return [];
+  }
+  try {
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
     return arr.filter((t): t is TodoItem => {
@@ -48,7 +111,7 @@ function readTodos(dir: string): TodoItem[] {
 }
 
 function writeTodos(dir: string, todos: TodoItem[]): void {
-  fs.writeFileSync(todosPath(dir), JSON.stringify(todos, null, 2), 'utf8');
+  fs.writeFileSync(todosWritePath(dir), JSON.stringify(todos, null, 2), 'utf8');
 }
 
 function formatTodos(todos: TodoItem[]): string {
@@ -92,7 +155,11 @@ export const todoWrite: ToolExecutor = async (args, ctx) => {
   if (!v.ok) return { content: v.error, isError: true };
   const { todos } = v.data;
 
-  writeTodos(ctx.sandboxDir, todos);
+  try {
+    writeTodos(ctx.sandboxDir, todos);
+  } catch (e) {
+    return { content: `Error: ${(e as Error).message}`, isError: true };
+  }
 
   const counts = {
     pending: todos.filter(t => t.status === 'pending').length,

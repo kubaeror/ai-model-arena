@@ -39,7 +39,6 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
-    let system: string | undefined;
     const conversational: Array<Record<string, unknown>> = [];
     const cacheIndices = new Set<number>();
     let targetCount = 0;
@@ -54,11 +53,17 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
         targetCount++;
       }
     }
+    const systemBlocks: Array<Record<string, unknown>> = [];
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       if (!m) continue;
       if (m.role === 'system') {
-        system = (system ?? '') + (m.content ?? '');
+        // System messages stay distinct text blocks (Anthropic's block form)
+        // so multiple prompts are not glued together and each keeps its cache
+        // breakpoint instead of being flattened into an uncached string.
+        const block: Record<string, unknown> = { type: 'text', text: m.content ?? '' };
+        if (cacheIndices.has(i)) block.cache_control = { type: 'ephemeral' };
+        systemBlocks.push(block);
         continue;
       }
       const role = m.role === 'tool' ? 'user' : m.role;
@@ -84,7 +89,7 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
       max_tokens: opts?.maxTokens ?? 4096,
       messages: conversational,
     };
-    if (system) body.system = system;
+    if (systemBlocks.length > 0) body.system = systemBlocks;
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (tools.length > 0) body.tools = tools.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters }));
     if (opts?.reasoning && opts.reasoning.type === 'budget_tokens') {
@@ -109,11 +114,16 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
         toolCalls.push({ id: block.id ?? '', name: block.name ?? '', arguments: block.input ?? {} });
       }
     }
+    const cacheRead = json.usage.cache_read_input_tokens;
+    const cacheWrite = json.usage.cache_creation_input_tokens;
     const usage: TokenUsage = {
-      prompt: json.usage.input_tokens,
+      // Anthropic reports uncached input separately from cache read/write;
+      // `prompt` is the canonical total input so billing can subtract the
+      // cached subsets, matching OpenAI/Google semantics.
+      prompt: (json.usage.input_tokens ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0),
       completion: json.usage.output_tokens,
-      cacheReadTokens: json.usage.cache_read_input_tokens,
-      cacheWriteTokens: json.usage.cache_creation_input_tokens,
+      cacheReadTokens: cacheRead,
+      cacheWriteTokens: cacheWrite,
     };
     return { text, toolCalls, usage, stopReason: json.stop_reason, raw: json };
   }

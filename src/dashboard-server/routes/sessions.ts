@@ -7,17 +7,22 @@ import { createSessionStore } from '../../session/store.js';
 import { requireRole, auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { notFound, parsePagination } from '../helpers.js';
+import { allowIfSessionOwner, sessionVisibilityFilter } from '../run-ownership.js';
+import { listRuns } from '../../orchestrator/run-index.js';
 
 export function createSessionsRouter(): Router {
   const router = Router();
 
-  // GET /api/sessions - list sessions, paginated + filterable
+  // GET /api/sessions - list sessions, paginated + filterable. Non-admins only
+  // see sessions whose resolved run they own (pagination describes that set).
   router.get('/', async (req, res) => {
     const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
     const model = typeof req.query.model === 'string' ? req.query.model : undefined;
 
-    const { sessions, total } = await listSessionsWithCounts({ status, model, limit, offset });
+    const isVisible = sessionVisibilityFilter(req as AuthedRequest, await listRuns());
+
+    const { sessions, total } = await listSessionsWithCounts({ status, model, limit, offset, isVisible });
 
     res.json({ sessions, total, limit, offset });
   });
@@ -29,29 +34,34 @@ export function createSessionsRouter(): Router {
       notFound(res, 'Session', req.params.id);
       return;
     }
+    if (!(await allowIfSessionOwner(req as AuthedRequest, res, session.id, session.model))) return;
     res.json(session);
   });
 
-  // GET /api/sessions/:id/messages - all messages ordered by turn
+  // GET /api/sessions/:id/messages - messages ordered by turn, paginated
   router.get('/:id/messages', async (req, res) => {
     const session = await getSessionWithCounts(req.params.id);
     if (!session) {
       notFound(res, 'Session', req.params.id);
       return;
     }
-    const messages = await listMessagesBySession(req.params.id);
-    res.json({ messages });
+    if (!(await allowIfSessionOwner(req as AuthedRequest, res, session.id, session.model))) return;
+    const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
+    const messages = await listMessagesBySession(req.params.id, { limit, offset });
+    res.json({ messages, limit, offset });
   });
 
-  // GET /api/sessions/:id/calls - all model_calls ordered by turn
+  // GET /api/sessions/:id/calls - model_calls ordered by turn, paginated
   router.get('/:id/calls', async (req, res) => {
     const session = await getSessionWithCounts(req.params.id);
     if (!session) {
       notFound(res, 'Session', req.params.id);
       return;
     }
-    const calls = await listModelCallsForSession(req.params.id);
-    res.json({ calls });
+    if (!(await allowIfSessionOwner(req as AuthedRequest, res, session.id, session.model))) return;
+    const { limit, offset } = parsePagination(req.query as Record<string, unknown>);
+    const calls = await listModelCallsForSession(req.params.id, { limit, offset });
+    res.json({ calls, limit, offset });
   });
 
   // DELETE /api/sessions/:id - delete session + cascade

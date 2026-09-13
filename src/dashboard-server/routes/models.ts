@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { listCatalogModels } from '../../db/query.js';
 import { upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
+import { validateProviderUrl } from '../../providers/url-validator.js';
+import { isValidSecretEnvVar } from '../../secrets/store.js';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import { z } from 'zod';
 import type { AuthedRequest } from '../auth.js';
@@ -19,9 +21,13 @@ export function createModelsRouter(): Router {
   router.post('/', requireRole('editor'), async (req, res) => {
     const schema = z.object({
       name: z.string().min(1).max(128),
-      apiBase: z.string().url().optional(),
+      apiBase: z.string().refine((url) => validateProviderUrl(url).ok, {
+        message: 'URL targets a blocked address or uses an unsupported scheme/port',
+      }).optional(),
       authScheme: z.enum(['bearer', 'x-api-key', 'none']).default('bearer'),
-      envVar: z.string().optional(),
+      envVar: z.string().refine(isValidSecretEnvVar, {
+        message: 'envVar must be an uppercase env var name like MY_API_KEY',
+      }).optional(),
       adapter: z.enum(['openai-compat', 'anthropic', 'google', 'bedrock']).default('openai-compat'),
     });
     const parsed = parseBody(schema, req, res, 'Invalid model input');

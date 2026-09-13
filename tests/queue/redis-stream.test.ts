@@ -13,6 +13,7 @@
  *   xrange(stream, start, end, 'COUNT', n)              → [[id, fields]]  (start/end: '-'/'+' or exact id)
  *   xautoclaim(stream, group, consumer, minIdleMs,
  *              start, 'COUNT', 5)                       → [nextStart, [[id, fields]], [deletedIds]]
+ *   xclaim(stream, group, consumer, 0, id, 'JUSTID')    → [id] (resets the PEL idle clock)
  *   eval(script, numKeys, ...keyOrArg)                  → 0|1 for SETNX dedup script; {ok,attempts} for nack script;
  *                                                       1 for the rotation script (XACK+XDEL+XADD, fake counts these)
  *   quit()                                              → 'OK'
@@ -25,7 +26,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Redis } from 'ioredis';
-import { RedisStreamQueue } from '../../src/queue/redis.js';
+import { RedisStreamQueue, heartbeatIntervalMs } from '../../src/queue/redis.js';
 import { createFakeRedis, type FakeRedis } from './fake-redis.js';
 import type { Task, TaskQueue } from '../../src/queue/types.js';
 import type { RedisQueueConfig } from '../../src/queue/redis-config.js';
@@ -120,8 +121,10 @@ test('reclaim re-processes stale pending messages via XAUTOCLAIM', async (t) => 
   const fake = createFakeRedis();
   const q = makeQueue(fake, { reclaimIntervalMs: 1_000, reclaimIdleMs: 1_000 });
   await q.enqueue(mkTask('t1'));
-  const task = await q.dequeue(0); // delivered at virtual t=0
-  assert.ok(task);
+  // Deliver as a crashed consumer: a live queue heartbeats its own in-flight
+  // entries, so only entries it never claimed can go idle enough to reclaim.
+  await fake.xreadgroup('GROUP', GROUP, 'dead-consumer', 'COUNT', 1, 'BLOCK', 0, 'STREAMS', MAIN_STREAM, '>');
+  assert.equal(await q.dequeue(0), null, 'no new entries — starts the reclaim loop');
 
   // Advance the clock past reclaimIdleMs and fire the reclaim loop interval
   t.mock.timers.tick(1_500);
@@ -144,7 +147,9 @@ test('reclaim removes DLQed messages from the pending list', async (t) => {
   const queue = makeQueue(fake, { maxAttempts: 1, reclaimIdleMs: 1_000 });
   // attempts already at maxAttempts so reclaim dead-letters on first pass
   await queue.enqueue({ ...mkTask('t1'), attempts: 1 });
-  await queue.dequeue(0); // delivered -> pending (deliveredAt = t=0)
+  // Deliver as a crashed consumer: a live queue heartbeats its own in-flight
+  // entries, so only entries it never claimed can go idle enough to reclaim.
+  await fake.xreadgroup('GROUP', GROUP, 'dead-consumer', 'COUNT', 1, 'BLOCK', 0, 'STREAMS', MAIN_STREAM, '>');
   // The fake's xautoclaim compares Date.now() against the PEL deliveredAt,
   // not real elapsed time — advance the mocked clock past reclaimIdleMs
   // instead of waiting, like the existing reclaim test does.
@@ -343,4 +348,90 @@ test('rotation preserves the task on the stream across any number of rotations',
   assertSurvives();
   assert.notEqual(fake.getStreamIds(MAIN_STREAM)[0], idBefore, 'each rotation re-adds the entry under a fresh id');
   await queue.close();
+});
+
+test('post-rotation polls use BLOCK 1, never BLOCK 0', async () => {
+  const fake = createFakeRedis();
+  const queue = makeQueue(fake);
+  await queue.enqueue({ ...mkTask('t1'), dueAt: Date.now() + 60_000 });
+  await queue.enqueue(mkTask('t2'));
+
+  const next = await queue.dequeue(0);
+  assert.ok(next);
+  assert.equal(next!.taskId, 't2');
+  assert.equal(fake.xreadgroupCalls.length, 2, 'one poll for the not-due head, one after rotating it');
+  const blockOf = (args: (string | number)[]) => args[args.indexOf('BLOCK') + 1];
+  assert.equal(blockOf(fake.xreadgroupCalls[0]!), 0, 'the first poll honors the caller timeout');
+  assert.equal(blockOf(fake.xreadgroupCalls[1]!), 1, 'a rotated re-poll must get a small positive block');
+  await queue.close();
+});
+
+test('nack JS fallback dead-letters on the same pre-bump threshold as the Lua path', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  const fake = createFakeRedis();
+  const q = makeQueue(fake, { retryBackoffMs: 50 });
+  fake.eval = async () => { throw new Error('EVAL unsupported'); };
+  await q.enqueue({ ...mkTask('t1'), attempts: 3 });
+
+  const first = await q.dequeue(0);
+  assert.ok(first);
+  await q.nack(first!._redisId!, 'fallback');
+  assert.equal(await q.deadLetterSize(), 0, 'attempts 3 → 4 is below maxAttempts 5 and must requeue');
+  assert.equal(await q.size(), 1);
+
+  t.mock.timers.tick(50 * 2 ** 3);
+  const second = await q.dequeue(0);
+  assert.ok(second);
+  assert.equal(second!.attempts, 4);
+  await q.nack(second!._redisId!, 'fallback-final');
+  assert.equal(await q.deadLetterSize(), 1, 'attempts 4 → 5 is terminal');
+
+  const peeked = await q.deadLetterPeek(10);
+  assert.equal(peeked[0]!.attempts, 5);
+  assert.equal((peeked[0] as Task & { dlqReason?: string }).dlqReason, 'fallback-final');
+  await q.close();
+});
+
+test('heartbeatIntervalMs is a third of the reclaim idle window capped at 20s', () => {
+  assert.equal(heartbeatIntervalMs(3_000), 1_000);
+  assert.equal(heartbeatIntervalMs(60_000), 20_000);
+  assert.equal(heartbeatIntervalMs(600_000), 20_000);
+});
+
+test('heartbeat XCLAIMs in-flight entries so they never go idle enough to reclaim', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  const fake = createFakeRedis();
+  const q = makeQueue(fake, { reclaimIdleMs: 3_000, reclaimIntervalMs: 30_000 });
+  await q.enqueue(mkTask('t1'));
+  const task = await q.dequeue(0);
+  assert.ok(task);
+  const id = task!._redisId!;
+  const deliveredAt = fake.getPendingDeliveredAt(MAIN_STREAM, GROUP, id);
+
+  t.mock.timers.tick(1_000);
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(fake.xclaimCount, 1, 'one heartbeat tick after heartbeatIntervalMs(3000)');
+  assert.equal(fake.getPendingDeliveredAt(MAIN_STREAM, GROUP, id), deliveredAt! + 1_000, 'heartbeat resets the idle clock');
+
+  const [, claimed] = await fake.xautoclaim(MAIN_STREAM, GROUP, 'reclaimer', 3_000, '0-0', 'COUNT', 5);
+  assert.equal(claimed.length, 0, 'a heartbeaten entry must not be reclaimed');
+  await q.close();
+});
+
+test('heartbeat stops once no entries remain in flight', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  const fake = createFakeRedis();
+  const q = makeQueue(fake, { reclaimIdleMs: 3_000, reclaimIntervalMs: 30_000 });
+  await q.enqueue(mkTask('t1'));
+  const task = await q.dequeue(0);
+  assert.ok(task);
+  assert.equal(fake.xclaimCount, 0, 'no heartbeat before the interval elapses');
+
+  await q.ack(task!._redisId!);
+  t.mock.timers.tick(10_000);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(fake.xclaimCount, 0, 'ack cleared the in-flight entry and stopped the timer');
+  await q.close();
 });

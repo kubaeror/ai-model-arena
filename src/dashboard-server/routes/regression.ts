@@ -83,7 +83,7 @@ export function createRegressionRouter(): Router {
     res.json({ results: listSavedSuiteResults(limit) });
   });
 
-  router.post('/', requireRole('admin'), async (req, res) => {
+  router.post('/', requireRole('editor'), async (req, res) => {
     const { suite: suiteName, model: filterModel, updateBaseline } = req.body ?? {};
     if (!suiteName) {
       res.status(400).json({ error: 'suite name is required' });
@@ -119,7 +119,7 @@ export function createRegressionRouter(): Router {
         const perModel = rec.perModel.find((m) => m.model === mdl);
         if (!perModel) return null;
         try {
-          return JSON.parse(fs.readFileSync(perModel.resultPath, 'utf8'));
+          return { result: JSON.parse(fs.readFileSync(perModel.resultPath, 'utf8')), outputDir: perModel.outputDir };
         } catch {
           return null;
         }

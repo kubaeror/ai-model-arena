@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listAnomalies, resolveAnomaly } from '../lib/api.js';
 import type { AnomalyRecord, AnomalySeverity } from '../lib/types.js';
 import { PageShell } from '../components/ui/PageShell';
@@ -24,6 +25,16 @@ export function Anomalies() {
   const [type, setType] = useState('');
   const [severity, setSeverity] = useState('');
   const [resolved, setResolved] = useState('');
+  const [resolveError, setResolveError] = useState<string | null>(null);
+
+  const resolveMutation = useMutation({
+    mutationFn: ({ id, as }: { id: number; as: 'resolved' | 'false_positive' }) => resolveAnomaly(id, as),
+    onSuccess: () => {
+      setResolveError(null);
+      void qc.invalidateQueries({ queryKey: ['anomalies'] });
+    },
+    onError: () => setResolveError('Failed to update anomaly — check server logs'),
+  });
 
   const params: Parameters<typeof listAnomalies>[0] = {};
   if (model) params.model = model;
@@ -82,6 +93,9 @@ export function Anomalies() {
       </Panel>
 
       <Panel className="overflow-auto nice-scroll">
+        {resolveError && (
+          <p className="px-3 pt-3 text-12 text-danger" role="alert">{resolveError}</p>
+        )}
         {anomalies.length === 0 ? (
           <div className="p-6 text-center">
             <p className="font-display text-20 text-fg-1">No anomalies match these filters.</p>
@@ -109,7 +123,7 @@ export function Anomalies() {
                   <td className="px-3 py-2 font-mono text-12">{a.type}</td>
                   <td className="px-3 py-2 text-14">{a.model}</td>
                   <td className="px-3 py-2 text-12 text-fg-1 truncate max-w-[12rem]">
-                    <a className="hover:underline text-accent" href={`#/runs/${a.run_id}`}>{a.run_id}</a>
+                    <Link className="hover:underline text-accent" to={`/runs/${a.run_id}`}>{a.run_id}</Link>
                   </td>
                   <td className="px-3 py-2 text-12 max-w-md">{a.description}</td>
                   <td className="px-3 py-2 text-12 text-fg-1">{new Date(a.detected_at).toLocaleString()}</td>
@@ -119,8 +133,8 @@ export function Anomalies() {
                   <td className="px-3 py-2 text-right">
                     {!a.resolved && (
                       <div className="flex gap-1 justify-end">
-                        <Button variant="ghost" size="sm" onClick={async () => { await resolveAnomaly(a.id, 'resolved'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>Resolve</Button>
-                        <Button variant="ghost" size="sm" onClick={async () => { await resolveAnomaly(a.id, 'false_positive'); void qc.invalidateQueries({ queryKey: ['anomalies'] }); }}>False positive</Button>
+                        <Button variant="ghost" size="sm" onClick={() => resolveMutation.mutate({ id: a.id, as: 'resolved' })}>Resolve</Button>
+                        <Button variant="ghost" size="sm" onClick={() => resolveMutation.mutate({ id: a.id, as: 'false_positive' })}>False positive</Button>
                       </div>
                     )}
                   </td>

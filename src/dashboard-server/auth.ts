@@ -260,8 +260,6 @@ export function verifyToken(cfg: AuthConfig, token: string): { sub: string; role
 
 export interface AuthedRequest extends Request {
   user?: { sub: string; role: string };
-  correlationId?: string;
-  clientIp?: string;
 }
 
 const COOKIE_BASE = 'arena_token';

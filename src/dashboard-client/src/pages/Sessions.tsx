@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { Button } from '../components/ui/Button';
 import { listSessions, type SessionRow } from '../lib/api';
+import { dedupeById } from '../lib/dedupe';
 
 const STATUS_TIER: Record<string, 'status' | 'success' | 'failure' | 'neutral'> = {
   active: 'status',
@@ -30,14 +33,28 @@ const columns: Column<SessionRow>[] = [
   },
 ];
 
+const PAGE = 50;
+
 export function Sessions() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<string>('');
-  const { data, isLoading, isError } = useQuery({
+  const {
+    data, isLoading, isError, refetch,
+    fetchNextPage, hasNextPage, isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['sessions', status],
-    queryFn: () => listSessions(status ? { status, limit: 100 } : { limit: 100 }),
-    refetchInterval: 15_000,
+    queryFn: ({ pageParam }) => listSessions({ limit: PAGE, offset: pageParam, ...(status ? { status } : {}) }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.sessions.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flatMap((p) => p.sessions)).length;
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    // A paged user must not multiply requests: once a second page is loaded the
+    // interval refetches every page, so only keep the first page fresh.
+    refetchInterval: (query) => ((query.state.data?.pages.length ?? 0) > 1 ? false : 15_000),
   });
+  const sessions = dedupeById(data?.pages.flatMap((p) => p.sessions) ?? []);
 
   return (
     <PageShell title="Sessions" description="Checkpointed agent sessions — one per run + model">
@@ -62,16 +79,25 @@ export function Sessions() {
           {isLoading ? (
             <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading sessions…</div>
           ) : isError ? (
-            <EmptyState title="Failed to load sessions" />
-          ) : (data?.sessions.length ?? 0) === 0 ? (
+            <ErrorState message="Failed to load sessions" onRetry={() => void refetch()} />
+          ) : sessions.length === 0 ? (
             <EmptyState title="No sessions yet" description="Sessions appear once the runner checkpoints a run." />
           ) : (
-            <DataTable
-              columns={columns}
-              data={data?.sessions ?? []}
-              getRowId={(r) => r.id}
-              onRowClick={(r) => navigate(`/sessions/${r.id}`)}
-            />
+            <>
+              <DataTable
+                columns={columns}
+                data={sessions}
+                getRowId={(r) => r.id}
+                onRowClick={(r) => navigate(`/sessions/${r.id}`)}
+              />
+              {hasNextPage && (
+                <div className="flex justify-center p-3">
+                  <Button variant="ghost" size="sm" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
+                    {isFetchingNextPage ? 'Loading…' : 'Load more'}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </PanelBody>
       </Panel>

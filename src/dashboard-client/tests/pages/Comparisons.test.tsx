@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { Comparisons } from '../../src/pages/Comparisons';
 
-const { runs, listRunsMock } = vi.hoisted(() => {
+const { listRunsMock } = vi.hoisted(() => {
   const runs = [
     {
       runId: 'run-1',

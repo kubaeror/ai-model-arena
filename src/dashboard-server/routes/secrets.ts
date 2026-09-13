@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
+import { CoreV1Api, KubeConfig, setHeaderOptions } from '@kubernetes/client-node';
 import type { AuthedRequest } from '../auth.js';
 import { auditSafe } from '../../auth/rbac.js';
 import { secretStore, type SecretEntry } from '../../secrets/store.js';
@@ -9,6 +9,10 @@ import { asyncHandler } from '../helpers.js';
 
 let k8sApi: CoreV1Api | null = null;
 let k8sReady = false;
+
+// The generated k8s client prefers application/json-patch+json, but the
+// bodies below are merge patches (object diffs), not JSON Patch arrays.
+const MERGE_PATCH_OPTIONS = setHeaderOptions('Content-Type', 'application/merge-patch+json');
 
 function mask(v: string): string {
   if (v.length <= 4) return '****';
@@ -34,6 +38,19 @@ export function isValidEnvVarName(name: string): boolean {
 /** Secret values must not contain line breaks (would break .env quoting). */
 export function hasControlChars(value: string): boolean {
   return /[\r\n]/.test(value);
+}
+
+/**
+ * The generated k8s client throws ApiException with a numeric `code`; older
+ * shapes surface `response.statusCode`/`statusCode`. Normalize all of them so
+ * 404 (create fallback) and 403 (env-based fallback) branches work.
+ */
+function httpStatusCode(err: unknown): number | undefined {
+  const e = err as { code?: unknown; response?: { statusCode?: number }; statusCode?: number };
+  if (typeof e?.code === 'number') return e.code;
+  if (typeof e?.response?.statusCode === 'number') return e.response.statusCode;
+  if (typeof e?.statusCode === 'number') return e.statusCode;
+  return undefined;
 }
 
 function initK8s(): void {
@@ -78,12 +95,12 @@ export function createSecretsRouter(): Router {
         res.json({ platform: 'kubernetes', secrets: decodeSecretData(data) });
         return;
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number }; statusCode?: number };
-        if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
+        const status = httpStatusCode(err);
+        if (status === 404) {
           res.json({ platform: 'kubernetes', secrets: [] });
           return;
         }
-        if (e?.response?.statusCode === 403) {
+        if (status === 403) {
           // Dashboard SA no longer has secret read access — use env-based fallback
           const entries = secretStore.list();
           res.json({ platform: 'kubernetes', secrets: entries, note: 'Secret listing uses env-based fallback (dashboard SA lacks read access)' });
@@ -124,10 +141,9 @@ export function createSecretsRouter(): Router {
           name,
           namespace: ns,
           body: { stringData: Object.fromEntries([[envVar, value]]) },
-        });
+        }, MERGE_PATCH_OPTIONS);
       } catch (patchErr: unknown) {
-        const e = patchErr as { response?: { statusCode?: number }; statusCode?: number };
-        if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
+        if (httpStatusCode(patchErr) === 404) {
           await k8sApi.createNamespacedSecret({
             namespace: ns,
             body: {
@@ -167,10 +183,9 @@ export function createSecretsRouter(): Router {
           name,
           namespace: ns,
           body: { stringData: Object.fromEntries([[envVar, null]]) },
-        });
+        }, MERGE_PATCH_OPTIONS);
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number }; statusCode?: number };
-        if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
+        if (httpStatusCode(err) === 404) {
           res.json({ ok: true, envVar, message: 'Secret already removed' });
           return;
         }

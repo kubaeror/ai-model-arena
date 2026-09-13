@@ -3,14 +3,34 @@ import type { Server } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import { promises as fsp } from 'node:fs';
 import {
-  listRuns,
+  listLiveRuns,
   getRunRecord,
-  isRunCompleteByRunId,
   finalizeRunByRunId,
+  shouldAttemptFinalize,
+  prepareRunFinalization,
+  isStaleRunningRun,
+  failNonTerminalModels,
+  markRunReaped,
+  isRunCancelled,
+  type RunIndexRecord,
 } from '../orchestrator/orchestrator.js';
 import { type AuthConfig } from './auth.js';
 import { verifyWsRequest } from './ws-auth.js';
 import { createLogger } from '../logger/pino-logger.js';
+import type { Logger } from '../types.js';
+import { isOwnerAllowed } from '../auth/rbac.js';
+
+/** Ownership gate for WS subscriptions: admins pass; otherwise the actor
+ *  must match the run's createdBy. Missing/unknown runs deny. Mirrors the
+ *  REST allowIfRunOwner contract (default-DENY for ownerless runs). */
+export async function canSubscribeToRun(
+  user: { sub?: string; role?: string },
+  runId: string,
+): Promise<boolean> {
+  const rec = await getRunRecord(runId);
+  if (!rec) return false;
+  return isOwnerAllowed(user, rec.createdBy);
+}
 
 interface RunStatus {
   runId: string;
@@ -25,6 +45,83 @@ interface ClientInfo {
   req: IncomingMessage;
   secure: boolean;
   origin: string;
+}
+
+/**
+ * Status feed policy: 'completed' is the only terminal status that leaves the
+ * live list. A 'finalizing' run is still in flight (aggregation/ledger/
+ * notification) and must stay visible until it completes.
+ */
+export function selectLiveRuns<T extends { status: string }>(runs: T[]): T[] {
+  return runs.filter((r) => r.status !== 'completed');
+}
+
+/** How long a live-run query result is reused across status/finalize polls. */
+const LIVE_RUN_CACHE_MS = 1500;
+
+/**
+ * Read new bytes appended to a log file. `offset` beyond the current size means
+ * the file was truncated or rotated: restart from byte 0 instead of allocating
+ * a negative-length buffer (which threw and permanently stalled the tail).
+ */
+export async function readLogAppend(
+  filePath: string,
+  offset: number,
+): Promise<{ offset: number; lines: string[] }> {
+  const fd = await fsp.open(filePath, 'r');
+  try {
+    const stat = await fd.stat();
+    const clamped = offset < 0 ? 0 : offset;
+    const start = clamped > stat.size ? 0 : clamped;
+    if (stat.size <= start) return { offset: start, lines: [] };
+    const length = stat.size - start;
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await fd.read(buffer, 0, length, start);
+    const lines = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/).filter(Boolean);
+    return { offset: start + bytesRead, lines };
+  } finally {
+    await fd.close();
+  }
+}
+
+/**
+ * Dead-runner reconciliation for a run still 'running' past RUN_STALE_AFTER_MS
+ * whose cancel signal is absent: the runner died without writing a terminal
+ * model row (e.g. its task dead-lettered), so the normal finalize gate would
+ * never admit it. The reap marker is persisted on the run (markRunReaped) so a
+ * later finalize crash-retry still knows the run was reaped; non-terminal rows
+ * are failed (runner died) and the run then finalizes through the normal gate.
+ * Fresh runs and runs with a live cancel signal are untouched. Returns true
+ * when the run was stale and reconciled.
+ */
+export async function reconcileStaleRunningRun(
+  run: Pick<RunIndexRecord, 'runId' | 'status' | 'startedAt'>,
+  logger: Logger,
+  now = Date.now(),
+): Promise<boolean> {
+  if (!isStaleRunningRun(run, now)) return false;
+  if (await isRunCancelled(run.runId)) return false;
+  await markRunReaped(run.runId, new Date(now));
+  await failNonTerminalModels(run.runId, logger);
+  return true;
+}
+
+/**
+ * One watcher tick for a single run, gated by prepareRunFinalization: a stopped
+ * run may finalize only when every per-model row is terminal (rows are the
+ * per-model acks, so one runner clearing the cancel signal early must not
+ * release the run) and the signal is absent or the grace window elapsed. Past
+ * the grace window stale rows are force-stopped for dead-runner recovery, and
+ * a stale 'running' run has its dead runner's rows failed first. Returns true
+ * only when this tick won the finalization claim.
+ */
+export async function attemptFinalizeCandidate(
+  run: Pick<RunIndexRecord, 'runId' | 'status' | 'finishedAt' | 'startedAt'>,
+  logger: Logger,
+): Promise<boolean> {
+  await reconcileStaleRunningRun(run, logger);
+  if (!(await prepareRunFinalization(run.runId))) return false;
+  return finalizeRunByRunId(run.runId, logger);
 }
 
 /**
@@ -46,6 +143,7 @@ export class LiveHub {
   private logger = createLogger('ai-arena:live');
   private timers: NodeJS.Timeout[] = [];
   private pollTimer: NodeJS.Timeout | null = null;
+  private liveRunsCache: { at: number; runs: RunIndexRecord[] } | null = null;
 
   constructor(server: Server, auth: AuthConfig) {
     this.wss = new WebSocketServer({
@@ -77,10 +175,17 @@ export class LiveHub {
     }
   }
 
+  private async liveRuns(): Promise<RunIndexRecord[]> {
+    const cached = this.liveRunsCache;
+    if (cached && Date.now() - cached.at < LIVE_RUN_CACHE_MS) return cached.runs;
+    const runs = await listLiveRuns();
+    this.liveRunsCache = { at: Date.now(), runs };
+    return runs;
+  }
+
   private async getRunStatusList(): Promise<RunStatus[]> {
     try {
-      const runs = await listRuns();
-      const recent = runs.filter(r => r.status !== 'completed' || r.finishedAt == null);
+      const recent = selectLiveRuns(await this.liveRuns());
       return recent.map(r => ({
         runId: r.runId,
         scenario: r.scenario,
@@ -102,8 +207,14 @@ export class LiveHub {
       .then((statuses) => this.send(ws, { type: 'run_status', runs: statuses }))
       .catch((err) => this.logger.warn('Failed to get run status on connect', { error: String(err) }));
     ws.on('message', (data) => this.onMessage(ws, data));
-    ws.on('close', () => { this.subs.delete(ws); this.clients.delete(ws); });
-    ws.on('error', () => { this.subs.delete(ws); this.clients.delete(ws); });
+    const release = (): void => {
+      const runs = this.subs.get(ws);
+      this.subs.delete(ws);
+      this.clients.delete(ws);
+      if (runs) for (const runId of runs) this.releaseRunState(runId);
+    };
+    ws.on('close', release);
+    ws.on('error', release);
   }
 
   private onMessage(ws: WebSocket, data: { toString: () => string }): void {
@@ -114,10 +225,39 @@ export class LiveHub {
       return;
     }
     if (msg.type === 'subscribe' && typeof msg.runId === 'string') {
-      this.subs.get(ws)?.add(msg.runId);
-      void this.sendRunSnapshot(ws, msg.runId);
+      const user = this.clients.get(ws);
+      const runId = msg.runId;
+      // Ownership gate (IDOR fix): a viewer may only subscribe to their own
+      // runs; admins pass. Denials get an explicit error frame instead of a
+      // silent no-op.
+      void canSubscribeToRun(user ?? { sub: undefined, role: 'viewer' }, runId)
+        .then((allowed) => {
+          if (!allowed) {
+            this.send(ws, { type: 'error', error: 'forbidden: not the run owner' });
+            return;
+          }
+          this.subs.get(ws)?.add(runId);
+          void this.sendRunSnapshot(ws, runId);
+        });
     } else if (msg.type === 'unsubscribe' && typeof msg.runId === 'string') {
-      this.subs.get(ws)?.delete(msg.runId);
+      if (this.subs.get(ws)?.delete(msg.runId)) this.releaseRunState(msg.runId);
+    }
+  }
+
+  /** Delete all per-run tail state once no subscriber references the run. */
+  private releaseRunState(runId: string): void {
+    for (const set of this.subs.values()) {
+      if (set.has(runId)) return;
+    }
+    this.cleanupRunState(runId);
+  }
+
+  private cleanupRunState(runId: string): void {
+    const prefix = `${runId}:`;
+    for (const map of [this.convSeen, this.convMtime, this.logOffset, this.logMtime]) {
+      for (const key of map.keys()) {
+        if (key.startsWith(prefix)) map.delete(key);
+      }
     }
   }
 
@@ -140,13 +280,16 @@ export class LiveHub {
     for (const m of rec.perModel) {
       const key = `${runId}:${m.model}`;
       try {
-        const stat = await fsp.stat(m.conversationPath).catch(() => null);
-        if (stat) {
-          const conv = JSON.parse(await fsp.readFile(m.conversationPath, 'utf8'));
+        const fd = await fsp.open(m.conversationPath, 'r');
+        try {
+          const stat = await fd.stat();
+          const conv = JSON.parse(await fd.readFile('utf8'));
           const count = conv.entries?.length ?? 0;
           this.convSeen.set(key, count);
           this.convMtime.set(key, stat.mtimeMs);
           this.send(ws, { type: 'conversation_snapshot', runId, model: m.model, conversation: conv });
+        } finally {
+          await fd.close();
         }
       } catch { /* ignore */ }
     }
@@ -158,54 +301,39 @@ export class LiveHub {
       if (!rec) continue;
       for (const m of rec.perModel) {
         const key = `${runId}:${m.model}`;
-        let stat: Awaited<ReturnType<typeof fsp.stat>>;
         try {
-          stat = await fsp.stat(m.conversationPath);
-        } catch {
-          continue;
-        }
-        if (this.convMtime.get(key) === stat.mtimeMs) continue;
-        this.convMtime.set(key, stat.mtimeMs);
-        let conv: { entries?: unknown[] };
-        try {
-          conv = JSON.parse(await fsp.readFile(m.conversationPath, 'utf8'));
-        } catch {
-          continue;
-        }
-        const entries = conv.entries ?? [];
-        const seen = this.convSeen.get(key) ?? 0;
-        if (entries.length > seen) {
-          this.convSeen.set(key, entries.length);
-          for (const entry of entries.slice(seen)) {
-            this.broadcastToSubscribers(runId, { type: 'conversation_update', runId, model: m.model, entry });
+          const fd = await fsp.open(m.conversationPath, 'r');
+          try {
+            const stat = await fd.stat();
+            if (this.convMtime.get(key) !== stat.mtimeMs) {
+              this.convMtime.set(key, stat.mtimeMs);
+              const conv = JSON.parse(await fd.readFile('utf8')) as { entries?: unknown[] };
+              const entries = conv.entries ?? [];
+              const seen = this.convSeen.get(key) ?? 0;
+              if (entries.length > seen) {
+                this.convSeen.set(key, entries.length);
+                for (const entry of entries.slice(seen)) {
+                  this.broadcastToSubscribers(runId, { type: 'conversation_update', runId, model: m.model, entry });
+                }
+              }
+            }
+          } finally {
+            await fd.close();
           }
+        } catch {
+          // Conversation may not exist yet — fall through to the log tail.
         }
 
         if (m.logFile) {
           try {
             const logStat = await fsp.stat(m.logFile);
-            if (this.logMtime.get(key) !== logStat.mtimeMs) {
-              const offset = this.logOffset.get(key) ?? 0;
-              const fd = await fsp.open(m.logFile, 'r');
-              try {
-                const { bytesRead, buffer } = await fd.read(
-                  Buffer.alloc(logStat.size - offset),
-                  0,
-                  logStat.size - offset,
-                  offset,
-                );
-                if (bytesRead > 0) {
-                  this.logOffset.set(key, offset + bytesRead);
-                  this.logMtime.set(key, logStat.mtimeMs);
-                  const lines = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/).filter(Boolean);
-                  if (lines.length > 0) {
-                    this.broadcastToSubscribers(runId, { type: 'log_line', runId, model: m.model, lines });
-                  }
-                } else {
-                  this.logMtime.set(key, logStat.mtimeMs);
-                }
-              } finally {
-                await fd.close();
+            const offset = this.logOffset.get(key) ?? 0;
+            if (this.logMtime.get(key) !== logStat.mtimeMs || logStat.size < offset) {
+              const appended = await readLogAppend(m.logFile, offset);
+              this.logOffset.set(key, appended.offset);
+              this.logMtime.set(key, logStat.mtimeMs);
+              if (appended.lines.length > 0) {
+                this.broadcastToSubscribers(runId, { type: 'log_line', runId, model: m.model, lines: appended.lines });
               }
             }
           } catch { /* log tailing is best-effort */ }
@@ -215,21 +343,32 @@ export class LiveHub {
   }
 
   private async finalizeRuns(): Promise<void> {
-    const running = (await listRuns()).filter((r) => r.status === 'running');
-    for (const rec of running) {
+    // 'stopped' runs are included: each runner writes its own model row
+    // 'stopped' when it observes the stop, and a stopped run whose runner died
+    // would otherwise never finalize (no aggregation, no reservation release).
+    // A stopped run whose rows are still non-terminal, or whose cancel signal
+    // is still live inside the grace window, is held (see
+    // attemptFinalizeCandidate); past the grace window its stale rows are
+    // force-stopped so the run can finalize. Stale 'finalizing' runs are
+    // also included so a crash after the claim (aggregation/ledger/
+    // notification) is retried instead of stranding the run; shouldAttemptFinalize
+    // only admits a finalizing run whose claim exceeded FINALIZE_STALE_MS, so
+    // an active finalizer is never raced. finalizeRunByRunId wins or loses the
+    // atomic claim, so racing the runner is harmless; only the winner's call
+    // returns true and gets the run_completed broadcast.
+    let candidates: RunIndexRecord[];
+    try {
+      candidates = (await this.liveRuns()).filter((r) => shouldAttemptFinalize(r));
+    } catch {
+      return;
+    }
+    for (const rec of candidates) {
       try {
-        if (await isRunCompleteByRunId(rec.runId)) {
-          await finalizeRunByRunId(rec.runId, this.logger);
-          this.broadcastToSubscribers(rec.runId, { type: 'run_completed', runId: rec.runId });
-          for (const [key] of this.convSeen) {
-            if (key.startsWith(rec.runId)) {
-              this.convSeen.delete(key);
-              this.convMtime.delete(key);
-              this.logOffset.delete(key);
-              this.logMtime.delete(key);
-            }
-          }
-        }
+        const finalized = await attemptFinalizeCandidate(rec, this.logger);
+        if (!finalized) continue;
+        this.broadcastToSubscribers(rec.runId, { type: 'run_completed', runId: rec.runId });
+        this.cleanupRunState(rec.runId);
+        this.liveRunsCache = null;
       } catch { /* ignore */ }
     }
   }

@@ -4,13 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
+import { modelDirSegment } from '../../src/paths.js';
 import { fetchSync } from '../../src/catalog/sync.js';
 import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import { startRunner } from '../../src/runner.js';
 import { upsertRun } from '../../src/db/runs.js';
 import { ProviderRegistry } from '../../src/providers/index.js';
 import type { CreateAdapterOpts } from '../../src/providers/registry.js';
-import type { ModelAdapter } from '../../src/providers/adapters/base.js';
+import type { ModelAdapter, SendOpts } from '../../src/providers/adapters/base.js';
 import { CircuitBreaker } from '../../src/providers/circuit-breaker.js';
 import { tasksFailed, taskCounter } from '../../src/observability/metrics.js';
 import type { Task, TaskQueue } from '../../src/queue/types.js';
@@ -23,8 +24,46 @@ const MODELS_DEV = {
       cost: { input: 2.5, output: 10 },
       limit: { context: 128000, output: 16384 },
     },
+    'o3': {
+      id: 'o3', name: 'o3',
+      attachment: false, reasoning: true, temperature: false, tool_call: true,
+      cost: { input: 2, output: 8 },
+      limit: { context: 200000, output: 100000 },
+    },
+  } },
+  anthropic: { id: 'anthropic', name: 'Anthropic', env: ['ANTHROPIC_API_KEY'], models: {
+    'claude-3-7-sonnet': {
+      id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet',
+      attachment: true, reasoning: true, temperature: true, tool_call: true,
+      cost: { input: 3, output: 15 },
+      limit: { context: 200000, output: 8192 },
+    },
+    'claude-3.7': {
+      id: 'claude-3.7', name: 'claude-3.7',
+      attachment: false, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 3, output: 15 },
+      limit: { context: 200000, output: 8192 },
+    },
+    'claude-sonnet-4': {
+      id: 'claude-sonnet-4', name: 'Claude Sonnet 4',
+      attachment: true, reasoning: true, temperature: true, tool_call: true,
+      cost: { input: 3, output: 15 },
+      limit: { context: 200000, output: 8192 },
+    },
+  } },
+  'amazon-bedrock': { id: 'amazon-bedrock', name: 'Amazon Bedrock', env: ['AWS_BEDROCK_REGION'], models: {
+    'anthropic.claude-3-sonnet-20240229-v1:0': {
+      id: 'anthropic.claude-3-sonnet-20240229-v1:0', name: 'Claude 3 Sonnet (Bedrock)',
+      attachment: true, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 3, output: 15 },
+      limit: { context: 200000, output: 4096 },
+    },
   } },
 };
+
+// modelDirSegment('openai/gpt-4o') — the runner derives the model directory
+// from the resolved canonical id, not the display name.
+const MODEL_DIR = 'openai_gpt-4o';
 
 const ORIG_ENV = { ...process.env };
 
@@ -63,7 +102,7 @@ function makeTask(overrides: Partial<Task>): Task {
  * the DLQ (which is the queue's own, separately-tested behavior).
  */
 class NoRetryQueue implements TaskQueue {
-  private pending: Task[] = [];
+  protected pending: Task[] = [];
   private inFlight = new Map<string, Task>();
   nacked: Task[] = [];
   acked: string[] = [];
@@ -103,6 +142,38 @@ class NoRetryQueue implements TaskQueue {
   async deadLetterPeek(_limit: number): Promise<Task[]> {
     return [];
   }
+
+  async pendingCount(): Promise<number> {
+    return this.pending.length;
+  }
+
+  async deadLetterRetry(_taskId: string): Promise<boolean> {
+    return false;
+  }
+
+  async close(): Promise<void> {
+    // no-op — in-memory state is lost on process exit
+  }
+}
+
+/**
+ * Same double as NoRetryQueue, but exposes an explicit `requeue` so a test can
+ * redeliver a nacked task with the attempt bump a real queue's retry applies.
+ */
+class RetryOnDemandQueue extends NoRetryQueue {
+  requeue(taskId: string): void {
+    const task = this.nacked.find((t) => t.taskId === taskId);
+    if (!task) throw new Error(`task was not nacked: ${taskId}`);
+    task.attempts += 1;
+    this.pending.push(task);
+  }
+}
+
+/** Same double as NoRetryQueue, but ack always fails after the loop finishes. */
+class AckFailingQueue extends NoRetryQueue {
+  override async ack(_taskId: string): Promise<void> {
+    throw new Error('simulated ack failure');
+  }
 }
 
 test('runner dequeues and nacks an unresolvable model into the DLQ', async () => {
@@ -128,6 +199,13 @@ test('runner dequeues and nacks an unresolvable model into the DLQ', async () =>
     globalThis.fetch = origFetch;
   }
 
+  await upsertRun({
+    runId: 'run-bad', scenario: 'express-rest', models: ['nope/nope'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{ model: 'nope/nope', runId: 'run-bad', status: 'running' } as never],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
   const queue = new InMemoryQueue();
   const ac = new AbortController();
   const runnerDone = startRunner({ queue, signal: ac.signal });
@@ -149,6 +227,16 @@ test('runner dequeues and nacks an unresolvable model into the DLQ', async () =>
     assert.equal(dlq[0]?.taskId, 'bad-model');
     assert.equal(dlq[0]?.attempts, 5, 'nack should have bumped attempts to the DLQ threshold');
     assert.equal(await tasksFailedValue(), 1, 'dead-lettered model-not-found must count as a terminal failure');
+    // The dead-lettered model task is terminal: the model row must reach a
+    // non-running status and the run must self-finalize (no dashboard watcher
+    // in this process) instead of staying wedged in 'running' forever.
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get('run-bad', 'nope/nope') as { status: string } | undefined;
+    assert.notEqual(row?.status, 'running', 'dead-lettered model-not-found must not stay running');
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    await waitFor(async () => (await getRunRecord('run-bad'))?.status === 'completed', 5000, 'run self-finalized');
+    const rec = await getRunRecord('run-bad');
+    assert.equal(rec?.status, 'completed', 'dead-lettered run must be finalized by the runner');
+    assert.notEqual(rec?.perModel[0]?.status, 'running', 'indexed model row must not stay running');
   } finally {
     ac.abort();
     await runnerDone;
@@ -209,7 +297,7 @@ test('runner acks a task for a cancelled run without executing it', async () => 
     perModel: [{ model: 'GPT-4o', runId: 'run3', status: 'running' } as never],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
-  const { stopRun } = await import('../../src/orchestrator/run-lifecycle.js');
+  const { stopRun, isRunCancelled } = await import('../../src/orchestrator/run-lifecycle.js');
   await stopRun('run3');
 
   const queue = new InMemoryQueue();
@@ -224,13 +312,583 @@ test('runner acks a task for a cancelled run without executing it', async () => 
 
   try {
     await waitFor(async () => (await queue.size()) === 0, 8000, 'cancelled task acked');
-    // Cancelled runs must NOT be finalized as completed — status stays running
-    // per-model but the task itself is gone (ack, not execute).
+    // Cancelled runs must NOT be finalized as completed — the ack path never
+    // executes the task. The runner's pre-execution cancel check marks the
+    // per-model row 'stopped' (terminal), so it must not stay 'running'.
     const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get('run3', 'GPT-4o') as { status: string } | undefined;
-    assert.equal(row?.status, 'running', 'cancelled run should not transition to completed');
+    assert.equal(row?.status, 'stopped', 'cancelled run per-model row should be terminal (stopped)');
+    const runRow = getDb().prepare('SELECT status FROM runs WHERE run_id = ?').get('run3') as { status: string } | undefined;
+    assert.equal(runRow?.status, 'stopped', 'cancelled run must not be finalized as completed');
+    assert.equal(await isRunCancelled('run3'), false, 'the runner must clear the cancel signal after acknowledging the stop');
   } finally {
     ac.abort();
     await runnerDone;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner keeps a mid-execution stopRun stopped: halts the loop and never completes', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-midstop-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-midstop';
+  const modelRunDir = path.join(outputs, MODEL_DIR, runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'GPT-4o', runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const { stopRun, isRunCancelled } = await import('../../src/orchestrator/run-lifecycle.js');
+  /** Stops the run from inside the first model send, then returns a tool call
+   *  so the loop attempts a second turn — where onBudgetCheck sees the cancel. */
+  class StoppingAdapter implements ModelAdapter {
+    calls = 0;
+    async sendMessage(): Promise<import('../../src/types.js').ModelResponse> {
+      this.calls++;
+      await stopRun(runId);
+      return {
+        text: 'Stop requested mid-turn.',
+        toolCalls: [{ id: 'stop-tc-1', name: 'list_files', arguments: { path: '.' } }],
+        usage: { prompt: 5, completion: 2, total: 7 },
+        stopReason: 'tool_calls',
+      };
+    }
+    supportsReasoning(): boolean { return false; }
+    supportsPromptCaching(): boolean { return false; }
+  }
+  const fake = new StoppingAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'midstop-task', sessionId: 'midstop-session',
+    model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'stopped task acked');
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get(runId, 'GPT-4o') as { status: string } | undefined;
+    assert.equal(row?.status, 'stopped', 'mid-execution stop must leave run_models stopped');
+    const runRow = getDb().prepare('SELECT status FROM runs WHERE run_id = ?').get(runId) as { status: string } | undefined;
+    assert.equal(runRow?.status, 'stopped', 'mid-execution stop must not be finalized to completed');
+    assert.equal(fake.calls, 1, 'the cancellation check must halt the loop after the stopping turn');
+    const session = getDb().prepare('SELECT status FROM sessions WHERE id = ?').get('midstop-session') as { status: string } | undefined;
+    assert.equal(session?.status, 'active', 'a stopped run must not mark its session completed');
+    assert.equal(await queue.deadLetterSize(), 0, 'stopped task must be acked, not nacked');
+    assert.ok(fs.existsSync(path.join(modelRunDir, 'result.json')), 'terminal artifacts must be written before the ack');
+    assert.equal(await isRunCancelled(runId), false, 'the runner must clear the cancel signal after writing terminal stopped artifacts');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner keeps the stop gate closed when a per-model failure is retryable', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stop-retry-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-stop-retry';
+  const alphaModel = 'GPT-4o';
+  const betaModel = 'claude-3.7';
+  const dirs = new Map<string, string>([
+    [alphaModel, path.join(outputs, MODEL_DIR, runId)],
+    [betaModel, path.join(outputs, modelDirSegment('anthropic/claude-3.7'), runId)],
+  ]);
+  await upsertRun({
+    runId, scenario: 'smoke', models: [alphaModel, betaModel],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [...dirs].map(([model, dir]) => ({
+      model, runId, status: 'running',
+      outputDir: dir, sandboxDir: path.join(dir, 'files'),
+      resultPath: path.join(dir, 'result.json'),
+      conversationPath: path.join(dir, 'conversation.json'),
+      reportPath: path.join(dir, 'report.md'), logFile: path.join(dir, 'runner.log'),
+    })) as never,
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const { stopRun, isRunCancelled, prepareRunFinalization } = await import('../../src/orchestrator/run-lifecycle.js');
+  const { markRunCancelled } = await import('../../src/orchestrator/run-signals.js');
+  const { getRunRecord } = await import('../../src/db/runs.js');
+
+  class CompleteAdapter implements ModelAdapter {
+    async sendMessage(): Promise<import('../../src/types.js').ModelResponse> {
+      return {
+        text: 'done',
+        toolCalls: [{ id: 'alpha-tc', name: 'task_complete', arguments: { summary: 'done' } }],
+        usage: { prompt: 2, completion: 1, total: 3 },
+        stopReason: 'tool_calls',
+      };
+    }
+    supportsReasoning(): boolean { return false; }
+    supportsPromptCaching(): boolean { return false; }
+  }
+  const alphaFake = new CompleteAdapter();
+  let betaAdapterRequests = 0;
+
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    if (modelId === 'claude-3.7') {
+      betaAdapterRequests++;
+      // Arm the stop synchronously (in-memory signal store), then fail the
+      // attempt the way a provider construction error would.
+      void markRunCancelled(runId);
+      void stopRun(runId).catch(() => undefined);
+      throw new Error('transient adapter failure');
+    }
+    return alphaFake;
+  };
+
+  const queue = new RetryOnDemandQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'alpha-task', sessionId: 'alpha-session',
+    model: alphaModel, provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => {
+      const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get(runId, alphaModel) as { status: string } | undefined;
+      return row?.status === 'completed';
+    }, 10000, 'alpha completes');
+
+    await queue.enqueue(makeTask({
+      taskId: 'beta-task', sessionId: 'beta-session',
+      model: betaModel, provider: 'anthropic', scenario: scenarioPath,
+      config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+
+    await waitFor(() => queue.nacked.length === 1, 10000, 'beta retryable nack');
+    const betaRow = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get(runId, betaModel) as { status: string } | undefined;
+    assert.equal(betaRow?.status, 'claimed', 'a retryable failure leaves the row non-terminal so the retry keeps the stop gate closed');
+    assert.equal(betaAdapterRequests, 1, 'beta attempt ran once');
+    assert.equal(await isRunCancelled(runId), true, 'a retryable failure must not clear the stop signal');
+
+    await waitFor(async () => (await getRunRecord(runId))?.status === 'stopped', 5000, 'stopRun marks the run stopped');
+    assert.equal(await prepareRunFinalization(runId), false, 'the pending retry must keep the run unfinalizable');
+    assert.notEqual((await getRunRecord(runId))?.status, 'completed', 'the run must not finalize while the retry is pending');
+
+    // Redeliver the retry: under the stop gate it must be acked before
+    // execution, so the adapter is never built again and no second nack lands.
+    queue.requeue('beta-task');
+    await waitFor(() => queue.acked.includes('beta-task') || betaAdapterRequests > 1, 10000, 'retry resolved');
+    assert.equal(betaAdapterRequests, 1, 'the retry must not execute after the stop');
+    assert.equal(queue.nacked.length, 1, 'the retry must be acked, not nacked');
+    assert.equal(await isRunCancelled(runId), false, 'acking the retry clears the signal');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner keeps a 3-model stop gated until the retryable failure terminalizes', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stop-3model-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-stop-3model';
+  const alphaModel = 'GPT-4o';
+  const betaModel = 'claude-3.7';
+  const gammaModel = 'o3';
+  await upsertRun({
+    runId, scenario: 'smoke', models: [alphaModel, betaModel, gammaModel],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [alphaModel, betaModel, gammaModel].map((model) => ({ model, runId, status: 'running' })) as never,
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const { stopRun, isRunCancelled, prepareRunFinalization } = await import('../../src/orchestrator/run-lifecycle.js');
+  const { markRunCancelled } = await import('../../src/orchestrator/run-signals.js');
+  const { getRunRecord } = await import('../../src/db/runs.js');
+
+  class CompleteAdapter implements ModelAdapter {
+    async sendMessage(): Promise<import('../../src/types.js').ModelResponse> {
+      return {
+        text: 'done',
+        toolCalls: [{ id: 'alpha-tc', name: 'task_complete', arguments: { summary: 'done' } }],
+        usage: { prompt: 2, completion: 1, total: 3 },
+        stopReason: 'tool_calls',
+      };
+    }
+    supportsReasoning(): boolean { return false; }
+    supportsPromptCaching(): boolean { return false; }
+  }
+  const alphaFake = new CompleteAdapter();
+  let betaAdapterRequests = 0;
+
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    if (modelId === 'claude-3.7') {
+      betaAdapterRequests++;
+      // Arm the stop synchronously (in-memory signal store), then fail the
+      // attempt the way a provider construction error would.
+      void markRunCancelled(runId);
+      void stopRun(runId).catch(() => undefined);
+      throw new Error('transient adapter failure');
+    }
+    return alphaFake;
+  };
+
+  const queue = new RetryOnDemandQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+  const statusOf = (model: string): string | undefined =>
+    (getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get(runId, model) as { status: string } | undefined)?.status;
+
+  try {
+    await queue.enqueue(makeTask({
+      taskId: 'alpha-task', sessionId: 'alpha-session',
+      model: alphaModel, provider: 'openai', scenario: scenarioPath,
+      config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+    await waitFor(() => statusOf(alphaModel) === 'completed', 10000, 'alpha completes');
+
+    await queue.enqueue(makeTask({
+      taskId: 'beta-task', sessionId: 'beta-session',
+      model: betaModel, provider: 'anthropic', scenario: scenarioPath,
+      config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+    await waitFor(() => queue.nacked.length === 1, 10000, 'beta retryable nack');
+    assert.equal(statusOf(betaModel), 'claimed', 'a retryable failure leaves the row non-terminal');
+    assert.equal(await isRunCancelled(runId), true, 'a retryable failure must not clear the stop signal');
+
+    // Gamma reaches the stop pre-execution. Its ack is terminal, but beta's
+    // retry is still pending, so the signal must survive the sibling ack and
+    // the watcher gate must stay closed.
+    await queue.enqueue(makeTask({
+      taskId: 'gamma-task', sessionId: 'gamma-session',
+      model: gammaModel, provider: 'openai', scenario: scenarioPath,
+      config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+    await waitFor(() => queue.acked.includes('gamma-task'), 10000, 'gamma stopped pre-execution');
+    assert.equal(statusOf(gammaModel), 'stopped', 'gamma terminalizes as stopped without executing');
+    assert.equal(await isRunCancelled(runId), true, 'a sibling ack must not clear the signal while the retry is pending');
+    assert.equal(await prepareRunFinalization(runId), false, 'the watcher must not finalize while the retry is pending');
+    assert.notEqual((await getRunRecord(runId))?.status, 'completed', 'the run must not finalize while the retry is pending');
+
+    // Redeliver the retry under the still-set stop: the pre-execution cancel
+    // check must intercept and terminalize it before any adapter is built.
+    queue.requeue('beta-task');
+    await waitFor(() => queue.acked.includes('beta-task'), 10000, 'retry intercepted by the stop');
+    assert.equal(betaAdapterRequests, 1, 'no model may execute after the stop');
+    assert.equal(statusOf(betaModel), 'stopped', 'the redelivered retry terminalizes as stopped');
+    assert.equal(await isRunCancelled(runId), false, 'the last terminal row releases the signal');
+    assert.equal(await prepareRunFinalization(runId), true, 'the run is finalizable once every row terminalized');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner terminalizes a failed attempt under an active stop as stopped', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stop-terminal-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-stop-terminal';
+  const alphaModel = 'GPT-4o';
+  const betaModel = 'claude-3.7';
+  // Alpha stays non-terminal: it keeps the stop signal set after beta's
+  // terminal failure, so the stopped row stays observable (no finalize rewrite).
+  await upsertRun({
+    runId, scenario: 'smoke', models: [alphaModel, betaModel],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [
+      { model: alphaModel, runId, status: 'running' },
+      { model: betaModel, runId, status: 'running' },
+    ] as never,
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const { stopRun, isRunCancelled, prepareRunFinalization } = await import('../../src/orchestrator/run-lifecycle.js');
+  const { markRunCancelled } = await import('../../src/orchestrator/run-signals.js');
+  const { getRunRecord } = await import('../../src/db/runs.js');
+
+  let betaAdapterRequests = 0;
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    if (modelId === 'claude-3.7') {
+      betaAdapterRequests++;
+      void markRunCancelled(runId);
+      void stopRun(runId).catch(() => undefined);
+      throw new Error('terminal adapter failure');
+    }
+    throw new Error(`unexpected adapter request for ${modelId}`);
+  };
+
+  const queue = new RetryOnDemandQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  // attempts 4: the nack is terminal (dead-letter), mirroring an exhausted retry budget.
+  await queue.enqueue(makeTask({
+    taskId: 'beta-task', sessionId: 'beta-session',
+    model: betaModel, provider: 'anthropic', scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 4,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 10000, 'terminal beta nack');
+    const betaRow = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get(runId, betaModel) as { status: string } | undefined;
+    assert.equal(betaRow?.status, 'stopped', 'a terminal failure under an active stop is a stop ack');
+    assert.equal(betaAdapterRequests, 1, 'the terminal attempt ran once and dead-lettered');
+    assert.equal(await isRunCancelled(runId), true, 'the sibling model is still running so the signal stays set');
+
+    await waitFor(async () => (await getRunRecord(runId))?.status === 'stopped', 5000, 'stopRun marks the run stopped');
+    assert.equal(await prepareRunFinalization(runId), false, 'the non-terminal sibling must keep the run unfinalizable');
+    assert.notEqual((await getRunRecord(runId))?.status, 'completed', 'the run must not finalize with a sibling still running');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner does not nack a finished session when queue.ack throws', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-ackfail-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-ack-fail';
+  const modelRunDir = path.join(outputs, MODEL_DIR, runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'GPT-4o', runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new AckFailingQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'ack-fail-task', sessionId: 'ack-fail-session',
+    model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => {
+      const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+        .get(runId, 'GPT-4o') as { status: string } | undefined;
+      return row?.status === 'completed';
+    }, 10000, 'run_models completed despite ack failure');
+    assert.equal(queue.nacked.length, 0, 'a finished session must never be nacked');
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    await waitFor(async () => (await getRunRecord(runId))?.status === 'completed', 10000, 'run self-finalized despite ack failure');
+    const session = getDb().prepare('SELECT status FROM sessions WHERE id = ?').get('ack-fail-session') as { status: string } | undefined;
+    assert.equal(session?.status, 'completed', 'session bookkeeping must still run before ack');
+    assert.equal(await queue.deadLetterSize(), 0, 'ack failure must not dead-letter a finished session');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
     await queue.close();
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -275,20 +933,29 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
 
   tasksFailed.reset();
 
+  // attempts 4: the dead-lettering attempt. A retryable missing-key attempt
+  // now nacks and keeps its row non-terminal (see the next test), so the
+  // ack + terminal row + self-finalize assertions below need a terminal attempt.
   await queue.enqueue(makeTask({
     taskId: 'no-key', sessionId: 'no-key-session',
     model: 'GPT-4o', provider: 'openai',
     config: { modelRunId: 'run2', maxTurns: 5 },
+    attempts: 4,
   }));
 
   try {
     await waitFor(async () => (await queue.size()) === 0, 8000, 'task acked');
-    await waitFor(() => {
-      const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get('run2', 'GPT-4o') as { status: string } | undefined;
-      return row?.status === 'failed';
-    }, 5000, 'run_models status failed');
+    // Fail-fast must self-finalize like every other terminal path — it must
+    // not depend on the dashboard watcher being up. (The transient 'failed'
+    // transition is rewritten by patchIndexAfterFinalize, so assert the
+    // post-finalize states.)
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    await waitFor(async () => (await getRunRecord('run2'))?.status === 'completed', 5000, 'fail-fast run self-finalized');
+    const rec = await getRunRecord('run2');
+    assert.equal(rec?.status, 'completed', 'missing-api-key run must be finalized by the runner');
+    assert.notEqual(rec?.perModel[0]?.status, 'running', 'per-model row must not stay running');
 
-    const resultPath = path.join(outputs, 'GPT-4o', 'run2', 'result.json');
+    const resultPath = path.join(outputs, MODEL_DIR, 'run2', 'result.json');
     assert.ok(fs.existsSync(resultPath), 'result.json should exist');
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
     assert.equal(result.success, false);
@@ -297,6 +964,176 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
   } finally {
     ac.abort();
     await runnerDone;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner nacks a retryable missing-API-key fail-fast without terminalizing the row', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  delete process.env.OPENAI_API_KEY;
+  initDb(dbFile);
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  await upsertRun({
+    runId: 'run-retry-key', scenario: 'express-rest', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{ model: 'GPT-4o', runId: 'run-retry-key', status: 'running' } as never],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const queue = new RetryOnDemandQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  tasksFailed.reset();
+
+  await queue.enqueue(makeTask({
+    taskId: 'retry-key', sessionId: 'retry-key-session',
+    model: 'GPT-4o', provider: 'openai',
+    config: { modelRunId: 'run-retry-key', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 8000, 'retryable missing-key nack');
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get('run-retry-key', 'GPT-4o') as { status: string } | undefined;
+    assert.equal(row?.status, 'claimed', 'a retryable missing-key attempt must not terminalize the row');
+    assert.equal(queue.acked.includes('retry-key'), false, 'a retryable missing-key attempt is nacked, not acked');
+    assert.equal(await tasksFailedValue(), 0, 'a retryable missing-key attempt must not count as terminal');
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    assert.notEqual((await getRunRecord('run-retry-key'))?.status, 'completed', 'the run must not finalize while a retry is pending');
+    assert.ok(fs.existsSync(path.join(outputs, MODEL_DIR, 'run-retry-key', 'result.json')), 'fail-fast artifacts still written');
+
+    // Redelivery re-enters the fail-fast path while attempts stay below the
+    // DLQ threshold: still nacked, still non-terminal.
+    queue.requeue('retry-key');
+    await waitFor(() => queue.nacked.length === 2, 8000, 'retry redelivered and nacked');
+    const retryRow = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get('run-retry-key', 'GPT-4o') as { status: string } | undefined;
+    assert.equal(retryRow?.status, 'claimed', 'the redelivered attempt keeps the row non-terminal');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner does not require an API-key secret for Bedrock models (IAM auth)', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-bedrock-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  delete process.env.AWS_BEDROCK_REGION;
+  delete process.env.AWS_REGION;
+  delete process.env.AWS_DEFAULT_REGION;
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const modelId = 'amazon-bedrock/anthropic.claude-3-sonnet-20240229-v1:0';
+  const runId = 'run-bedrock';
+  const modelRunDir = path.join(outputs, modelDirSegment(modelId), runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: [modelId],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: modelId, runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'bedrock-task', sessionId: 'bedrock-session',
+    provider: 'amazon-bedrock', model: modelId, scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'bedrock task acked');
+
+    // Bedrock's catalog envVar is the region and the SDK uses IAM credentials:
+    // an unset AWS_BEDROCK_REGION must not trigger the missing-API-key path.
+    assert.equal(fake.calls, 1, 'bedrock task must execute instead of failing the key check');
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get(runId, modelId) as { status: string } | undefined;
+    assert.equal(row?.status, 'completed', 'bedrock run should complete');
+
+    const resultPath = path.join(modelRunDir, 'result.json');
+    assert.ok(fs.existsSync(resultPath), 'result.json should exist');
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean; errors: string[] };
+    assert.equal(result.success, true);
+    assert.ok(
+      !result.errors.some((e) => e.includes('Missing API key')),
+      'bedrock must not be treated as API-key auth',
+    );
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
     await queue.close();
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -392,9 +1229,11 @@ test('runner does not count a requeued model-not-found nack as tasksFailed', asy
  */
 class FakeAdapter implements ModelAdapter {
   calls = 0;
+  lastOpts: SendOpts | undefined;
 
-  async sendMessage(): Promise<import('../../src/types.js').ModelResponse> {
+  async sendMessage(_messages: import('../../src/types.js').ChatMessage[], _tools: import('../../src/types.js').ToolDefinition[], opts?: SendOpts): Promise<import('../../src/types.js').ModelResponse> {
     this.calls++;
+    this.lastOpts = opts;
     return {
       text: 'I verified the work and I am done.',
       toolCalls: [{ id: 'fake-tc-1', name: 'task_complete', arguments: { summary: 'finished by fake adapter' } }],
@@ -466,12 +1305,12 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
     perModel: [{
       model: 'GPT-4o', runId: 'run-fb0', status: 'running',
-      outputDir: path.join(outputs, 'GPT-4o', 'run-fb0'),
-      sandboxDir: path.join(outputs, 'GPT-4o', 'run-fb0', 'files'),
-      resultPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'result.json'),
-      conversationPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'conversation.json'),
-      reportPath: path.join(outputs, 'GPT-4o', 'run-fb0', 'report.md'),
-      logFile: path.join(outputs, 'GPT-4o', 'run-fb0', 'runner.log'),
+      outputDir: path.join(outputs, MODEL_DIR, 'run-fb0'),
+      sandboxDir: path.join(outputs, MODEL_DIR, 'run-fb0', 'files'),
+      resultPath: path.join(outputs, MODEL_DIR, 'run-fb0', 'result.json'),
+      conversationPath: path.join(outputs, MODEL_DIR, 'run-fb0', 'conversation.json'),
+      reportPath: path.join(outputs, MODEL_DIR, 'run-fb0', 'report.md'),
+      logFile: path.join(outputs, MODEL_DIR, 'run-fb0', 'runner.log'),
     }],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
@@ -491,7 +1330,7 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
   await queue.enqueue(makeTask({
     taskId: 'fb0', sessionId: 'fb0-session',
     model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
-    config: { modelRunId: 'run-fb0', maxTurns: 5 },
+    config: { modelRunId: 'run-fb0', maxTurns: 5, scenarioSource: 'cli' },
     attempts: 4,
   }));
 
@@ -513,6 +1352,203 @@ test('ARENA_MAX_FALLBACK_HOPS=0 stops fallback after the first failure', { timeo
     const rec = await getRunRecord('run-fb0');
     assert.equal(rec?.status, 'completed', 'terminal-failed run must be finalized by the runner');
     assert.equal(rec?.perModel[0]?.status, 'errored', 'dead-lettered model (no result.json) indexed errored');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner rejects a traversal modelRunId before creating output directories', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-traversal-'));
+  const outputs = path.join(tmp, 'outputs');
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(process.env.ARENA_DB_PATH);
+
+  const queue = new NoRetryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'traversal-runid', sessionId: 'traversal-runid-session',
+    model: 'GPT-4o', provider: 'openai',
+    config: { modelRunId: '../../escaped', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 8000, 'task nacked');
+    assert.equal(queue.nacked[0]?.taskId, 'traversal-runid');
+    assert.ok(
+      !fs.existsSync(path.resolve(outputs, '..', 'escaped')),
+      'a traversal modelRunId must not create directories outside outputRoot()',
+    );
+    assert.ok(!fs.existsSync(path.join(outputs, MODEL_DIR)), 'no model output dir may be created');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner rejects an explicit scenario path unless the task is CLI-sourced', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-scenario-path-'));
+  const outputs = path.join(tmp, 'outputs');
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  delete process.env.OPENAI_API_KEY;
+  initDb(process.env.ARENA_DB_PATH);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const queue = new NoRetryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'dashboard-path', sessionId: 'dashboard-path-session',
+    model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: 'run-dashboard-path', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 8000, 'task nacked');
+    assert.equal(queue.nacked[0]?.taskId, 'dashboard-path');
+    assert.ok(!fs.existsSync(path.join(outputs, MODEL_DIR)), 'no output dir for a rejected scenario path');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner accepts display, dotted, and canonical lookup keys and derives contained dirs', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-lookup-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  // openai/gpt-4o is used by the fallback tests above, which deliberately
+  // leave that breaker open; exercise the slash path with an anthropic
+  // canonical id whose breaker is untouched.
+  const cases = [
+    { lookup: 'Claude 3.7 Sonnet', provider: 'anthropic', runId: 'run-display-name', dir: 'anthropic_claude-3-7-sonnet' },
+    { lookup: 'claude-3.7', provider: 'anthropic', runId: 'run-dotted-name', dir: 'anthropic_claude-3.7' },
+    { lookup: 'anthropic/claude-3-7-sonnet', provider: 'anthropic', runId: 'run-canonical-id', dir: 'anthropic_claude-3-7-sonnet' },
+  ];
+
+  for (const c of cases) {
+    const modelRunDir = path.join(outputs, c.dir, c.runId);
+    await upsertRun({
+      runId: c.runId, scenario: 'smoke', models: [c.lookup],
+      startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+      perModel: [{
+        model: c.lookup, runId: c.runId, status: 'running',
+        outputDir: modelRunDir,
+        sandboxDir: path.join(modelRunDir, 'files'),
+        resultPath: path.join(modelRunDir, 'result.json'),
+        conversationPath: path.join(modelRunDir, 'conversation.json'),
+        reportPath: path.join(modelRunDir, 'report.md'),
+        logFile: path.join(modelRunDir, 'runner.log'),
+      }],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+  }
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  for (const c of cases) {
+    await queue.enqueue(makeTask({
+      taskId: `lookup-${c.runId}`, sessionId: `lookup-${c.runId}-session`,
+      model: c.lookup, provider: c.provider, scenario: scenarioPath,
+      config: { modelRunId: c.runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+  }
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 15000, 'lookup-key tasks acked');
+    assert.equal(await queue.deadLetterSize(), 0, 'valid lookup keys must ack, not nack');
+    assert.equal(fake.calls, cases.length, 'each lookup key must execute exactly one turn');
+
+    for (const c of cases) {
+      const resultPath = path.join(outputs, c.dir, c.runId, 'result.json');
+      assert.ok(fs.existsSync(resultPath), `result.json for "${c.lookup}" must exist at ${resultPath}`);
+      assert.ok(
+        !fs.existsSync(path.resolve(outputs, '..', c.dir)),
+        `"${c.lookup}" must not create directories outside outputRoot()`,
+      );
+    }
   } finally {
     ac.abort();
     await runnerDone;
@@ -562,12 +1598,12 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
     perModel: [{
       model: 'GPT-4o', runId: 'run-fb3', status: 'running',
-      outputDir: path.join(outputs, 'GPT-4o', 'run-fb3'),
-      sandboxDir: path.join(outputs, 'GPT-4o', 'run-fb3', 'files'),
-      resultPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'result.json'),
-      conversationPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'conversation.json'),
-      reportPath: path.join(outputs, 'GPT-4o', 'run-fb3', 'report.md'),
-      logFile: path.join(outputs, 'GPT-4o', 'run-fb3', 'runner.log'),
+      outputDir: path.join(outputs, MODEL_DIR, 'run-fb3'),
+      sandboxDir: path.join(outputs, MODEL_DIR, 'run-fb3', 'files'),
+      resultPath: path.join(outputs, MODEL_DIR, 'run-fb3', 'result.json'),
+      conversationPath: path.join(outputs, MODEL_DIR, 'run-fb3', 'conversation.json'),
+      reportPath: path.join(outputs, MODEL_DIR, 'run-fb3', 'report.md'),
+      logFile: path.join(outputs, MODEL_DIR, 'run-fb3', 'runner.log'),
     }],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
@@ -587,7 +1623,7 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
   await queue.enqueue(makeTask({
     taskId: 'fb3', sessionId: 'fb3-session',
     model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
-    config: { modelRunId: 'run-fb3', maxTurns: 5 },
+    config: { modelRunId: 'run-fb3', maxTurns: 5, scenarioSource: 'cli' },
     attempts: 0,
   }));
 
@@ -598,9 +1634,15 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
     const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
       .get('run-fb3', 'GPT-4o') as { status: string } | undefined;
     assert.equal(row?.status, 'completed', 'run should complete via the fallback provider');
-    const resultPath = path.join(outputs, 'GPT-4o', 'run-fb3', 'result.json');
-    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean };
+    const resultPath = path.join(outputs, MODEL_DIR, 'run-fb3', 'result.json');
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean; costUsd: number };
     assert.equal(result.success, true);
+    // claude-sonnet-4 (fallback) is input 3 / output 15: 12*3/1e6 + 6*15/1e6
+    // = 0.000126. Billing at the primary gpt-4o rates (2.5/10) would be 0.00009.
+    assert.ok(
+      Math.abs(result.costUsd - 0.000126) < 1e-12,
+      `fallback calls must be billed at the serving model's rates, got ${result.costUsd}`,
+    );
   } finally {
     ac.abort();
     await runnerDone;
@@ -611,3 +1653,182 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
     process.env = { ...ORIG_ENV };
   }
 });
+
+test('fallback hop receives its own send options, not the primary model’s', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-fallback-opts-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
+  process.env.ARENA_MAX_FALLBACK_HOPS = '3';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  await upsertRun({
+    runId: 'run-fb-opts', scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'GPT-4o', runId: 'run-fb-opts', status: 'running',
+      outputDir: path.join(outputs, MODEL_DIR, 'run-fb-opts'),
+      sandboxDir: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'files'),
+      resultPath: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'result.json'),
+      conversationPath: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'conversation.json'),
+      reportPath: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'report.md'),
+      logFile: path.join(outputs, MODEL_DIR, 'run-fb-opts', 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const created: FakeAdapter[] = [];
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    const fake = new FakeAdapter();
+    created.push(fake);
+    return fake;
+  };
+
+  await seedOpenBreaker('openai', 'gpt-4o');
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal, fallbackChain: FALLBACK_CHAIN });
+
+  await queue.enqueue(makeTask({
+    taskId: 'fb-opts', sessionId: 'fb-opts-session',
+    model: 'GPT-4o', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: 'run-fb-opts', maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+    assert.equal(await queue.deadLetterSize(), 0, 'fallback run must ack, not nack');
+    assert.equal(created.length, 2, 'one primary adapter plus one fallback adapter');
+    assert.equal(created[0]!.calls, 0, 'the open primary circuit must skip the primary adapter');
+    assert.equal(created[1]!.calls, 1, 'the fallback adapter should run the loop');
+    // gpt-4o (primary) has output 16384; claude-sonnet-4 (fallback) has 8192.
+    // The hop must use its own catalog values, not the primary's.
+    assert.deepEqual(created[1]!.lastOpts, { temperature: 0.2, maxTokens: 8192 },
+      'fallback hop must receive its own temperature/maxTokens');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('reasoning-only models do not receive unsupported temperature or max_tokens', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-reasoning-only-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-reasoning-only';
+  const dir = modelDirSegment('openai/o3');
+  const modelRunDir = path.join(outputs, dir, runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: ['o3'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'o3', runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'reasoning-only-task', sessionId: 'reasoning-only-session',
+    model: 'o3', provider: 'openai', scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+    assert.equal(fake.calls, 1, 'reasoning-only task should execute exactly one turn');
+    assert.ok(fake.lastOpts, 'adapter must receive send options');
+    // o3 rejects temperature and max_tokens; the catalog output cap must be
+    // mapped to max_completion_tokens.
+    assert.ok(!('temperature' in fake.lastOpts), 'reasoning-only model must not receive temperature');
+    assert.equal(fake.lastOpts.maxTokens, 100000, 'reasoning-only model keeps its catalog output cap');
+    assert.equal(fake.lastOpts.maxTokensField, 'max_completion_tokens', 'reasoning-only cap uses the OpenAI field name');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+

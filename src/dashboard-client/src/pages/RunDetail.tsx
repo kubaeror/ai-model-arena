@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
-import { useRunLive } from '../hooks/useLive.js';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { useRunLive, useLive } from '../hooks/useLive.js';
 import { getRun, getConversation, getRunFiles, getRunFile, getRunLogs, getRunDiff, stopRun, restartRun, getTrace, type JudgeScoreRow } from '../lib/api.js';
 import { PageShell } from '../components/ui/PageShell';
 import { Button } from '../components/ui/Button';
@@ -26,6 +26,12 @@ const TAB_ITEMS = [
 export function RunDetail() {
   const params = useParams<{ runId: string }>();
   const runId = params.runId!;
+  const [actionError, setActionError] = useState<string | null>(null);
+  const actionMutation = useMutation({
+    mutationFn: (fn: () => Promise<unknown>) => fn(),
+    onSuccess: () => setActionError(null),
+    onError: () => setActionError('Action failed — check server logs'),
+  });
   const runQuery = useQuery({ queryKey: ['run', runId], queryFn: () => getRun(runId), refetchInterval: 5000 });
 
   const models = runQuery.data?.run.perModel ?? [];
@@ -34,6 +40,7 @@ export function RunDetail() {
   const [tab, setTab] = useState<string>('conversation');
 
   const live = useRunLive(runId, activeModel);
+  const { connected } = useLive();
   const convQuery = useQuery({
     queryKey: ['conversation', runId, activeModel],
     queryFn: () => getConversation(runId, activeModel),
@@ -58,9 +65,11 @@ export function RunDetail() {
       breadcrumbs={[{ label: 'Home', to: '/' }, { label: run?.scenario ?? runId }]}
       actions={
         <div className="flex items-center gap-2">
+          <Badge variant={connected ? 'success' : 'neutral'} value={connected ? 'live' : 'offline'} />
+          {actionError && <span className="text-12 text-danger" role="alert">{actionError}</span>}
           <Badge variant={statusTier === 'S' ? 'tier' : 'neutral'} value={statusLabel} />
-          <Button variant="ghost" size="sm" onClick={() => stopRun(runId)} disabled={!live.online}>Stop</Button>
-          <Button variant="ghost" size="sm" onClick={() => restartRun(runId)}>Restart</Button>
+          <Button variant="ghost" size="sm" onClick={() => actionMutation.mutate(() => stopRun(runId))} disabled={!live.online}>Stop</Button>
+          <Button variant="ghost" size="sm" onClick={() => actionMutation.mutate(() => restartRun(runId))}>Restart</Button>
           <a href={`/api/export/runs/${encodeURIComponent(runId)}/csv`} download={`${runId}-conversation.csv`}>
             <Button variant="ghost" size="sm">Export CSV</Button>
           </a>

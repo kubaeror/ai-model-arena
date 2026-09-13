@@ -21,8 +21,8 @@ export function registerQueueRoutes(router: Router, auth: RequestHandler): void 
         const queue = createQueue(provider);
         const [depth, dlqDepth, consumerLag] = await Promise.all([
           queue.size(),
-          queue.deadLetterSize ? queue.deadLetterSize() : Promise.resolve(null),
-          queue.pendingCount ? queue.pendingCount() : Promise.resolve(null),
+          queue.deadLetterSize(),
+          queue.pendingCount(),
         ]);
         queues.push({ provider, depth, dlqDepth, consumerLag, maxReplicas: replicas });
       }
@@ -36,7 +36,7 @@ export function registerQueueRoutes(router: Router, auth: RequestHandler): void 
     try {
       const limit = Math.min(Number(req.query.limit) || 50, 200);
       const queue = createQueue(String(req.params.provider));
-      const tasks = queue.deadLetterPeek ? await queue.deadLetterPeek(limit) : [];
+      const tasks = await queue.deadLetterPeek(limit);
       res.json({ provider: req.params.provider, tasks });
     } catch {
       res.json({ provider: req.params.provider, tasks: [] });
@@ -47,15 +47,11 @@ export function registerQueueRoutes(router: Router, auth: RequestHandler): void 
     try {
       const taskId = String(req.params.id ?? '');
       const queue = createQueue(String(req.params.provider));
-      if (queue.deadLetterRetry) {
-        const retried = await queue.deadLetterRetry(taskId);
-        if (retried) {
-          res.json({ id: taskId, retried: true });
-        } else {
-          res.status(404).json({ id: taskId, retried: false, note: 'task not found in DLQ' });
-        }
+      const retried = await queue.deadLetterRetry(taskId);
+      if (retried) {
+        res.json({ id: taskId, retried: true });
       } else {
-        res.status(501).json({ id: req.params.id, retried: false, note: 'DLQ retry not supported by current queue driver' });
+        res.status(404).json({ id: taskId, retried: false, note: 'task not found in DLQ' });
       }
     } catch {
       res.status(500).json({ id: req.params.id, retried: false, error: INTERNAL_ERROR });

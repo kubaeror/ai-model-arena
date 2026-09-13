@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { Scenarios } from '../../src/pages/Scenarios';
+import * as api from '../../src/lib/api';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
 
@@ -44,5 +45,17 @@ describe('Scenarios', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /New scenario/i })).toBeInTheDocument();
     });
+  });
+
+  it('surfaces scenario delete failures', async () => {
+    vi.mocked(api.deleteScenario).mockRejectedValueOnce(new Error('delete exploded'));
+    renderWithProviders(<Scenarios />);
+    await waitFor(() => {
+      expect(screen.getByText('express-rest')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete express-rest' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('delete exploded');
   });
 });

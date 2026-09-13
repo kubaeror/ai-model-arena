@@ -127,6 +127,8 @@ export async function syncSchedulesToDb(configPath: string, logger?: Logger): Pr
   }
 }
 
+/** Test seam: drop the in-memory config + state so a fresh process can be
+ *  simulated (scheduler tests use this to verify restart behavior). */
 export function resetSchedulesCache(): void {
   schedulesConfig = null;
   scheduleStates.clear();

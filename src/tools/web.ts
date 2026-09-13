@@ -1,11 +1,13 @@
 import { z } from 'zod/v4';
-import { promises as dns } from 'node:dns';
 import { validateArgs } from './util.js';
+import { isPrivateHost, resolvePublicHost } from '../providers/ip-ranges.js';
+import { assertPublicUrl } from '../providers/url-validator.js';
 import type { ToolExecutor } from '../types.js';
 
 const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_FETCH_BYTES = 100_000;
 const MAX_FETCH_BYTES = 1_048_576; // 1 MiB hard cap
+const MAX_SEARCH_BODY_BYTES = 64 * 1024;
 
 // ── argument schemas ─────────────────────────────────────────────────────────
 
@@ -19,122 +21,6 @@ const WebSearchArgs = z.object({
 }).strict();
 
 // ── shared helpers ───────────────────────────────────────────────────────────
-
-/**
- * Private / internal IP ranges and metadata endpoints blocked for SSRF
- * protection. Covers AWS, GCP, Azure, Alibaba, Oracle, and CGNAT.
- */
-const PRIVATE_IP_RANGES = [
-  /^0\.\d+\.\d+\.\d+$/,                       // 0.0.0.0/8 (this-network)
-  /^10\.\d+\.\d+\.\d+$/,                      // 10.0.0.0/8 (private)
-  /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\.\d+\.\d+$/, // 100.64.0.0/10 (CGNAT)
-  /^127\.\d+\.\d+\.\d+$/,                     // 127.0.0.0/8 (loopback)
-  /^169\.254\.\d+\.\d+$/,                     // 169.254.0.0/16 (link-local + cloud metadata)
-  /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/,      // 172.16.0.0/12 (private)
-  /^192\.0\.0\.\d+$/,                         // 192.0.0.0/24 (IETF protocol assignments)
-  /^192\.168\.\d+\.\d+$/,                     // 192.168.0.0/16 (private)
-  /^198\.(1[8-9])\.\d+\.\d+$/,               // 198.18.0.0/15 (benchmark)
-  /^::1$/,                                     // IPv6 loopback
-  /^::$/,                                      // IPv6 unspecified
-  /^fe[89ab][0-9a-f]:/i,                      // IPv6 link-local (fe80::/10)
-  /^fc00:/i,                                   // IPv6 unique-local (fc00::/7)
-  /^fd[0-9a-f]{2}:/i,                         // IPv6 unique-local (fd00::/8)
-  // Note: IPv4-mapped IPv6 (::ffff:1.2.3.4) is handled by the recursive
-  // `mapped` extraction in isPrivateIp() which delegates to the v4 ranges.
-  // Do NOT add a blanket /^::ffff:/ regex here — it would false-positive on
-  // public IPs like ::ffff:8.8.8.8.
-];
-
-/** Cloud metadata service hostnames (in addition to the 169.254.x IPs). */
-const METADATA_HOSTNAMES = new Set([
-  'metadata.google.internal',        // GCP
-  'metadata.google.internal.',       // GCP (trailing-dot FQDN)
-  'metadata.azure.com',              // Azure
-  'metadata.azure.com.',             // Azure (trailing-dot FQDN)
-]);
-
-/**
- * In-cluster / internal DNS suffixes that should be blocked when web access
- * is enabled — these could reach k8s services or internal infrastructure.
- */
-const INTERNAL_DNS_SUFFIXES = [
-  '.local',
-  '.local.',
-  '.internal',
-  '.internal.',
-  '.svc',
-  '.svc.',
-  '.svc.cluster.local',
-  '.svc.cluster.local.',
-  '.kubernetes.local',
-];
-
-function isPrivateIp(ip: string): boolean {
-  // IPv4-mapped IPv6: extract the inner v4 and test ranges too.
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-  if (mapped) {
-    const v4 = mapped[1]!;
-    if (isPrivateIp(v4)) return true;
-  }
-  for (const re of PRIVATE_IP_RANGES) {
-    if (re.test(ip)) return true;
-  }
-  return false;
-}
-
-function isMetadataHostname(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
-  if (METADATA_HOSTNAMES.has(lower)) return true;
-  return false;
-}
-
-function isInternalDnsSuffix(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
-  for (const suffix of INTERNAL_DNS_SUFFIXES) {
-    if (lower === suffix.slice(0, -1) || lower.endsWith(suffix)) return true;
-  }
-  return false;
-}
-
-function isPrivateHost(hostname: string): boolean {
-  if (isMetadataHostname(hostname)) return true;
-  if (isInternalDnsSuffix(hostname)) return true;
-  // Strip IPv6 brackets ([::1] → ::1) for IP-range matching.
-  const stripped = hostname.startsWith('[') && hostname.endsWith(']')
-    ? hostname.slice(1, -1)
-    : hostname;
-  if (isPrivateIp(stripped)) return true;
-  return false;
-}
-
-/**
- * Resolve a hostname via DNS and verify NONE of the resolved IPs are private
- * or internal. This defeats DNS-rebinding SSRF: an attacker-controlled DNS
- * server could return a public IP for the pre-flight check and a private IP
- * for the actual fetch. We resolve ONCE and pin the fetch to that IP.
- *
- * @returns the first resolved public IP (used to pin the fetch), or throws
- *          if all resolved IPs are private.
- */
-async function resolveAndValidateHost(hostname: string): Promise<string> {
-  let addrs: Array<{ address: string; family: number }>;
-  try {
-    addrs = await dns.lookup(hostname, { all: true });
-  } catch (e) {
-    throw new Error(`DNS resolution failed for ${hostname}: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  if (addrs.length === 0) {
-    throw new Error(`No DNS records for ${hostname}`);
-  }
-  const publicIps = addrs.filter((a) => !isPrivateIp(a.address));
-  if (publicIps.length === 0) {
-    throw new Error(
-      `Host ${hostname} resolves only to private/internal addresses ` +
-      `(${addrs.map((a) => a.address).join(', ')}). Blocked for SSRF protection.`,
-    );
-  }
-  return publicIps[0]!.address;
-}
 
 function validateUrl(urlString: string): { ok: true; url: URL } | { ok: false; error: string } {
   let url: URL;
@@ -172,6 +58,44 @@ function stripHtml(html: string): string {
     .replace(/^\s+|\s+$/g, '');
 }
 
+interface CappedBody {
+  text: string;
+  truncated: boolean;
+}
+
+/**
+ * Read at most `maxBytes` from a Response body, then cancel the stream. Keeps
+ * the byte count bounded before any char-level truncation runs.
+ */
+async function readCapped(response: Response, maxBytes: number): Promise<CappedBody> {
+  const body = response.body;
+  if (!body) return { text: '', truncated: false };
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let read = 0;
+  let truncated = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      if (read + value.byteLength > maxBytes) {
+        const keep = Math.max(0, maxBytes - read);
+        text += decoder.decode(value.subarray(0, keep), { stream: true });
+        truncated = true;
+        break;
+      }
+      read += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return { text, truncated };
+}
+
 /**
  * SSRF-safe fetch: resolve the hostname, validate that it does not resolve
  * to a private IP, then fetch pinning to that validated IP (preserving the
@@ -188,7 +112,7 @@ function stripHtml(html: string): string {
  * pre-validation blocks literal private IPs and metadata hostnames, and the
  * manual redirect re-validation blocks redirect-based SSRF. There is a
  * theoretical DNS-rebinding TOCTOU window for HTTPS (between our
- * resolveAndValidateHost call and fetch's own DNS lookup) — closing it
+ * resolvePublicHost call and fetch's own DNS lookup) — closing it
  * fully requires a custom undici dispatcher with a connect hook that pins
  * the socket to the validated IP while setting `servername` for SNI. That
  * is a follow-up; the current implementation blocks the common SSRF vectors
@@ -215,7 +139,7 @@ async function ssrfSafeFetch(
 
     // Resolve + validate the host's DNS. This blocks hostnames that resolve
     // to private IPs (e.g. evil.com -> 169.254.169.254).
-    const pinnedIp = await resolveAndValidateHost(currentUrl.hostname);
+    const pinnedIp = await resolvePublicHost(currentUrl.hostname);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -223,7 +147,7 @@ async function ssrfSafeFetch(
     try {
       if (currentUrl.protocol === 'http:') {
         // HTTP: pin to the validated IP literal (defeats DNS rebinding between
-        // resolveAndValidateHost and the fetch). Preserve the original Host
+        // resolvePublicHost and the fetch). Preserve the original Host
         // header so the server sees the expected virtual host.
         const pinnedUrl = new URL(currentUrl.toString());
         // Build a URL string with the IP literal — the URL hostname setter is
@@ -299,15 +223,10 @@ export const webFetch: ToolExecutor = async (args, ctx) => {
   }
 
   const contentType = response.headers.get('content-type') ?? '';
-  let body: string;
-
-  if (contentType.includes('application/json')) {
-    body = await response.text();
-    if (body.length > maxToRead) body = body.slice(0, maxToRead) + '\n…[truncated]';
-  } else {
-    const raw = await response.text();
-    body = stripHtml(raw);
-    if (body.length > maxToRead) body = body.slice(0, maxToRead) + '\n…[truncated]';
+  const { text: raw, truncated } = await readCapped(response, maxToRead);
+  let body = contentType.includes('application/json') ? raw : stripHtml(raw);
+  if (truncated || body.length > maxToRead) {
+    body = body.slice(0, maxToRead) + '\n…[truncated]';
   }
 
   const header = `[HTTP ${response.status} ${response.statusText}] ${urlCheck.url.toString()}`;
@@ -338,6 +257,11 @@ export const webSearch: ToolExecutor = async (args, ctx) => {
       return { content: 'Error: invalid SEARCH_API_URL template.', isError: true };
     }
     try {
+      await assertPublicUrl(url);
+    } catch (err) {
+      return { content: `Search API target blocked: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+    }
+    try {
       const headers: Record<string, string> = {
         'Accept': 'application/json',
         'User-Agent': 'AI-Model-Arena/1.0',
@@ -347,7 +271,7 @@ export const webSearch: ToolExecutor = async (args, ctx) => {
       const timer = setTimeout(() => controller.abort(), DEFAULT_FETCH_TIMEOUT_MS);
       let response: Response;
       try {
-        response = await fetch(url, { signal: controller.signal, headers });
+        response = await fetch(url, { signal: controller.signal, headers, redirect: 'error' });
       } catch (err) {
         const msg = err instanceof Error && err.name === 'AbortError'
           ? `Search API timed out after ${DEFAULT_FETCH_TIMEOUT_MS}ms.`
@@ -356,8 +280,9 @@ export const webSearch: ToolExecutor = async (args, ctx) => {
       } finally {
         clearTimeout(timer);
       }
-      const body = await response.text();
-      return { content: `[HTTP ${response.status}] ${url}\n${body.length > 5000 ? body.slice(0, 5000) + '\n…[truncated]' : body}`, isError: !response.ok };
+      const { text: body, truncated } = await readCapped(response, MAX_SEARCH_BODY_BYTES);
+      const out = truncated || body.length > 5000 ? body.slice(0, 5000) + '\n…[truncated]' : body;
+      return { content: `[HTTP ${response.status}] ${url}\n${out}`, isError: !response.ok };
     } catch (err) {
       return { content: `Search API error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
     }
@@ -367,7 +292,8 @@ export const webSearch: ToolExecutor = async (args, ctx) => {
   const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
   try {
     const response = await ssrfSafeFetch(new URL(ddgUrl), DEFAULT_FETCH_TIMEOUT_MS);
-    const json: Record<string, unknown> = await response.json() as Record<string, unknown>;
+    const { text: rawJson } = await readCapped(response, MAX_FETCH_BYTES);
+    const json: Record<string, unknown> = JSON.parse(rawJson) as Record<string, unknown>;
 
     const lines: string[] = [];
 

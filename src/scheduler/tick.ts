@@ -26,44 +26,59 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
   for (const row of rows) {
     const scheduleId = row.id;
     const nowMs = new Date(now).getTime();
-    const next = computeNextRun(row.cron, new Date(now));
+    const next = computeNextRun(row.cron);
+    let failureReason = '';
+    if (next === null) {
+      failureReason = `Invalid cron expression: ${row.cron}`;
+      logger.error(failureReason, { scheduleId });
+    }
 
     // Update scheduler state for observability
-    const state = getScheduleState(scheduleId) ?? { id: scheduleId, status: 'idle', consecutiveFailures: 0, totalRuns: 0, totalFailures: 0 };
+    const state = getScheduleState(scheduleId) ?? {
+      id: scheduleId, status: 'idle',
+      consecutiveFailures: row.consecutive_failures ?? 0,
+      totalRuns: row.total_runs ?? 0,
+      totalFailures: row.total_failures ?? 0,
+    };
     updateScheduleState(scheduleId, {
-      status: 'running',
+      status: failureReason ? 'error' : 'running',
       lastRun: now,
-      nextRun: next,
+      ...(next ? { nextRun: next } : {}),
     });
     // Persist to the DB (fire-and-forget, non-fatal) so the dashboard sees
     // the running state even if the pod dies mid-tick.
-    void updateScheduleStatus(scheduleId, { lastStatus: 'running' }).catch(() => undefined);
+    void updateScheduleStatus(scheduleId, { lastStatus: failureReason ? 'error' : 'running', lastError: failureReason || null })
+      .catch(() => undefined);
 
     const models = JSON.parse(String(row.models)) as string[];
     let scheduleFailed = false;
 
-    try {
-      // Route through startRun() for proper budget check + run registration.
-      // Per-schedule options (timeoutMs/forceBudget) come from the YAML config,
-      // not the DB row — join via the in-memory schedule record.
-      const schedule = getSchedule(scheduleId);
-      if (!schedule) {
-        logger.warn('Schedule due in DB but missing from loaded schedules config; options (timeoutMs/forceBudget) will not be applied', { scheduleId });
-      }
-      const runOptions: RunStartOptions = {
-        scenario: String(row.scenario),
-        models,
-        source: 'scheduler',
-      };
-      if (schedule?.options?.timeoutMs !== undefined) runOptions.timeoutMs = schedule.options.timeoutMs;
-      if (schedule?.options?.forceBudget !== undefined) runOptions.forceBudget = schedule.options.forceBudget;
-      await start(runOptions);
-    } catch (err) {
+    if (failureReason) {
       scheduleFailed = true;
-      logger.warn('Schedule startRun failed', {
-        scheduleId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    } else {
+      try {
+        // Route through startRun() for proper budget check + run registration.
+        // Per-schedule options (forceBudget) come from the YAML config, not the
+        // DB row — join via the in-memory schedule record.
+        const schedule = getSchedule(scheduleId);
+        if (!schedule) {
+          logger.warn('Schedule due in DB but missing from loaded schedules config; options (forceBudget) will not be applied', { scheduleId });
+        }
+        const runOptions: RunStartOptions = {
+          scenario: String(row.scenario),
+          models,
+          source: 'scheduler',
+        };
+        if (schedule?.options?.forceBudget !== undefined) runOptions.forceBudget = schedule.options.forceBudget;
+        await start(runOptions);
+      } catch (err) {
+        scheduleFailed = true;
+        failureReason = err instanceof Error ? err.message : String(err);
+        logger.warn('Schedule startRun failed', {
+          scheduleId,
+          error: failureReason,
+        });
+      }
     }
 
     // next_run advances only on success; a failed attempt backs off
@@ -79,13 +94,13 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
       const consecutiveFailures = counters.consecutiveFailures;
       updateScheduleState(scheduleId, {
         status: 'error',
-        lastError: 'Failed to enqueue one or more model tasks',
+        lastError: failureReason,
         ...counters,
       });
       // Seed counters from the DB row so restarts don't regress totals.
       await updateScheduleStatus(scheduleId, {
         lastStatus: 'error',
-        lastError: 'Failed to enqueue one or more model tasks',
+        lastError: failureReason,
         ...nextCounters({ consecutiveFailures: row.consecutive_failures, totalRuns: row.total_runs, totalFailures: row.total_failures }, true),
       });
 
@@ -96,7 +111,9 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
         });
       }
     } else {
-      await updateScheduleRun(scheduleId, now, next);
+      // scheduleFailed implies failureReason set (and next === null), so here
+      // the cron parsed and `next` is a real timestamp.
+      await updateScheduleRun(scheduleId, now, next!);
       ticked.push(scheduleId);
       updateScheduleState(scheduleId, {
         status: 'idle',
@@ -113,11 +130,15 @@ export async function tickScheduler(opts: { now?: Date; startRunFn?: (runOptions
   return { ticked, failures };
 }
 
-function computeNextRun(cron: string, from: Date): string {
+function computeNextRun(cron: string): string | null {
   try {
     const interval = CronExpressionParser.parse(cron);
     return (interval.next().toDate() as Date).toISOString();
-  } catch {
-    return new Date(from.getTime() + 3600000).toISOString();
+  } catch (err) {
+    logger.error('Invalid cron expression', {
+      cron,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
   }
 }

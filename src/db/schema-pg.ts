@@ -41,8 +41,7 @@ export const {
 
 // ── Legacy type exports (kept for existing consumers of these interfaces) ──
 export type {
-  ProviderRow, ModelRow, ModelProviderRow, PricingRow, BenchmarkRow,
-  ModelRuntimeStatRow, CatalogCacheStateRow,
+  ProviderRow, CatalogCacheStateRow,
 } from './schema-types.js';
 
 // ── Drizzle-inferred types (preferred for new code) ─────────────────────

@@ -12,15 +12,28 @@ const KNOWN_TOOLS = [
   'todo_read', 'todo_write', 'task', 'task_complete',
 ];
 
-test('every profile with shellAllowed=true includes run_shell_command in allowedTools', () => {
+test('profiles no longer declare the removed shellAllowed/requiresApproval fields', () => {
   for (const name of EXECUTION_PROFILES) {
-    const profile = PROFILES[name];
-    if (profile.shellAllowed) {
-      assert.ok(
-        profile.allowedTools.includes('run_shell_command'),
-        `${name} allows shell but omits run_shell_command`,
-      );
-    }
+    const profile = PROFILES[name] as unknown as Record<string, unknown>;
+    assert.equal(profile.shellAllowed, undefined, `${name} must not declare shellAllowed`);
+    assert.equal(profile.requiresApproval, undefined, `${name} must not declare requiresApproval`);
+  }
+});
+
+test('shell-enabled profiles include run_shell_command; read-only profiles omit it', () => {
+  const shellEnabled = ['code-generation', 'test-runner', 'networked-research'] as const;
+  const shellDisabled = ['read-only-analysis', 'artifact-validation', 'restricted-production-support'] as const;
+  for (const name of shellEnabled) {
+    assert.ok(
+      PROFILES[name].allowedTools.includes('run_shell_command'),
+      `${name} allows shell but omits run_shell_command`,
+    );
+  }
+  for (const name of shellDisabled) {
+    assert.ok(
+      !PROFILES[name].allowedTools.includes('run_shell_command'),
+      `${name} is read-only but allows run_shell_command`,
+    );
   }
 });
 

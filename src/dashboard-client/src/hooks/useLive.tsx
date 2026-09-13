@@ -35,11 +35,19 @@ function wsUrl(): string {
 
 const EMPTY: RunLiveState = { entries: [], logLines: [], completed: false };
 
+/** `ws.send` throws while CONNECTING/CLOSING, so only send on an OPEN socket. */
+function sendIfOpen(ws: WebSocket | null, payload: unknown): void {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(payload));
+  }
+}
+
 export function LiveProvider({ children }: { children: ReactNode }) {
   const [processes, setProcesses] = useState<ProcStatus[]>([]);
   const [connected, setConnected] = useState(false);
   const [, forceRender] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
+  const subsRef = useRef<Set<string>>(new Set());
   const runStateRef = useRef<Map<string, RunLiveState>>(new Map());
   const rerender = useCallback(() => forceRender((v) => v + 1), []);
 
@@ -48,11 +56,21 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     if (!token) return;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
+    // Stable Set instance; mutations from subscribe/unsubscribe are visible here.
+    const subs = subsRef.current;
 
     const connect = () => {
       const ws = new WebSocket(`${wsUrl()}`, [token, 'access_token']);
       wsRef.current = ws;
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        setConnected(true);
+        // Re-send every subscription after (re)connect: a fresh socket has no
+        // server-side subscriptions, so a dropped connection would otherwise
+        // silently stop live updates until the page remounts.
+        for (const runId of subs) {
+          sendIfOpen(ws, { type: 'subscribe', runId });
+        }
+      };
       ws.onclose = () => {
         setConnected(false);
         if (!disposed) reconnectTimer = setTimeout(connect, 2000);
@@ -111,15 +129,22 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     return () => {
       disposed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      // Best-effort unsubscribe before tearing the socket down; the hook-level
+      // unsubscribe still runs for component-only unmounts.
+      for (const runId of subs) {
+        sendIfOpen(wsRef.current, { type: 'unsubscribe', runId });
+      }
       wsRef.current?.close();
     };
   }, [rerender]);
 
   const subscribe = useCallback((runId: string) => {
-    wsRef.current?.send(JSON.stringify({ type: 'subscribe', runId }));
+    subsRef.current.add(runId);
+    sendIfOpen(wsRef.current, { type: 'subscribe', runId });
   }, []);
   const unsubscribe = useCallback((runId: string) => {
-    wsRef.current?.send(JSON.stringify({ type: 'unsubscribe', runId }));
+    subsRef.current.delete(runId);
+    sendIfOpen(wsRef.current, { type: 'unsubscribe', runId });
   }, []);
   const getRunState = useCallback(
     (runId: string, model: string): RunLiveState => {

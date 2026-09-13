@@ -5,14 +5,14 @@ echo "=== Starting minikube ==="
 minikube start --memory=4096 --cpus=2
 
 echo "=== Installing Sealed Secrets ==="
-kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.40.0/controller.yaml
 echo "Waiting for Sealed Secrets controller to be ready..."
 kubectl -n kube-system wait --for=condition=ready pod -l name=sealed-secrets-controller --timeout=120s
 
 echo "=== Installing KEDA ==="
 helm repo add kedacore https://kedacore.github.io/charts
 helm repo update
-helm upgrade --install keda kedacore/keda -n keda --create-namespace
+helm upgrade --install keda kedacore/keda -n keda --create-namespace --version 2.20.2
 
 echo "=== Checking gVisor availability ==="
 if minikube ssh "which runsc" 2>/dev/null; then

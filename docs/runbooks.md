@@ -224,6 +224,86 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" \
   http://localhost:4000/api/ops/killswitch
 ```
 
+### Unique-Index Migration Pre-Flight (`run_models`, `user_roles`)
+
+The `db-migrate` initContainer runs on every dashboard, runner, and scheduler
+pod boot. SQLite `0019_modern_greymalkin` / Postgres `0012_supreme_rogue`
+create the unique indexes `uq_run_models_run_model (run_id, model)` and
+`uq_user_roles_user_role (user_id, role_id)`. If the target database already
+contains duplicates, index creation aborts, the migration transaction rolls
+back, and new pods crash-loop in `Init`. Check for duplicates before upgrading
+with the preflight script (opens the DB directly, without applying migrations;
+exits non-zero when duplicates are found and prints the dedupe SQL):
+
+```bash
+# SQLite (reads ARENA_DB_PATH, default <OUTPUT_ROOT>/arena.db)
+npx tsx scripts/db/preflight-unique-indexes.ts
+
+# Postgres
+DB_DRIVER=postgres DATABASE_URL=postgres://user:pass@host:5432/arena \
+  npx tsx scripts/db/preflight-unique-indexes.ts
+```
+
+The equivalent manual queries (same SQL on SQLite and Postgres):
+
+```sql
+SELECT run_id, model, COUNT(*) AS n FROM run_models GROUP BY run_id, model HAVING COUNT(*) > 1;
+SELECT user_id, role_id, COUNT(*) AS n FROM user_roles GROUP BY user_id, role_id HAVING COUNT(*) > 1;
+```
+
+If either returns rows, dedupe first. Both tables have no primary key, so the
+delete keeps the most recently written row:
+
+```sql
+-- SQLite
+DELETE FROM run_models WHERE rowid NOT IN (SELECT MAX(rowid) FROM run_models GROUP BY run_id, model);
+DELETE FROM user_roles WHERE rowid NOT IN (SELECT MAX(rowid) FROM user_roles GROUP BY user_id, role_id);
+
+-- Postgres
+DELETE FROM run_models a USING run_models b
+ WHERE a.ctid < b.ctid AND a.run_id = b.run_id AND a.model = b.model;
+DELETE FROM user_roles a USING user_roles b
+ WHERE a.ctid < b.ctid AND a.user_id = b.user_id AND a.role_id = b.role_id;
+```
+
+If duplicate `run_models` rows carry different `status`/`completed_at`/
+`result_path` values, inspect the duplicates and merge fields worth keeping
+before deleting. Then re-run the migration by restarting a workload (a failed
+migration is never journaled, so the initContainer retries) — e.g.
+`kubectl rollout restart deploy/dashboard -n ai-arena` — or run
+`npm run db:migrate` directly.
+
+**Rollback** — to drop the constraints and return to duplicate-tolerant writes
+(e.g. while reconciling a partial deploy), drop the index, dedupe, and re-apply:
+
+```sql
+-- SQLite
+DROP INDEX IF EXISTS uq_run_models_run_model;
+DROP INDEX IF EXISTS uq_user_roles_user_role;
+
+-- Postgres
+DROP INDEX IF EXISTS "uq_run_models_run_model";
+DROP INDEX IF EXISTS "uq_user_roles_user_role";
+```
+
+Then run the dedupe statements above and re-run `npm run db:migrate`; the
+`IF NOT EXISTS` index creation re-applies cleanly.
+
+### Rotating the Dashboard Password (`dashboot.err` history)
+
+The repository history once contained a tracked `dashboot.err` scratch file with
+a generated `DASHBOARD_PASSWORD`. The file is untracked now, but untracking does
+not purge history. If that generated password was ever used in any environment,
+rotate it now: set a new `DASHBOARD_PASSWORD` secret, restart the dashboard
+workload, and treat any credential that was ever committed as compromised.
+Rotating the password alone does not invalidate tokens already issued: sessions
+are stateless JWTs signed with `DASHBOARD_JWT_SECRET` (12h default TTL) and stay
+valid until they expire. After rotating the password, also rotate
+`DASHBOARD_JWT_SECRET` (or explicitly revoke the outstanding tokens) so tokens
+minted before the rotation can no longer be used. Restarting the dashboard
+clears the in-memory revocation blacklist (Redis-backed revocations survive when
+`DASHBOARD_REDIS_URL` is set); it does not invalidate issued tokens.
+
 ### Database Backup (PostgreSQL)
 
 ```bash

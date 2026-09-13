@@ -40,13 +40,25 @@ export interface BudgetState {
     monthly: Record<string, number>;
   }>;
   reservations?: Record<string, Array<{ amount: number; dailyKey: string; expiresAt?: number }>>;
+  /** Per-run reservations (runId -> model -> reserved USD) persisted so ANY
+   *  process (runner, dashboard, CLI) can release the exact amounts at
+   *  finalize — the in-memory map cannot cross the process boundary. */
+  runReservations?: Record<string, Record<string, number>>;
   lastReset: string;
 }
 
+/**
+ * Token usage for billing. `prompt` is the TOTAL input token count and
+ * `cached` / `cacheWrite` are subsets of it, so `computeCost` charges only the
+ * non-cached remainder at the input price (prevents double-billing cached
+ * input on providers whose prompt count already includes it).
+ */
 export interface CostTokenUsage {
   prompt: number;
   completion: number;
   cached?: number;
+  /** Prompt cache write (creation) tokens; billed at the cache_write price. */
+  cacheWrite?: number;
 }
 
 export interface CostBreakdown {

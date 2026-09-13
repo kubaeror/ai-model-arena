@@ -18,7 +18,7 @@ export async function runAnomalyAnalysis(runId: string, logger: Logger): Promise
 /** Write per-model runtime stats back to the SQLite catalog (best-effort, non-fatal). */
 export async function writebackRuntimeStats(runId: string, root: string, logger: Logger): Promise<void> {
   try {
-    await writeRunStats(runId, root);
+    await writeRunStats(runId, root, logger);
   } catch (e) {
     statsWritebackFailures++;
     logger.warn('writeRunStats failed (non-fatal)', { runId, err: e instanceof Error ? e.message : String(e), totalFailures: statsWritebackFailures });

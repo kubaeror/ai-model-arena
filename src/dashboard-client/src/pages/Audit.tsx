@@ -1,11 +1,14 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { Button } from '../components/ui/Button';
 import { listAudit, type AuditEntry } from '../lib/api';
+import { dedupeById } from '../lib/dedupe';
 
 function summarize(v: unknown, max = 200): string {
   if (v === null || v === undefined) return '';
@@ -23,18 +26,33 @@ const columns: Column<AuditEntry>[] = [
   { key: 'before', header: 'Before', render: (r) => <span className="font-mono text-12 text-fg-1 whitespace-pre-wrap">{summarize(r.before)}</span> },
 ];
 
+const PAGE = 50;
+
 export function Audit() {
   const [actor, setActor] = useState<string>('');
   const [action, setAction] = useState<string>('');
-  const { data, isLoading, isError } = useQuery({
+  const {
+    data, isLoading, isError, refetch,
+    fetchNextPage, hasNextPage, isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['audit', actor, action],
-    queryFn: () => listAudit({
+    queryFn: ({ pageParam }) => listAudit({
       actor: actor || undefined,
       action: action || undefined,
-      limit: 200,
+      limit: PAGE,
+      offset: pageParam,
     }),
-    refetchInterval: 15_000,
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.entries.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flatMap((p) => p.entries)).length;
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    // A paged user must not multiply requests: once a second page is loaded the
+    // interval refetches every page, so only keep the first page fresh.
+    refetchInterval: (query) => ((query.state.data?.pages.length ?? 0) > 1 ? false : 15_000),
   });
+  const entries = dedupeById(data?.pages.flatMap((p) => p.entries) ?? []);
 
   return (
     <PageShell title="Audit Log" description="Admin-only — every sensitive action, who did it, and what changed">
@@ -64,15 +82,24 @@ export function Audit() {
           {isLoading ? (
             <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading audit log…</div>
           ) : isError ? (
-            <EmptyState title="Failed to load audit log" />
-          ) : (data?.entries.length ?? 0) === 0 ? (
+            <ErrorState message="Failed to load audit log" onRetry={() => void refetch()} />
+          ) : entries.length === 0 ? (
             <EmptyState title="No audit entries" description="Audit entries appear as users take sensitive actions." />
           ) : (
-            <DataTable
-              columns={columns}
-              data={data?.entries ?? []}
-              getRowId={(r) => String(r.id)}
-            />
+            <>
+              <DataTable
+                columns={columns}
+                data={entries}
+                getRowId={(r) => String(r.id)}
+              />
+              {hasNextPage && (
+                <div className="flex justify-center p-3">
+                  <Button variant="ghost" size="sm" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
+                    {isFetchingNextPage ? 'Loading…' : 'Load more'}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </PanelBody>
       </Panel>

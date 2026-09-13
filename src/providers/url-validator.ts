@@ -1,50 +1,10 @@
 import { URL } from 'node:url';
+import { isPrivateHost, resolvePublicHost, type LookupAll } from './ip-ranges.js';
 
 /**
  * SSRF-safe URL validator for custom provider endpoints.
  * Rejects endpoints that target internal/private infrastructure.
  */
-
-const BLOCKED_HOST_PATTERNS = [
-  /^localhost$/i,
-  /^127\.\d+\.\d+\.\d+$/,
-  /^0\.0\.0\.0$/,
-  /^169\.254\.\d+\.\d+$/,         // link-local
-  /^10\.\d+\.\d+\.\d+$/,           // private A
-  /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/, // private B
-  /^192\.168\.\d+\.\d+$/,          // private C
-  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+$/, // CGNAT
-  /^fc00:/i,                       // IPv6 ULA
-  /^fe80:/i,                       // IPv6 link-local
-  /^::1$/i,                        // IPv6 loopback
-  /^::ffff:127\./,                 // IPv4-mapped loopback
-];
-
-const BLOCKED_SUFFIXES = [
-  '.local',
-  '.internal',
-  '.cluster.local',
-  '.svc',
-  '.svc.cluster.local',
-];
-
-const METADATA_HOSTNAMES = [
-  'metadata.google.internal',
-  '169.254.169.254',
-  'metadata.tencentyun.com',
-];
-
-/** Returns true when a hostname is a private/loopback/internal/metadata address. */
-export function isBlockedProviderHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  for (const pattern of BLOCKED_HOST_PATTERNS) {
-    if (pattern.test(h)) return true;
-  }
-  for (const suffix of BLOCKED_SUFFIXES) {
-    if (h.endsWith(suffix)) return true;
-  }
-  return METADATA_HOSTNAMES.includes(h);
-}
 
 type UrlValidationResult = { ok: true; normalized: string } | { ok: false; error: string };
 
@@ -78,26 +38,41 @@ export function validateProviderUrl(raw: string, allowHttp?: boolean): UrlValida
 
   const hostname = parsed.hostname.toLowerCase();
 
-  // Check against blocked IP patterns
-  for (const pattern of BLOCKED_HOST_PATTERNS) {
-    if (pattern.test(hostname)) {
-      return { ok: false, error: `Provider URL targets a blocked address: ${hostname}` };
-    }
-  }
-
-  // Check against blocked suffixes
-  for (const suffix of BLOCKED_SUFFIXES) {
-    if (hostname.endsWith(suffix)) {
-      return { ok: false, error: `Provider URL targets a blocked domain suffix: ${suffix}` };
-    }
-  }
-
-  // Block metadata endpoints
-  if (hostname === 'metadata.google.internal' ||
-      hostname === '169.254.169.254' ||
-      hostname === 'metadata.tencentyun.com') {
-    return { ok: false, error: `Provider URL targets a cloud metadata endpoint: ${hostname}` };
+  if (isPrivateHost(hostname)) {
+    return { ok: false, error: `Provider URL targets a blocked address: ${hostname}` };
   }
 
   return { ok: true, normalized: parsed.origin };
+}
+
+export interface AssertPublicUrlOptions {
+  lookup?: LookupAll;
+}
+
+/**
+ * Async SSRF gate for one-shot fetches: parse, literal host/range checks, then
+ * DNS-resolve every answer and require all of them public. Throws on failure.
+ */
+export async function assertPublicUrl(raw: string, options: AssertPublicUrlOptions = {}): Promise<URL> {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`Invalid URL: "${raw}"`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Unsupported protocol "${parsed.protocol}". Only http and https are allowed.`);
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error('URLs with credentials (userinfo) are not allowed.');
+  }
+
+  if (isPrivateHost(parsed.hostname)) {
+    throw new Error(`Access to private/internal host "${parsed.hostname}" is blocked.`);
+  }
+
+  await resolvePublicHost(parsed.hostname, options.lookup);
+  return parsed;
 }

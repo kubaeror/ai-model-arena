@@ -24,14 +24,17 @@ test('InMemoryQueue: full enqueue → dequeue → ack lifecycle', async () => {
   await q.close?.();
 });
 
-test('InMemoryQueue: nack requeues with attempt increment', async () => {
+test('InMemoryQueue: nack requeues with attempt increment after backoff', async () => {
   const q = new InMemoryQueue();
   await q.enqueue(mkTask('t2'));
   const dequeued = await q.dequeue(1000);
   assert.ok(dequeued);
   assert.equal(dequeued!.attempts, 0);
   await q.nack('t2', 'transient');
-  assert.equal(await q.size(), 1); // requeued but still in pending/in-flight
+  assert.equal(await q.size(), 1); // requeued but not due (exponential backoff)
+  const notDue = await q.dequeue(150);
+  assert.equal(notDue, null, 'nack backoff must hold the task');
+  await new Promise((r) => setTimeout(r, 2100));
   const dequeued2 = await q.dequeue(1000);
   assert.ok(dequeued2);
   assert.equal(dequeued2!.attempts, 1);
@@ -72,21 +75,19 @@ test('InMemoryQueue: dequeue returns null on timeout', async () => {
 test('deadLetterRetry re-enqueues a dead-lettered task with reset attempts', async () => {
   const q = new InMemoryQueue();
   const t = mkTask('dlq-retry-1');
+  t.attempts = 4;
   await q.enqueue(t);
   const got = await q.dequeue(1);
   assert.equal(got?.taskId, t.taskId);
-  for (let i = 0; i < 5; i++) {
-    await q.dequeue(1); // nack only acts on in-flight tasks, so re-dequeue between nacks
-    await q.nack(t.taskId, 'boom'); // exhausts attempts → DLQ
-  }
+  await q.nack(t.taskId, 'boom'); // attempts 5 → DLQ
   assert.equal(await q.deadLetterSize(), 1);
   const ok = await q.deadLetterRetry(t.taskId);
   assert.equal(ok, true);
   assert.equal(await q.deadLetterSize(), 0);
   const again = await q.dequeue(1);
   assert.equal(again?.taskId, t.taskId);
-  await q.nack(t.taskId, 'once-more'); // attempts were reset: still under 5
-  assert.equal(await q.size(), 1);
+  assert.equal(again?.attempts, 0, 'retry must reset attempts');
+  await q.ack(again!.taskId);
 });
 
 test('deadLetterRetry returns false for unknown task', async () => {

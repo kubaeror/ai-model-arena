@@ -58,3 +58,46 @@ test('compactMessages never drops system+task even when huge', () => {
   assert.equal(messages[0]?.role, 'system');
   assert.equal(messages[1]?.role, 'user');
 });
+
+test('compactMessages terminates and keeps the protected tail when the head alone exceeds the cap', () => {
+  const huge = 'h'.repeat(80_000);
+  const messages: ChatMessage[] = [
+    msg('system', huge),
+    msg('user', huge),
+    msg('assistant', 'a1'),
+    ...Array.from({ length: 8 }, (_, i) => msg('tool', `r${i}`)),
+  ];
+  const headBefore = messages.slice(0, 2).map((m) => m.content);
+  const tailBefore = messages.slice(-4).map((m) => m.content);
+
+  compactMessages(messages, 4);
+
+  assert.deepEqual(messages.slice(0, 2).map((m) => m.content), headBefore);
+  assert.deepEqual(messages.slice(-4).map((m) => m.content), tailBefore);
+  assert.equal(messages.length, 6);
+});
+
+test('compactMessages keeps the protected tail when head plus tail exceed the cap', () => {
+  const headMsg = 'h'.repeat(10_000);
+  const midMsg = 'm'.repeat(60_000);
+  const tailMsg = 'z'.repeat(40_000);
+  const messages: ChatMessage[] = [
+    msg('system', headMsg),
+    msg('user', headMsg),
+    msg('assistant', 'a1'), msg('tool', midMsg),
+    msg('assistant', 'a2'), msg('tool', midMsg),
+    msg('assistant', 'a3'), msg('tool', midMsg),
+    msg('assistant', tailMsg), msg('tool', tailMsg),
+    msg('assistant', tailMsg), msg('tool', tailMsg),
+  ];
+  const totalBefore = messages.reduce((acc, m) => acc + (m.content?.length ?? 0), 0);
+  const tailBefore = messages.slice(-4).map((m) => m.content);
+
+  compactMessages(messages, 4);
+
+  assert.deepEqual(messages.slice(-4).map((m) => m.content), tailBefore);
+  assert.deepEqual(messages.slice(0, 2), [msg('system', headMsg), msg('user', headMsg)]);
+  assert.equal(messages.length, 6);
+  const totalAfter = messages.reduce((acc, m) => acc + (m.content?.length ?? 0), 0);
+  assert.ok(totalAfter < totalBefore, `expected shrink, got ${totalAfter} >= ${totalBefore}`);
+});

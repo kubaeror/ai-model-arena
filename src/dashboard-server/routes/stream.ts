@@ -4,6 +4,7 @@ import { type AuthConfig } from '../auth.js';
 import { createLogger } from '../../logger/pino-logger.js';
 import { verifyWsRequest } from '../ws-auth.js';
 import { getRunRecord } from '../../orchestrator/run-index.js';
+import { canSubscribeToRun } from '../live.js';
 
 /**
  * Session-scoped WebSocket relay for runner ↔ dashboard communication.
@@ -147,13 +148,11 @@ export function attachStreamWs(server: Server, auth: AuthConfig): void {
 
     // Ownership gate: viewers may only subscribe to their own runs; a run
     // with no createdBy (legacy) is default-DENY for non-admins. Prevents
-    // reading another tenant's relayed runner messages by sessionId.
+    // reading another tenant's relayed runner messages by sessionId. Reuses
+    // the LiveHub gate so the /ws and /lobby surfaces share one contract.
     void (async () => {
       const runId = await runIdFromSessionId(sessionId);
-      const rec = runId ? await getRunRecord(runId).catch(() => null) : null;
-      const isAdmin = user.role === 'admin';
-      const ownerIsPresent = typeof rec?.createdBy === 'string' && rec.createdBy.length > 0;
-      const allowed = isAdmin || (ownerIsPresent && user.sub === rec!.createdBy);
+      const allowed = runId ? await canSubscribeToRun(user, runId) : false;
       if (!allowed) {
         logger.warn('Rejected /lobby subscribe: not the run owner', { sub: user.sub, sessionId });
         ws.close(4003, 'Forbidden: not the run owner');

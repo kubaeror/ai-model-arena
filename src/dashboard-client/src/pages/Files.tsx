@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
+import { ErrorState } from '../components/ui/ErrorState';
+import { Button } from '../components/ui/Button';
 import { listFiles, type FileRow } from '../lib/api';
+import { dedupeById } from '../lib/dedupe';
 
 const columns: Column<FileRow>[] = [
   { key: 'path', header: 'Path', render: (r) => <span className="font-mono text-12">{r.path}</span> },
@@ -25,14 +28,28 @@ const columns: Column<FileRow>[] = [
   },
 ];
 
+const PAGE = 50;
+
 export function Files() {
   const navigate = useNavigate();
   const [model, setModel] = useState<string>('');
-  const { data, isLoading, isError } = useQuery({
+  const {
+    data, isLoading, isError, refetch,
+    fetchNextPage, hasNextPage, isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['files', model],
-    queryFn: () => listFiles(model ? { model, limit: 200 } : { limit: 200 }),
-    refetchInterval: 15_000,
+    queryFn: ({ pageParam }) => listFiles({ limit: PAGE, offset: pageParam, ...(model ? { model } : {}) }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.files.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flatMap((p) => p.files)).length;
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    // A paged user must not multiply requests: once a second page is loaded the
+    // interval refetches every page, so only keep the first page fresh.
+    refetchInterval: (query) => ((query.state.data?.pages.length ?? 0) > 1 ? false : 15_000),
   });
+  const files = dedupeById(data?.pages.flatMap((p) => p.files) ?? []);
 
   return (
     <PageShell title="Files" description="Artifacts produced by runs — from the artifact manifests">
@@ -53,16 +70,25 @@ export function Files() {
           {isLoading ? (
             <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading files…</div>
           ) : isError ? (
-            <EmptyState title="Failed to load files" />
-          ) : (data?.files.length ?? 0) === 0 ? (
+            <ErrorState message="Failed to load files" onRetry={() => void refetch()} />
+          ) : files.length === 0 ? (
             <EmptyState title="No files yet" description="Files appear after a run completes and its manifest is recorded." />
           ) : (
-            <DataTable
-              columns={columns}
-              data={data?.files ?? []}
-              getRowId={(r) => String(r.id)}
-              onRowClick={(r) => navigate(`/runs/${encodeURIComponent(r.run_id)}`)}
-            />
+            <>
+              <DataTable
+                columns={columns}
+                data={files}
+                getRowId={(r) => String(r.id)}
+                onRowClick={(r) => navigate(`/runs/${encodeURIComponent(r.run_id)}`)}
+              />
+              {hasNextPage && (
+                <div className="flex justify-center p-3">
+                  <Button variant="ghost" size="sm" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
+                    {isFetchingNextPage ? 'Loading…' : 'Load more'}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </PanelBody>
       </Panel>

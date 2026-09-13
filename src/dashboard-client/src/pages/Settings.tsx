@@ -198,6 +198,8 @@ function WebhooksPanel() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ url: '', events: '', secret: '' });
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const qc = useQueryClient();
 
   const createMut = useMutation({
@@ -208,12 +210,18 @@ function WebhooksPanel() {
       qc.invalidateQueries({ queryKey: ['webhooks'] });
       setShowCreate(false);
       setForm({ url: '', events: '', secret: '' });
+      setCreateError(null);
     },
+    onError: (e) => setCreateError((e as Error).message),
   });
 
   const deleteMut = useMutation({
     mutationFn: async (id: number) => { await deleteWebhook(id); },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['webhooks'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['webhooks'] });
+      setActionError(null);
+    },
+    onError: (e) => setActionError((e as Error).message),
   });
 
   return (
@@ -221,6 +229,9 @@ function WebhooksPanel() {
       <Panel>
         <PanelHeader title="Webhooks" actions={<Button variant="primary" size="sm" onClick={() => setShowCreate(true)}>New Webhook</Button>} />
         <PanelBody>
+          {actionError && (
+            <p role="alert" className="px-2 pt-2 text-12 text-danger">{actionError}</p>
+          )}
           {isLoading ? <Spinner /> : !data || data.length === 0 ? <EmptyState title="No webhooks" /> : (
             <table className="w-full font-mono text-12">
               <thead><tr className="text-fg-1 uppercase border-b border-border">
@@ -248,6 +259,7 @@ function WebhooksPanel() {
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create Webhook">
         <div className="flex flex-col gap-4">
+          {createError && <p role="alert" className="text-danger text-sm">{createError}</p>}
           <label className="flex flex-col gap-1">
             <span className="text-12 text-fg-1">URL</span>
             <input type="text" value={form.url} onChange={e => setForm(f => ({ ...f, url: e.target.value }))} className="rounded-inner border border-border bg-bg-0 px-3 py-2 text-14 text-fg-0" placeholder="https://example.com/webhook" />

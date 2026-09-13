@@ -27,16 +27,38 @@ test('dequeue returns null on timeout', async () => {
   assert.equal(t, null);
 });
 
-test('ack removes; nack requeues', async () => {
+test('ack removes; nack requeues with backoff', async () => {
   const q = new InMemoryQueue();
   await q.enqueue(mkTask('t3'));
   const t = await q.dequeue(100);
   await q.nack(t!.taskId);
   assert.equal(await q.size(), 1);
+  // dueAt backoff (mirrors redis): the nacked task is pending but not due.
+  const notDue = await q.dequeue(150);
+  assert.equal(notDue, null, 'nacked task must not be redequeued before its backoff');
+  await new Promise((r) => setTimeout(r, 2100));
   const t2 = await q.dequeue(100);
   assert.equal(t2?.taskId, 't3');
   await q.ack(t2!.taskId);
   assert.equal(await q.size(), 0);
+});
+
+test('nack dead-letters only once the pre-bump attempt is terminal', async () => {
+  const q = new InMemoryQueue();
+  await q.enqueue({ ...mkTask('t1'), attempts: 3 });
+  const t = await q.dequeue(100);
+  assert.ok(t);
+  await q.nack(t!.taskId);
+  assert.equal(await q.deadLetterSize(), 0, 'attempts 3 → 4 is below maxAttempts 5 and must requeue');
+  assert.equal(await q.size(), 1, 'task is requeued for another attempt');
+
+  const q2 = new InMemoryQueue();
+  await q2.enqueue({ ...mkTask('t2'), attempts: 4 });
+  const t2 = await q2.dequeue(100);
+  assert.ok(t2);
+  await q2.nack(t2!.taskId);
+  assert.equal(await q2.deadLetterSize(), 1, 'attempts 4 → 5 is terminal');
+  assert.equal(await q2.size(), 0);
 });
 
 test('pending counts only waiting tasks, not in-flight', async () => {

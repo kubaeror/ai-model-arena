@@ -67,6 +67,33 @@ test('resumed run continues turn numbering past lastCompletedTurn', async () => 
   assert.equal(result.turnsUsed, 2, 'turnsUsed is the absolute turn number');
 });
 
+test('resumed run aborted before its first turn reports the last completed turn', async () => {
+  const adapter = stubAdapter([]);
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, maxTurns: 5,
+    initialTurn: 3,
+    onBudgetCheck: async () => false,
+  });
+
+  assert.equal(result.stopReason, 'budget_exceeded');
+  assert.equal(result.turnsUsed, 2, 'a pre-turn abort must report the last completed turn, not 0');
+  assert.equal(adapter.sendCalls(), 0);
+});
+
+test('resumed run with startTurn past maxTurns reports the last completed turn', async () => {
+  const adapter = stubAdapter([]);
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, maxTurns: 3,
+    initialTurn: 5,
+  });
+
+  assert.equal(result.stopReason, 'max_turns');
+  assert.equal(result.turnsUsed, 4, 'no turn ran, so the last completed turn is startTurn - 1');
+  assert.equal(adapter.sendCalls(), 0);
+});
+
 test('stops on task_complete', async () => {
   const adapter = stubAdapter([
     { text: '', toolCalls: [{ id: '1', name: TASK_COMPLETE_TOOL, arguments: {} }], usage: { prompt: 10, completion: 5 }, stopReason: 'tool_call' },
@@ -152,6 +179,35 @@ test('no_tool_calls completion calls onTurnComplete once with the turn usage', a
   });
   assert.equal(calls, 1);
   assert.equal(capturedUsage?.prompt, 10);
+});
+
+test('each completed turn flushes the conversation transcript at the turn boundary', async () => {
+  const tool: ToolDefinition = { name: 'list_files', description: '', parameters: {} };
+  const adapter = stubAdapter([
+    { text: '', toolCalls: [{ id: 'tc1', name: 'list_files', arguments: {} }], usage: { prompt: 10, completion: 5 }, stopReason: 'tool_call' },
+    { text: 'done', toolCalls: [], usage: { prompt: 10, completion: 5 }, stopReason: 'no_tool_calls' },
+  ]);
+  let flushes = 0;
+  const conv = {
+    append: () => {},
+    flush: () => { flushes++; },
+    setEnded: () => {},
+  } as unknown as ConversationLogger;
+
+  const flushesAtTurnComplete: number[] = [];
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, tools: [tool],
+    executors: { list_files: async () => ({ content: 'files', isError: false }) },
+    conv,
+    onTurnComplete: async () => { flushesAtTurnComplete.push(flushes); },
+  });
+
+  assert.equal(result.turnsUsed, 2);
+  // onTurnComplete runs just before that turn's flush, so turn N's callback
+  // must observe the N-1 boundary flushes from the turns before it.
+  assert.deepStrictEqual(flushesAtTurnComplete, [0, 1]);
+  assert.equal(flushes, 3, 'one turn-boundary flush per completed turn plus the final flush');
 });
 
 test('api_error does not call onTurnComplete', async () => {

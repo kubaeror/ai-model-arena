@@ -35,7 +35,7 @@ export interface StarterFile {
   content: string;
 }
 
-type RunStatus = 'running' | 'completed' | 'stopped' | 'errored' | 'unknown';
+type RunStatus = 'running' | 'finalizing' | 'completed' | 'stopped' | 'errored' | 'unknown';
 
 export interface RunIndexModelEntry {
   model: string;

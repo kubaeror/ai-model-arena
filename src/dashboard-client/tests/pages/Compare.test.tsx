@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { Compare } from '../../src/pages/Compare';
 
-const { models, benchmarks, apiFetchMock } = vi.hoisted(() => {
+const { apiFetchMock } = vi.hoisted(() => {
   const models = [
     { id: 'gpt-4o', name: 'GPT-4o', family: 'gpt', provider_id: 'openai', attachment: 1, reasoning: 1, temperature: 0, tool_call: 1, context_limit: 128000, output_limit: 16384, status: null, reasoning_options: null, input: 2.5, output: 10, cache_read: 1.25, cache_write: 5 },
     { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet', family: 'claude', provider_id: 'anthropic', attachment: 1, reasoning: 1, temperature: 0, tool_call: 1, context_limit: 200000, output_limit: 64000, status: null, reasoning_options: null, input: 3, output: 15, cache_read: 1.5, cache_write: 7.5 },
@@ -57,8 +57,8 @@ describe('Compare', () => {
     });
 
     const selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[0], { target: { value: 'gpt-4o' } });
-    fireEvent.change(selects[1], { target: { value: 'claude-3-7-sonnet' } });
+    fireEvent.change(selects[0]!, { target: { value: 'gpt-4o' } });
+    fireEvent.change(selects[1]!, { target: { value: 'claude-3-7-sonnet' } });
 
     await waitFor(() => {
       expect(screen.getByText('128,000')).toBeInTheDocument();

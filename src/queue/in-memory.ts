@@ -1,5 +1,5 @@
 import type { Task, TaskQueue } from './types.js';
-import { DEFAULT_MAX_ATTEMPTS } from './types.js';
+import { DEFAULT_MAX_ATTEMPTS, isTerminalAttempt } from './types.js';
 import { queueDepth, dlqDepth } from '../observability/metrics.js';
 
 interface Waiter {
@@ -15,11 +15,14 @@ export class InMemoryQueue implements TaskQueue {
   private dead: Task[] = [];
   private dedupKeys = new Map<string, number>(); // key → timestamp
   private dedupTtlMs = 86_400_000; // 24 hours
+  private retryBackoffMs = 2000;
 
   private _notifyNext(): void {
     const w = this.waiters.shift();
     if (!w) return;
-    const t = this.pending.shift();
+    // Skip not-yet-due tasks (retry backoff) so the in-memory driver honors
+    // dueAt exactly like the redis driver.
+    const t = this.findDue();
     if (t) {
       if (w.timer) clearTimeout(w.timer);
       this.inFlight.set(t.taskId, t);
@@ -29,6 +32,17 @@ export class InMemoryQueue implements TaskQueue {
       // nothing to give, re-queue the waiter
       this.waiters.unshift(w);
     }
+  }
+
+  /** First due task (dueAt unset or in the past), leaving not-due tasks queued. */
+  private findDue(): Task | undefined {
+    for (let i = 0; i < this.pending.length; i++) {
+      const t = this.pending[i]!;
+      if (!t.dueAt || t.dueAt <= Date.now()) {
+        return this.pending.splice(i, 1)[0]!;
+      }
+    }
+    return undefined;
   }
 
   private syncQueueDepth(): void {
@@ -52,7 +66,7 @@ export class InMemoryQueue implements TaskQueue {
   }
 
   async dequeue(timeoutMs = 30000): Promise<Task | null> {
-    const t = this.pending.shift();
+    const t = this.findDue();
     if (t) {
       this.inFlight.set(t.taskId, t);
       this.syncQueueDepth();
@@ -82,14 +96,18 @@ export class InMemoryQueue implements TaskQueue {
     const t = this.inFlight.get(taskId);
     if (t) {
       this.inFlight.delete(taskId);
-      t.attempts += 1;
-      if (t.attempts >= this.maxAttempts) {
+      const preBumpAttempts = t.attempts;
+      t.attempts = preBumpAttempts + 1;
+      if (isTerminalAttempt(preBumpAttempts, this.maxAttempts)) {
         this.dead.push(t);
         this.syncQueueDepth();
         this.syncDlqDepth();
         return;
       }
-      this.pending.unshift(t);
+      // Mirror redis.ts nack: exponential backoff doubling per attempt,
+      // capped at 5 minutes. dueAt keeps the task hidden from dequeue.
+      t.dueAt = Date.now() + Math.min(this.retryBackoffMs * Math.pow(2, t.attempts - 1), 300_000);
+      this.pending.push(t);
       this.syncQueueDepth();
       this._notifyNext();
     }
@@ -117,6 +135,7 @@ export class InMemoryQueue implements TaskQueue {
     const [t] = this.dead.splice(idx, 1);
     if (!t) return false;
     t.attempts = 0;
+    delete t.dueAt; // retried tasks are immediately ready
     this.pending.unshift(t);
     this.syncQueueDepth();
     this.syncDlqDepth();

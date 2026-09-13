@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { auditSafe, requireRole } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
 import { z } from 'zod';
+import { isSafeId, outputRoot, modelDirSegment } from '../../paths.js';
+import { isWithin } from '../../sandbox/sandbox.js';
+import { registerRun } from '../../orchestrator/run-lifecycle.js';
+import type { RunSpec, PerModelSpec } from '../../orchestrator/run-lifecycle.js';
+import { actorSubject } from '../run-ownership.js';
 import { notFound, parseBody } from '../helpers.js';
 import {
   getPromptById, listPromptsWithLatestVersion, listPromptVersions,
   insertPrompt, updatePromptMetadata, deletePromptById,
-  insertPromptVersion, getLatestPromptVersion,
+  insertPromptVersion, getLatestPromptVersion, getPromptVersion,
   getModelByNameOrId,
 } from '../../db/query.js';
 
@@ -163,6 +169,14 @@ export function createPromptsRouter(): Router {
     const parsed = parseBody(schema, req, res, 'promptId, models, and scenario are required');
     if (!parsed) return;
 
+    if (
+      !isSafeId(parsed.scenario)
+      || parsed.models.some((m) => m.includes('/') || m.includes('\\') || m.includes('..'))
+    ) {
+      res.status(400).json({ error: 'scenario must be a bare name; models must not contain path separators or ..' });
+      return;
+    }
+
     const promptRow = await getPromptById(parsed.promptId);
     if (!promptRow) {
       notFound(res, 'Prompt', parsed.promptId);
@@ -170,32 +184,79 @@ export function createPromptsRouter(): Router {
     }
 
     const version = parsed.promptVersion ?? await getLatestPromptVersion(parsed.promptId);
+    // An enqueue that references a missing version would otherwise fail only
+    // later in the runner (nack/DLQ); reject it at the API boundary instead.
+    if (!(await getPromptVersion(parsed.promptId, version))) {
+      res.status(400).json({ error: `Prompt version not found: ${parsed.promptId}@${version}` });
+      return;
+    }
 
     const { createQueue } = await import('../../queue/index.js');
+
+    const actor = actorSubject(req as AuthedRequest);
+    const runId = crypto.randomUUID();
+    const startedAt = now();
+
+    // Resolve each model's output paths the same way createRunSpec (and the
+    // runner) do, so the registered run's per-model rows point at the artifacts
+    // the runner will actually write — finalization reads them back by run id.
+    const perModel: PerModelSpec[] = [];
+    for (const model of parsed.models) {
+      const resolved = await getModelByNameOrId(model);
+      const modelDir = modelDirSegment(resolved?.id || model);
+      const outputDir = path.join(outputRoot(), modelDir, runId);
+      if (!isWithin(outputRoot(), path.resolve(outputDir))) {
+        res.status(400).json({ error: `Model output path escapes the output root: ${model}` });
+        return;
+      }
+      perModel.push({
+        model,
+        providerId: resolved?.provider_id ?? 'unknown',
+        outputDir,
+        sandboxDir: path.join(outputDir, 'files'),
+        resultPath: path.join(outputDir, 'result.json'),
+        conversationPath: path.join(outputDir, 'conversation.json'),
+        reportPath: path.join(outputDir, 'report.md'),
+        logFile: path.join(outputRoot(), modelDir, 'pm2-logs', `${runId}.log`),
+      });
+    }
+
+    // Register before enqueue: the runner mints the session id as
+    // `${runId}-${model}`, so the run row (with its createdBy owner) is what
+    // makes the resulting sessions readable by the enqueuer and hidden from
+    // every other non-admin. ownerless prompt runs were invisible to their
+    // own creator.
+    const spec: RunSpec = {
+      runId,
+      scenario: parsed.scenario,
+      ts: runId,
+      startedAt,
+      models: perModel,
+    };
+    await registerRun(spec, 'dashboard', actor);
 
     const queue = createQueue();
     const tasks: { taskId: string; model: string; provider: string }[] = [];
 
-    for (const model of parsed.models) {
-      const resolved = await getModelByNameOrId(model);
+    for (const pm of perModel) {
       const task = {
-        taskId: crypto.randomUUID(),
-        sessionId: crypto.randomUUID(),
-        provider: resolved?.provider_id ?? 'unknown',
-        model,
+        taskId: `${runId}-${pm.model}`,
+        sessionId: `${runId}-${pm.model}`,
+        provider: pm.providerId,
+        model: pm.model,
         scenario: parsed.scenario,
         promptId: parsed.promptId,
         promptVersion: version,
-        config: {},
+        config: { modelRunId: runId, outputDir: pm.outputDir, scenarioSource: 'dashboard' },
         enqueuedAt: now(),
         attempts: 0,
       };
 
       await queue.enqueue(task);
-      tasks.push({ taskId: task.taskId, model, provider: task.provider });
+      tasks.push({ taskId: task.taskId, model: pm.model, provider: task.provider });
     }
 
-    auditSafe((req as AuthedRequest).user?.sub ?? 'system', 'prompt.enqueue', { type: 'prompt', id: parsed.promptId }, undefined, { count: tasks.length, models: parsed.models });
+    auditSafe(actor ?? 'system', 'prompt.enqueue', { type: 'prompt', id: parsed.promptId }, undefined, { count: tasks.length, models: parsed.models, runId });
 
     res.json({ tasks, count: tasks.length });
   });

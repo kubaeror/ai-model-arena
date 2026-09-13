@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { validateArgs } from './util.js';
 import type { ToolExecutor, ChatMessage, TokenUsage, SubagentConfig } from '../types.js';
 import type { ModelAdapter } from '../providers/adapters/base.js';
-import { runTurnLoop } from '../agent-loop/turn-loop.js';
+import { runTurnLoop, remapStopReason } from '../agent-loop/turn-loop.js';
 import { TASK_COMPLETE_TOOL } from './schema.js';
 
 const TaskArgs = z.object({
@@ -15,11 +15,22 @@ const MAX_SUBAGENT_TOOL_RESULT_CHARS = 30_000;
 const SUBAGENT_TRUNCATE_SUFFIX = '\n…[truncated]';
 
 /**
+ * Minimal ModelAdapter shim over the function-style subagent adapter, so the
+ * tool layer never imports the agent-loop module's dependencies and the
+ * subagent inherits the parent run's capabilities and send options.
+ */
+export function createSubagentAdapter(sub: SubagentConfig): ModelAdapter {
+  return {
+    sendMessage: (msgs, tools, opts) => sub.sendMessage(msgs, tools, opts),
+    supportsReasoning: () => sub.supportsReasoning ?? false,
+    supportsPromptCaching: () => sub.supportsPromptCaching ?? false,
+  };
+}
+
+/**
  * Subagent loop. Delegates the send->tool->loop skeleton to runTurnLoop
  * (src/agent-loop/turn-loop.ts) — the shared primitive that the agent loop
- * uses too. The adapter stays a function on the SubagentConfig so the tool
- * layer never imports the agent-loop module's dependencies, keeping the
- * dependency graph acyclic.
+ * uses too.
  */
 async function runSubagent(
   sub: SubagentConfig,
@@ -38,12 +49,7 @@ async function runSubagent(
     { role: 'user', content: taskPrompt },
   ];
 
-  // Minimal ModelAdapter shim over the function-style subagent adapter.
-  const adapter: ModelAdapter = {
-    sendMessage: (msgs, tools) => sub.sendMessage(msgs, tools),
-    supportsReasoning: () => false,
-    supportsPromptCaching: () => false,
-  };
+  const adapter = createSubagentAdapter(sub);
 
   const result = await runTurnLoop({
     adapter,
@@ -63,6 +69,7 @@ async function runSubagent(
     messages,
     maxTurns: sub.maxTurns,
     taskCompleteToolName: TASK_COMPLETE_TOOL,
+    sendOpts: sub.sendOpts,
     maxToolResultChars: MAX_SUBAGENT_TOOL_RESULT_CHARS,
     truncateSuffix: SUBAGENT_TRUNCATE_SUFFIX,
     unknownToolContent: (name) => `Error: unknown tool "${name}"`,
@@ -74,10 +81,7 @@ async function runSubagent(
     },
   });
 
-  let stopReason = result.stopReason;
-  if (result.turnsUsed >= sub.maxTurns && stopReason === 'unknown') {
-    stopReason = 'max_turns';
-  }
+  const stopReason = remapStopReason(result.stopReason, result.turnsUsed, sub.maxTurns);
 
   const finalAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
   const finalOutput = finalAssistantMsg?.content ?? '';

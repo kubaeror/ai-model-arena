@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { listRuns, getRunRecord } from '../../orchestrator/orchestrator.js';
-import { allowIfRunOwner } from '../run-ownership.js';
+import { allowIfRunOwner, visibleRunsFor } from '../run-ownership.js';
 import type { AuthedRequest } from '../auth.js';
 import { notFound } from '../helpers.js';
 import { readJsonFile } from '../../fs/read-json.js';
@@ -26,7 +26,7 @@ export function createExportRouter(): Router {
   
   router.get('/csv', async (req, res) => {
     const { model: filterModel, scenario: filterScenario, from, to } = req.query as ExportFilters;
-    const runs = await listRuns();
+    const runs = visibleRunsFor(req as AuthedRequest, await listRuns());
     
     let filteredRuns = runs;
     

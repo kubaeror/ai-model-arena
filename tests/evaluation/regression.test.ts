@@ -9,6 +9,8 @@ import {
   runRegressionSuite,
   saveSuiteResult,
   listSavedSuiteResults,
+  getBaselinePath,
+  saveBaselineSnapshot,
 } from '../../src/evaluation/regression.js';
 import type { SuiteResult } from '../../src/evaluation/regression.js';
 import type { RunResult } from '../../src/logger/result-logger.js';
@@ -100,6 +102,96 @@ test('runRegressionSuite generates a unique runId per call', async () => {
   assert.match(first.runId, /^regress-/);
   assert.match(second.runId, /^regress-/);
   assert.notEqual(first.runId, second.runId);
+});
+
+function writeJudgeFile(outputDir: string, result: JudgeResult): void {
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(path.join(outputDir, 'judge_score.json'), JSON.stringify(result, null, 2));
+}
+
+test('runRegressionSuite reads judge results from the stored outputDir for sanitized model dirs', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-regression-dir-'));
+  const baselineDir = path.join(root, 'baselines');
+  const prev = process.env.OUTPUT_ROOT;
+  process.env.OUTPUT_ROOT = root;
+  try {
+    const baseline: BaselineSnapshot = {
+      runId: 'run-1',
+      model: 'claude-3.7',
+      scenario: 'scenario-a',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      metrics: { averageScore: 7, totalTokens: 150, durationMs: 1000, success: true },
+    };
+
+    // Raw keys with spaces / slashes resolve to sanitized dir segments; the old
+    // path.join(outputRoot(), model, runId) derivation misses all of these.
+    const cases = [
+      ['Claude 3.7 Sonnet', 'Claude_3.7_Sonnet'],
+      ['openai/gpt-4o', 'openai_gpt-4o'],
+      ['claude-3.7', 'claude-3.7'],
+    ] as const;
+
+    for (const [model, segment] of cases) {
+      const outputDir = path.join(root, segment, 'run-1');
+      writeJudgeFile(outputDir, judgeResult({ model, runId: 'run-1', averageScore: 7 }));
+      saveBaselineSnapshot(getBaselinePath(baselineDir, model, 'scenario-a'), baseline);
+
+      const suite = await runRegressionSuite(
+        'suite-a',
+        [model],
+        ['scenario-a'],
+        baselineDir,
+        thresholds,
+        async () => ({ result: runResult({ model, runId: 'run-1' }), outputDir }),
+      );
+
+      const sr = suite.scenarioResults[0]!;
+      assert.ok(sr.judge, `${model}: judge result must be found via stored outputDir ${outputDir}`);
+      assert.equal(sr.judge.averageScore, 7);
+      assert.equal(sr.regression?.passed, true, `${model}: no false score-drop regression`);
+      assert.equal(suite.passed, true);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.OUTPUT_ROOT;
+    else process.env.OUTPUT_ROOT = prev;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runRegressionSuite still reads judge results from legacy raw-name output dirs', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-regression-legacy-'));
+  const baselineDir = path.join(root, 'baselines');
+  const prev = process.env.OUTPUT_ROOT;
+  process.env.OUTPUT_ROOT = root;
+  try {
+    const outputDir = path.join(root, 'gpt-4o', 'run-legacy');
+    writeJudgeFile(outputDir, judgeResult({ runId: 'run-legacy', averageScore: 6.5 }));
+    saveBaselineSnapshot(getBaselinePath(baselineDir, 'gpt-4o', 'scenario-a'), {
+      runId: 'run-legacy',
+      model: 'gpt-4o',
+      scenario: 'scenario-a',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      metrics: { averageScore: 6.5, totalTokens: 150, durationMs: 1000, success: true },
+    });
+
+    const suite = await runRegressionSuite(
+      'suite-a',
+      ['gpt-4o'],
+      ['scenario-a'],
+      baselineDir,
+      thresholds,
+      async () => ({ result: runResult({ runId: 'run-legacy' }), outputDir }),
+    );
+
+    const sr = suite.scenarioResults[0]!;
+    assert.ok(sr.judge, 'judge result must be found in the legacy raw-name output dir');
+    assert.equal(sr.judge.averageScore, 6.5);
+    assert.equal(sr.regression?.passed, true);
+  } finally {
+    if (prev === undefined) delete process.env.OUTPUT_ROOT;
+    else process.env.OUTPUT_ROOT = prev;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function sampleSuiteResult(): SuiteResult {

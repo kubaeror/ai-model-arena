@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { LiveProvider } from './hooks/useLive';
 import { SettingsProvider } from './providers/SettingsProvider';
-import { ToastProvider } from './components/ui/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Nav } from './components/Nav';
 import { ScrollToTop } from './components/ScrollToTop';
@@ -66,7 +65,6 @@ function ShellContent() {
   return (
     <LiveProvider>
       <SettingsProvider>
-        <ToastProvider>
           <ScrollToTop />
           <a href="#main-content" className="sr-only focus:not-sr-only">
             Skip to main content
@@ -116,12 +114,10 @@ function ShellContent() {
             onQueryChange={palette.setQuery}
             filtered={palette.filtered}
             selectedIndex={palette.selectedIndex}
-            selected={palette.selected}
             inputRef={palette.inputRef}
             onKeyDown={palette.handleKeyDown}
             onSelect={palette.execute}
           />
-        </ToastProvider>
       </SettingsProvider>
     </LiveProvider>
   );

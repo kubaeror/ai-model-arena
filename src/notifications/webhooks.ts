@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { webhooksForEvent, getWebhookSecret } from '../anomaly-detection/db.js';
+import { assertPublicUrl } from '../providers/url-validator.js';
 import type { Logger } from '../types.js';
 
 /**
@@ -24,6 +25,16 @@ export async function dispatchWebhooks(event: WebhookEvent, payload: unknown, lo
   await Promise.allSettled(
     hooks.map(async (h) => {
       try {
+        await assertPublicUrl(h.url);
+      } catch (err) {
+        logger?.warn('Webhook target blocked', {
+          url: h.url,
+          event,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      try {
         const headers: Record<string, string> = { 'content-type': 'application/json' };
         const secret = await getWebhookSecret(h.id);
         if (secret) {
@@ -33,8 +44,10 @@ export async function dispatchWebhooks(event: WebhookEvent, payload: unknown, lo
         const res = await fetch(h.url, {
           method: 'POST',
           headers,
+          // codeql[js/file-access-to-http] operator-configured URL, validated via assertPublicUrl above
           body,
           signal: AbortSignal.timeout(10_000),
+          redirect: 'error',
         });
         if (!res.ok) {
           logger?.warn('Webhook delivery failed', { url: h.url, event, status: res.status });

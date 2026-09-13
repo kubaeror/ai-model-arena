@@ -10,9 +10,58 @@ const logger = createLogger('ai-arena:audit');
 const ROLE_ORDER = { viewer: 0, editor: 1, admin: 2 } as const;
 type Role = keyof typeof ROLE_ORDER;
 
+/**
+ * Lowest role an API-key permission implies, used to bridge the v1
+ * (X-API-Key) surface onto the routers' role gates. A key holding
+ * `runs:write` passes a `requireRole('editor')` gate, an admin-level
+ * permission passes 'admin' gates, and read-only keys stay viewer-level.
+ */
+const PERMISSION_TO_ROLE: Record<string, Role> = {
+  'models:write': 'editor',
+  'scenarios:write': 'editor',
+  'runs:write': 'editor',
+  'cache:write': 'editor',
+  'anomalies:write': 'editor',
+  'analytics:write': 'editor',
+  'regression:execute': 'editor',
+  'schedules:write': 'admin',
+  'prompts:write': 'admin',
+  'output_mappings:write': 'admin',
+  'sessions:write': 'admin',
+  'secrets:write': 'admin',
+  'users:write': 'admin',
+  'webhooks:write': 'admin',
+  'providers:write': 'admin',
+  'runners:write': 'admin',
+  'queues:write': 'admin',
+  'ops:admin': 'admin',
+};
+
+interface ApiKeyBearer { apiKey?: { permissions?: string[] } }
+
+/** Highest role implied by an API key's declared permissions. Read-only keys
+ *  (no write permissions) still imply viewer — the floor for any valid key. */
+export function apiKeyImpliedRole(apiKey: { permissions?: string[] } | undefined): Role | undefined {
+  if (!apiKey?.permissions?.length) return undefined;
+  let max: Role = 'viewer';
+  for (const p of apiKey.permissions) {
+    const r = PERMISSION_TO_ROLE[p];
+    if (r && ROLE_ORDER[r] > ROLE_ORDER[max]) max = r;
+  }
+  return max;
+}
+
+/** True when the request carries an API key with ops:admin (admin-equivalent). */
+export function apiKeyIsAdmin(req: unknown): boolean {
+  const key = (req as ApiKeyBearer).apiKey;
+  return key?.permissions?.includes('ops:admin') ?? false;
+}
+
 export function requireRole(min: Role): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
-    const role = (req as UserRequest).user?.role as string | undefined;
+    const user = (req as UserRequest).user;
+    const apiKey = (req as unknown as ApiKeyBearer).apiKey;
+    const role = user?.role ?? apiKeyImpliedRole(apiKey);
     const order = ROLE_ORDER as Record<string, number>;
     if (!role || (order[role] ?? -1) < (order[min] ?? 0)) {
       res.status(403).json({ error: 'forbidden' });
@@ -34,34 +83,6 @@ export function isOwnerAllowed(
   if (actor.role === 'admin') return true;
   const ownerIsPresent = typeof ownerId === 'string' && ownerId.length > 0;
   return ownerIsPresent && actor.sub === ownerId;
-}
-
-export function requireOwnership(
-  getOwnerId: (req: Request) => string | undefined,
-): RequestHandler {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const owner = getOwnerId(req);
-    // Default-DENY: previously a missing owner (legacy/migrated resource)
-    // was treated as "allow" (the `if (!owner) return next()` branch), which
-    // let any authenticated viewer read/mutate another tenant's resources
-    // when createdBy was null. Now: a resource with no owner (undefined, null,
-    // or empty string) is only accessible to admins (who can reassign
-    // ownership or delete the orphan). An admin is always allowed. Otherwise
-    // the actor must match the owner exactly.
-    const actor = (req as UserRequest).user;
-    const allowed = isOwnerAllowed({ sub: actor?.sub, role: actor?.role }, owner);
-    if (!allowed) {
-      res.status(403).json({ error: 'forbidden: not the resource owner' });
-      return;
-    }
-    next();
-  };
-}
-
-let auditFailureCount = 0;
-
-export function getAuditFailureCount(): number {
-  return auditFailureCount;
 }
 
 export async function audit(
@@ -89,7 +110,6 @@ export async function audit(
     // fired because `audit()` swallows internally. Log the failure HERE so
     // dropped audit records are observable regardless of the call site
     // (auditSafe fire-and-forget, awaited audit(), or a future caller).
-    auditFailureCount++;
     const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
     logger.error('audit: failed to persist audit entry', { actor, action, entity, ...detail });
     // Increment Prometheus counter if available (non-fatal if prom-client is not loaded)

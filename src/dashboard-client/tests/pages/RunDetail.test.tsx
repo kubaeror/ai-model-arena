@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import userEvent from '@testing-library/user-event';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
 
@@ -23,6 +22,13 @@ vi.mock('../../src/hooks/useLive', () => ({
     logLines: [],
     completed: false,
     online: false,
+  }),
+  useLive: () => ({
+    connected: true,
+    processes: [],
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    getRunState: () => ({ entries: [], logLines: [], completed: false }),
   }),
 }));
 

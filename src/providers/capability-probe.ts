@@ -7,15 +7,20 @@
  */
 
 import type { ProviderDescriptor, ProviderHealthCheck } from './types.js';
+import type { LookupAll } from './ip-ranges.js';
+import { assertPublicUrl } from './url-validator.js';
 
 interface ProbeOpts {
   apiKey?: string;
   timeoutMs?: number;
   /** Model id for probes that need one (anthropic count_tokens). */
   model?: string;
+  /** DNS resolver seam for tests. */
+  lookup?: LookupAll;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_ERROR_BODY_BYTES = 4096;
 
 /**
  * Placeholder model for the anthropic count_tokens probe when no concrete
@@ -57,12 +62,12 @@ export async function probeProvider(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   switch (descriptor.adapter) {
     case 'anthropic':
-      return probeFetch(anthropicProbeRequest(apiBase, opts), timeoutMs);
+      return probeFetch(anthropicProbeRequest(apiBase, opts), timeoutMs, opts.lookup);
     case 'google':
-      return probeFetch(googleProbeRequest(apiBase, opts), timeoutMs);
+      return probeFetch(googleProbeRequest(apiBase, opts), timeoutMs, opts.lookup);
     case 'openai-compat':
     default:
-      return probeOpenAICompatEndpoint(apiBase, opts.apiKey ?? '', timeoutMs);
+      return probeOpenAICompatEndpoint(apiBase, opts.apiKey ?? '', timeoutMs, opts.lookup);
   }
 }
 
@@ -73,6 +78,7 @@ async function probeOpenAICompatEndpoint(
   apiBase: string,
   apiKey: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  lookup?: LookupAll,
 ): Promise<ProviderHealthCheck> {
   return probeFetch({
     method: 'GET',
@@ -81,7 +87,7 @@ async function probeOpenAICompatEndpoint(
       'Authorization': `Bearer ${apiKey}`,
       'Accept': 'application/json',
     },
-  }, timeoutMs);
+  }, timeoutMs, lookup);
 }
 
 /**
@@ -147,28 +153,55 @@ async function probeBedrockEndpoint(
       'Authorization': `Bearer ${gatewayKey}`,
       'Accept': 'application/json',
     },
-  }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts.lookup);
 }
 
-async function probeFetch(req: ProbeRequest, timeoutMs: number): Promise<ProviderHealthCheck> {
+async function readCappedBody(resp: Response, maxBytes = MAX_ERROR_BODY_BYTES): Promise<string> {
+  const body = resp.body;
+  if (!body) {
+    const text = await resp.text().catch(() => 'unknown');
+    return text.length > maxBytes ? `${text.slice(0, maxBytes)}…[truncated]` : text;
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      const remaining = maxBytes - total;
+      chunks.push(value.byteLength > remaining ? value.subarray(0, remaining) : value);
+      total += Math.min(value.byteLength, remaining);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  return total >= maxBytes ? `${text}…[truncated]` : text;
+}
+
+async function probeFetch(req: ProbeRequest, timeoutMs: number, lookup?: LookupAll): Promise<ProviderHealthCheck> {
   const start = Date.now();
   const init: RequestInit = {
     method: req.method,
     headers: req.headers,
     signal: AbortSignal.timeout(timeoutMs),
+    redirect: 'error',
   };
   if (req.body !== undefined) {
     init.body = JSON.stringify(req.body);
   }
 
   try {
+    await assertPublicUrl(req.url, lookup ? { lookup } : undefined);
     const resp = await fetch(req.url, init);
     const latencyMs = Date.now() - start;
     if (!resp.ok) {
       return {
         reachable: false,
         latencyMs,
-        error: `HTTP ${resp.status}: ${await resp.text().catch(() => 'unknown')}`,
+        error: `HTTP ${resp.status}: ${await readCappedBody(resp)}`,
       };
     }
     // Reachability is judged on the status line only: some endpoints (e.g.
