@@ -195,6 +195,53 @@ test('fetchSync records error status on fetch failure', async () => {
   }
 });
 
+test('fetchSync preserves user custom providers on id collision but updates synced rows', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  const model = (id: string) => ({
+    id, name: id, attachment: false, reasoning: false, temperature: true, tool_call: true,
+    cost: { input: 1, output: 2 }, limit: { context: 128000, output: 4096 },
+  });
+  const payload = {
+    synth: { id: 'synth', name: 'Synth From Catalog', api: 'https://api.synth.example/v1', env: ['SYNTH_API_KEY'], models: { 'synth-1': model('synth-1') } },
+    openai: { id: 'openai', name: 'OpenAI From Catalog', api: 'https://api.openai.example/v1', env: ['OPENAI_API_KEY'], models: { 'gpt-4o': model('gpt-4o') } },
+  };
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    const seededAt = '2020-01-01T00:00:00.000Z';
+    const db = getDb();
+    db.prepare(
+      'INSERT INTO providers (id, name, api_base, auth_scheme, env_var, is_builtin, adapter, header_name, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    ).run('synth', 'My Local Synth', 'https://my.local.example/v1', 'bearer', 'MY_SYNTH_KEY', 0, 'openai-compat', null, seededAt, seededAt);
+    db.prepare(
+      'INSERT INTO providers (id, name, api_base, auth_scheme, env_var, is_builtin, adapter, header_name, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    ).run('openai', 'OpenAI Stale', 'https://stale.openai.example/v1', 'bearer', 'OLD_OPENAI_KEY', 1, 'anthropic', null, seededAt, seededAt);
+
+    const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    assert.equal(result.ok, true);
+
+    const custom = db.prepare('SELECT name, api_base, env_var, adapter, is_builtin, updated_at FROM providers WHERE id = ?').get('synth');
+    assert.deepEqual(custom, {
+      name: 'My Local Synth', api_base: 'https://my.local.example/v1',
+      env_var: 'MY_SYNTH_KEY', adapter: 'openai-compat', is_builtin: 0, updated_at: seededAt,
+    });
+
+    const synced = db.prepare('SELECT name, api_base, env_var, adapter, is_builtin FROM providers WHERE id = ?').get('openai');
+    assert.deepEqual(synced, {
+      name: 'OpenAI From Catalog', api_base: 'https://api.openai.example/v1',
+      env_var: 'OPENAI_API_KEY', adapter: 'openai-compat', is_builtin: 1,
+    });
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
 test('fetchSync persists provider api URL as api_base and drops unsafe URLs', async () => {
   const cleanup = freshDb();
   const origFetch = globalThis.fetch;

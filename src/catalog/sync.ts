@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { getDrizzleDb } from '../db/index.js';
 import { isStale } from './cache.js';
 import { ModelsDevResponseSchema, type ModelsDevResponse } from './types.js';
@@ -91,6 +92,9 @@ async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse)
     }).onConflictDoUpdate({
       target: providers.id,
       set: { name: provider.name, api_base: apiBase, env_var: provider.env[0] ?? null, adapter, updated_at: now },
+      // Never let the catalog clobber a user-created provider that happens to
+      // share an id with a models.dev entry.
+      setWhere: eq(providers.is_builtin, 1),
     });
 
     for (const [modelId, model] of Object.entries(provider.models)) {

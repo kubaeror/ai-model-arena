@@ -30,7 +30,7 @@ export async function upsertCustomProvider(
     .limit(1);
   const nextVersion = (currentVersions[0]?.version ?? 0) + 1;
 
-  await db.insert(providers).values({
+  const affected = await db.insert(providers).values({
     id: input.id, name: input.name,
     api_base: input.apiBase ?? null,
     auth_scheme: input.authScheme,
@@ -46,7 +46,12 @@ export async function upsertCustomProvider(
       adapter: input.adapter, header_name: input.headerName ?? null,
       updated_at: now,
     },
-  });
+    // A custom upsert must never take over a catalog-synced row.
+    setWhere: eq(providers.is_builtin, 0),
+  }).returning({ id: providers.id });
+
+  // Conflict with a synced row is a no-op; don't version an update that never applied.
+  if (affected.length === 0) return;
 
   // Save immutable version snapshot
   await db.insert(provider_versions).values({
