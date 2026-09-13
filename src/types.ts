@@ -2,6 +2,8 @@
 // All cross-module interfaces live here so adapters, the agent loop, the
 // sandbox, tools, and the logger speak the same language.
 
+import type { SendOpts } from './providers/adapters/base.js';
+
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
 /** A single tool invocation requested by the model. */
@@ -93,7 +95,13 @@ export interface SubagentConfig {
   /** Max turns the subagent can run. Default: 5. */
   maxTurns: number;
   /** Adapter for LLM calls — injected as a function to avoid circular deps. */
-  sendMessage: (messages: ChatMessage[], tools: ToolDefinition[]) => Promise<ModelResponse>;
+  sendMessage: (messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts) => Promise<ModelResponse>;
+  /** Model-send options inherited from the parent run (temperature/maxTokens/reasoning). */
+  sendOpts?: SendOpts;
+  /** Whether the underlying adapter supports reasoning controls. */
+  supportsReasoning?: boolean;
+  /** Whether the underlying adapter supports prompt caching. */
+  supportsPromptCaching?: boolean;
   /** Logger for the subagent. */
   logger: Logger;
   /** Available tools for the subagent (stripped of task + todo tools). */

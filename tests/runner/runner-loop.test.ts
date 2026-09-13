@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
+import { modelDirSegment } from '../../src/paths.js';
 import { fetchSync } from '../../src/catalog/sync.js';
 import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import { startRunner } from '../../src/runner.js';
@@ -36,6 +37,14 @@ const MODELS_DEV = {
       attachment: false, reasoning: false, temperature: true, tool_call: true,
       cost: { input: 3, output: 15 },
       limit: { context: 200000, output: 8192 },
+    },
+  } },
+  'amazon-bedrock': { id: 'amazon-bedrock', name: 'Amazon Bedrock', env: ['AWS_BEDROCK_REGION'], models: {
+    'anthropic.claude-3-sonnet-20240229-v1:0': {
+      id: 'anthropic.claude-3-sonnet-20240229-v1:0', name: 'Claude 3 Sonnet (Bedrock)',
+      attachment: true, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 3, output: 15 },
+      limit: { context: 200000, output: 4096 },
     },
   } },
 };
@@ -554,6 +563,104 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
   } finally {
     ac.abort();
     await runnerDone;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner does not require an API-key secret for Bedrock models (IAM auth)', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-bedrock-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  delete process.env.AWS_BEDROCK_REGION;
+  delete process.env.AWS_REGION;
+  delete process.env.AWS_DEFAULT_REGION;
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const modelId = 'amazon-bedrock/anthropic.claude-3-sonnet-20240229-v1:0';
+  const runId = 'run-bedrock';
+  const modelRunDir = path.join(outputs, modelDirSegment(modelId), runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: [modelId],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: modelId, runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake = new FakeAdapter();
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  await queue.enqueue(makeTask({
+    taskId: 'bedrock-task', sessionId: 'bedrock-session',
+    provider: 'amazon-bedrock', model: modelId, scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'bedrock task acked');
+
+    // Bedrock's catalog envVar is the region and the SDK uses IAM credentials:
+    // an unset AWS_BEDROCK_REGION must not trigger the missing-API-key path.
+    assert.equal(fake.calls, 1, 'bedrock task must execute instead of failing the key check');
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get(runId, modelId) as { status: string } | undefined;
+    assert.equal(row?.status, 'completed', 'bedrock run should complete');
+
+    const resultPath = path.join(modelRunDir, 'result.json');
+    assert.ok(fs.existsSync(resultPath), 'result.json should exist');
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean; errors: string[] };
+    assert.equal(result.success, true);
+    assert.ok(
+      !result.errors.some((e) => e.includes('Missing API key')),
+      'bedrock must not be treated as API-key auth',
+    );
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
     await queue.close();
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });

@@ -39,7 +39,6 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
   }
 
   private buildBody(messages: ChatMessage[], tools: ToolDefinition[], opts: SendOpts | undefined): Record<string, unknown> {
-    let system: string | undefined;
     const conversational: Array<Record<string, unknown>> = [];
     const cacheIndices = new Set<number>();
     let targetCount = 0;
@@ -54,11 +53,17 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
         targetCount++;
       }
     }
+    const systemBlocks: Array<Record<string, unknown>> = [];
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       if (!m) continue;
       if (m.role === 'system') {
-        system = (system ?? '') + (m.content ?? '');
+        // System messages stay distinct text blocks (Anthropic's block form)
+        // so multiple prompts are not glued together and each keeps its cache
+        // breakpoint instead of being flattened into an uncached string.
+        const block: Record<string, unknown> = { type: 'text', text: m.content ?? '' };
+        if (cacheIndices.has(i)) block.cache_control = { type: 'ephemeral' };
+        systemBlocks.push(block);
         continue;
       }
       const role = m.role === 'tool' ? 'user' : m.role;
@@ -84,7 +89,7 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
       max_tokens: opts?.maxTokens ?? 4096,
       messages: conversational,
     };
-    if (system) body.system = system;
+    if (systemBlocks.length > 0) body.system = systemBlocks;
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (tools.length > 0) body.tools = tools.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters }));
     if (opts?.reasoning && opts.reasoning.type === 'budget_tokens') {

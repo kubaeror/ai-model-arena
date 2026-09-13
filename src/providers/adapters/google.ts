@@ -4,7 +4,7 @@ import { BaseAdapter, DEFAULT_RETRY, throwForStatus } from './base.js';
 import type { ProviderDescriptor } from '../types.js';
 import type { CreateAdapterOpts } from '../registry.js';
 
-interface GeminiPart { text?: string; functionCall?: { name: string; args: Record<string, unknown> } }
+interface GeminiPart { text?: string; thought?: boolean; functionCall?: { name: string; args: Record<string, unknown> } }
 interface GeminiCandidate { content: { parts: GeminiPart[] }; finishReason?: string }
 interface GeminiResponse {
   candidates?: GeminiCandidate[];
@@ -83,7 +83,9 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
   private parseResponse(json: GeminiResponse): ModelResponse {
     const candidate = json.candidates?.[0];
     const parts = candidate?.content.parts ?? [];
-    const text = parts.map(p => p.text ?? '').join('') || null;
+    // Thought parts carry the model's internal reasoning; only visible parts
+    // belong in the assistant text.
+    const text = parts.filter(p => !p.thought).map(p => p.text ?? '').join('') || null;
     const toolCalls: ToolCall[] = parts
       .filter(p => p.functionCall)
       .map(p => ({ id: `google_${p.functionCall!.name}`, name: p.functionCall!.name, arguments: p.functionCall!.args ?? {} }));

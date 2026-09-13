@@ -24,6 +24,47 @@ test('BedrockAdapter constructs in native SigV4 mode without gateway', () => {
   delete process.env.AWS_BEDROCK_REGION;
 });
 
+test('BedrockAdapter merges every system message and forwards inference options', async () => {
+  process.env.AWS_BEDROCK_REGION = 'us-east-1';
+  const adapter = new BedrockAdapter(bedrockDescriptor, 'anthropic.claude-3-sonnet-20240229-v1:0', { logger: stubLogger() });
+
+  let capturedInput: Record<string, unknown> = {};
+  const fakeClient = {
+    send: async (command: { input?: Record<string, unknown> }) => {
+      capturedInput = command.input ?? {};
+      return {
+        output: { message: { role: 'assistant', content: [{ text: 'done' }] } },
+        usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
+        stopReason: 'end_turn',
+      };
+    },
+  };
+
+  // Load the SDK (so ConverseCommand exists) and replace the fresh client with
+  // a stub before any network call happens.
+  const probe = adapter as unknown as { getClient(): Promise<unknown>; client: unknown; clientCreatedAt: number };
+  await probe.getClient();
+  probe.client = fakeClient;
+  probe.clientCreatedAt = Date.now();
+
+  try {
+    const result = await adapter.sendMessage([
+      { role: 'system', content: 'You are first.' },
+      { role: 'system', content: 'You are second.' },
+      { role: 'user', content: 'hello' },
+    ], [], { temperature: 0.4, maxTokens: 512 });
+
+    assert.deepEqual(capturedInput.system, [{ text: 'You are first.\n\nYou are second.' }]);
+    assert.deepEqual(capturedInput.inferenceConfig, { temperature: 0.4, maxTokens: 512 });
+    assert.deepEqual(capturedInput.messages, [{ role: 'user', content: [{ text: 'hello' }] }]);
+    assert.equal(result.text, 'done');
+    assert.equal(result.usage.prompt, 7);
+    assert.equal(result.usage.completion, 3);
+  } finally {
+    delete process.env.AWS_BEDROCK_REGION;
+  }
+});
+
 test('BedrockAdapter throws in gateway mode without key', () => {
   process.env.AWS_BEDROCK_GATEWAY_URL = 'https://gateway.example.com';
   delete process.env.AWS_BEDROCK_GATEWAY_KEY;

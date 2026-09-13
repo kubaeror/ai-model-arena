@@ -30,6 +30,7 @@ import type { CostTokenUsage } from './cost-tracking/types.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled, dispatchBudgetExceeded } from './orchestrator/run-lifecycle.js';
 import { activeTasks, taskCounter, taskDuration, tasksClaimed, tasksFailed, startMetricsServer } from './observability/metrics.js';
 import type { ToolExecutionContext, TokenUsage, ChatMessage, Logger } from './types.js';
+import type { SendOpts } from './providers/adapters/base.js';
 import type { StoredMessage } from './session/store.js';
 import { closeDb } from './db/index.js';
 import { secretStore } from './secrets/store.js';
@@ -490,7 +491,11 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       // Ported from worker.ts: fail fast on a missing API key instead of
       // letting the adapter surface a confusing auth error mid-loop.
-      if (resolved.envVar && !secretStore.get(resolved.envVar)) {
+      const descriptor = registry.get(resolved.providerId);
+      // Bedrock authenticates via SigV4/IAM credentials and its catalog
+      // "envVar" is the region: it has no API-key secret to require.
+      const keylessProvider = descriptor?.adapter === 'bedrock' || descriptor?.authScheme === 'none';
+      if (!keylessProvider && resolved.envVar && !secretStore.get(resolved.envVar)) {
         const msg = `Missing API key: set ${resolved.envVar} in your .env`;
         logger.error(msg, { model: modelName });
         writeResultJson(path.join(runOutputDir, 'result.json'), {
@@ -519,10 +524,21 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       let currentProvider = resolved.providerId;
       let currentModel = resolved.apiModelId;
-      const descriptor = registry.get(currentProvider);
       const apiKey = descriptor?.envVar ? secretStore.get(descriptor.envVar) : undefined;
       const executors = buildToolExecutors();
       let adapter = registry.createAdapter(currentProvider, currentModel, { apiKey, logger: logger.child('adapter') });
+
+      // Scenario-configured reasoning plus the catalog sampling/output limits.
+      // These must ride in sendOpts (not only as span attributes) so every
+      // adapter — and the subagent — receives them.
+      const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
+      const temperature = (resolved.temperature as number) ?? 0;
+      const maxTokens = (resolved.maxTokens as number) ?? 0;
+      const sendOpts: SendOpts = {
+        temperature,
+        maxTokens,
+        ...(reasoningOpt ? { reasoning: reasoningOpt } : {}),
+      };
 
       // Wire subagent support: strip recursive tools
       const subagentToolNames = new Set(['task', 'todo_read', 'todo_write']);
@@ -533,7 +549,10 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       }
       toolCtx.subagent = {
         maxTurns: 5,
-        sendMessage: (msgs, tools) => adapter.sendMessage(msgs, tools),
+        sendMessage: (msgs, tools, opts) => adapter.sendMessage(msgs, tools, opts),
+        sendOpts,
+        supportsReasoning: adapter.supportsReasoning(),
+        supportsPromptCaching: adapter.supportsPromptCaching(),
         logger: logger.child('subagent'),
         tools: subagentTools,
         executors: subagentExecutors,
@@ -546,9 +565,6 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       };
       let loopResult;
       let maxFallbackHops = resolveMaxFallbackHops();
-      // Scenario-configured reasoning, converted to the adapter union shape.
-      // Undefined when the scenario sets nothing — no behavior change.
-      const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
 
       // Transition to 'running'
       try {
@@ -584,9 +600,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             initialTurn,
             provider: currentProvider,
             model: currentModel,
-            temperature: (resolved.temperature as number) ?? 0,
-            maxTokens: (resolved.maxTokens as number) ?? 0,
-            sendOpts: reasoningOpt ? { reasoning: reasoningOpt } : undefined,
+            temperature,
+            maxTokens,
+            sendOpts,
             scenario: scenarioName,
             runId: modelRunId,
             modelConfig: modelName,

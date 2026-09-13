@@ -126,7 +126,10 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
           return { role, content: [{ text: m.content ?? '' }] };
         });
 
-      const systemMessage = messages.find(m => m.role === 'system');
+      const systemTexts = messages
+        .filter(m => m.role === 'system')
+        .map(m => m.content ?? '')
+        .filter(text => text.length > 0);
 
       const toolConfig = tools.length > 0 ? {
         tools: tools.map(t => ({
@@ -147,8 +150,8 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
         messages: converseMessages,
         inferenceConfig,
       };
-      if (systemMessage?.content) {
-        input.system = [{ text: systemMessage.content }];
+      if (systemTexts.length > 0) {
+        input.system = [{ text: systemTexts.join('\n\n') }];
       }
       if (toolConfig) {
         input.toolConfig = toolConfig;

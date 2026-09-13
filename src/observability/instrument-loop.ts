@@ -31,17 +31,24 @@ function wrapAdapter(
   o: { provider: string; model: string; temperature: number; maxTokens: number },
 ): ModelAdapter {
   const sendMessage = async (messages: ChatMessage[], tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> => {
+    // The loop-level temperature/maxTokens are the defaults; an explicit send
+    // option wins. They must be forwarded, not only recorded as span fields.
+    const effectiveOpts: SendOpts = {
+      temperature: opts?.temperature ?? o.temperature,
+      maxTokens: opts?.maxTokens ?? o.maxTokens,
+      ...(opts?.reasoning ? { reasoning: opts.reasoning } : {}),
+    };
     return withSpan<ModelResponse>('chat', 'chat', recorder, {
       'gen_ai.system': o.provider,
       'gen_ai.request.model': o.model,
-      'gen_ai.request.temperature': o.temperature,
-      'gen_ai.request.max_tokens': o.maxTokens,
+      'gen_ai.request.temperature': effectiveOpts.temperature,
+      'gen_ai.request.max_tokens': effectiveOpts.maxTokens,
     }, async (spanId) => {
       if (captureContentEnabled()) {
         recorder.addAttribute(spanId, 'gen_ai.prompt', truncate(JSON.stringify(messages.slice(-4)), 8000));
       }
       const start = Date.now();
-      const response = await adapter.sendMessage(messages, tools, opts);
+      const response = await adapter.sendMessage(messages, tools, effectiveOpts);
       recorder.addAttribute(spanId, 'gen_ai.usage.input_tokens', response.usage?.prompt ?? 0);
       recorder.addAttribute(spanId, 'gen_ai.usage.output_tokens', response.usage?.completion ?? 0);
       recorder.addAttribute(spanId, 'duration_ms', Date.now() - start);

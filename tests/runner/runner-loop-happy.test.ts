@@ -11,7 +11,8 @@ import { startRunner } from '../../src/runner.js';
 import { upsertRun } from '../../src/db/runs.js';
 import { ProviderRegistry } from '../../src/providers/index.js';
 import type { CreateAdapterOpts } from '../../src/providers/registry.js';
-import type { ModelAdapter } from '../../src/providers/adapters/base.js';
+import type { ModelAdapter, SendOpts } from '../../src/providers/adapters/base.js';
+import type { ChatMessage, ModelResponse, ToolDefinition } from '../../src/types.js';
 import { taskCounter, taskDuration, activeTasks } from '../../src/observability/metrics.js';
 
 const MODELS_DEV = {
@@ -47,9 +48,11 @@ async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 10000
  */
 class FakeAdapter implements ModelAdapter {
   calls = 0;
+  lastOpts: SendOpts | undefined;
 
-  async sendMessage(): Promise<import('../../src/types.js').ModelResponse> {
+  async sendMessage(_messages: ChatMessage[], _tools: ToolDefinition[], opts?: SendOpts): Promise<ModelResponse> {
     this.calls++;
+    this.lastOpts = opts;
     return {
       text: 'I verified the work and I am done.',
       toolCalls: [{ id: 'fake-tc-1', name: 'task_complete', arguments: { summary: 'finished by fake adapter' } }],
@@ -209,6 +212,10 @@ test('runner executes a full happy path: ack, session, result.json, metrics, com
     // 6. The fake adapter was consulted exactly once — the loop really ran
     //    through the send→tool→complete path and stopped.
     assert.equal(fake.calls, 1, 'fake adapter should be called exactly once');
+
+    // 7. Catalog temperature/output limit are wired through to the adapter,
+    //    not just recorded as span attributes.
+    assert.deepEqual(fake.lastOpts, { temperature: 0.2, maxTokens: 16384 }, 'adapter must receive temperature and maxTokens');
   } finally {
     ac.abort();
     await runnerDone;
