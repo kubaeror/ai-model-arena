@@ -39,3 +39,9 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    groups:
+      # codeql init and analyze must always move together — separate PRs
+      # make each one fail CI with a version-mismatch error.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
