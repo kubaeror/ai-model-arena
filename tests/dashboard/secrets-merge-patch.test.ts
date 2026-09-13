@@ -25,7 +25,7 @@ function captureK8sRequests(captured: CapturedK8sRequest[]): HttpLibrary {
       return new Observable(Promise.resolve(new ResponseContext(
         200,
         { 'content-type': 'application/json' },
-        { text: async () => '{}', binary: async () => Buffer.from('') },
+        { text: async () => '{}', binary: async () => Buffer.from(''), stream: () => null },
       )));
     },
   };
