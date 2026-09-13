@@ -556,22 +556,33 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           durationMs: 0, turnsUsed: 0, maxTurns: 0, totalToolCalls: 0, toolsCalled: [],
           tokenUsage: {}, stopReason: 'setup_error', errors: [msg], success: false,
         });
-        // Awaited before maybeFinalizeRun below: on Postgres the pg.Pool
-        // spreads queries across connections, so a fire-and-forget UPDATE
-        // could lose the race against the isRunCompleteByRunId SELECT.
-        try {
-          await transitionTaskState(runId, task.model, 'failed', runnerId);
-        } catch (err: unknown) {
-          const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
-          logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
+        // A retryable attempt must not terminalize its row: the nack below
+        // requeues the task, so a non-terminal row keeps the stop gate closed
+        // until the redelivery resolves (mirrors the catch path). It also lets
+        // a key fixed before the retry lands be picked up instead of losing
+        // the task to acked setup_error. Only a terminal attempt acks and
+        // terminalizes.
+        const terminalFailure = isTerminalFailure(task.attempts);
+        if (terminalFailure) {
+          // Awaited before maybeFinalizeRun below: on Postgres the pg.Pool
+          // spreads queries across connections, so a fire-and-forget UPDATE
+          // could lose the race against the isRunCompleteByRunId SELECT.
+          try {
+            await transitionTaskState(runId, task.model, 'failed', runnerId);
+          } catch (err: unknown) {
+            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+            logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: task!.taskId, modelRunId: runId, ...detail });
+          }
+          taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
+          taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
+          taskCounted = true;
+          tasksFailed.inc();
+          await acknowledgeStop(runId, logger);
+          await queue.ack(task!._redisId ?? task!.taskId);
+          void maybeFinalizeRun(runId, logger).catch(() => undefined);
+        } else {
+          await queue.nack(task!._redisId ?? task!.taskId, msg);
         }
-        taskCounter.inc({ model: modelName, scenario: scenarioName, status: 'failed' });
-        taskDuration.observe({ model: modelName, scenario: scenarioName }, (Date.now() - startedAt.getTime()) / 1000);
-        taskCounted = true;
-        tasksFailed.inc();
-        await acknowledgeStop(runId, logger);
-        await queue.ack(task!._redisId ?? task!.taskId);
-        void maybeFinalizeRun(runId, logger).catch(() => undefined);
         continue;
       }
 
@@ -906,52 +917,64 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         // without TypeScript narrowing it back to `T | null` across the await
         // boundary (the `if (task)` guard does not propagate into callbacks).
         const failedTask = task;
-        // Best-effort state transition to 'failed'. If THIS throws, the run
-        // would stay stuck in 'running' forever — log at error level so
-        // operators can see the dropped transition (previously this was
-        // `.catch(() => {})` which hid the failure entirely).
-        // The transition MUST be awaited before maybeFinalizeRun below: on
-        // Postgres the pg.Pool spreads queries across connections, so a
-        // fire-and-forget UPDATE here could lose the race against the
-        // isRunCompleteByRunId SELECT in maybeFinalizeRun running on another
-        // connection — the run would still read 'running' and the
-        // self-finalize would be skipped with no retry (SQLite's synchronous
-        // driver serializes this and cannot reproduce the race).
         const failedRunId = failedTask.config.modelRunId as string ?? failedTask.sessionId;
-        // A retryable failure must not ack the stop: the nack below requeues
-        // the task and the still-set signal keeps the finalize gate closed
-        // until the retry lands. A terminal attempt under an active stop is
-        // this model's stop ack, so it terminalizes as 'stopped' like the
-        // success path (mirrors maybeFinalizeRun's terminal-failure guard).
+        // A retryable failure must not terminalize its row — nor ack the stop:
+        // the nack below requeues the task, and a non-terminal row keeps the
+        // stop gate closed until the retry lands (a sibling's ack must not
+        // release and finalize the run while this model still has a delivery
+        // pending). A terminal attempt under an active stop is this model's
+        // stop ack, so it terminalizes as 'stopped' like the success path
+        // (mirrors maybeFinalizeRun's terminal-failure guard); every other
+        // terminal attempt writes 'failed'.
         const terminalFailure = isTerminalFailure(failedTask.attempts);
-        const stoppedFailure = terminalFailure
-          && ((await isRunCancelled(failedRunId)) || (await getRunRecord(failedRunId))?.status === 'stopped');
-        try {
-          await transitionTaskState(failedRunId, failedTask.model, stoppedFailure ? 'stopped' : 'failed', runnerId);
-        } catch (err: unknown) {
-          const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
-          logger.error(`transitionTaskState to "${stoppedFailure ? 'stopped' : 'failed'}" failed — run may be stuck in "running" state`, { taskId: failedTask.taskId, modelRunId: failedRunId, ...detail });
-        }
         if (terminalFailure) {
+          // Best-effort state transition. If THIS throws, the run would stay
+          // stuck in 'running' forever — log at error level so operators can
+          // see the dropped transition (previously this was `.catch(() => {})`
+          // which hid the failure entirely).
+          // The transition MUST be awaited before maybeFinalizeRun below: on
+          // Postgres the pg.Pool spreads queries across connections, so a
+          // fire-and-forget UPDATE here could lose the race against the
+          // isRunCompleteByRunId SELECT in maybeFinalizeRun running on another
+          // connection — the run would still read 'running' and the
+          // self-finalize would be skipped with no retry (SQLite's synchronous
+          // driver serializes this and cannot reproduce the race).
+          let stoppedFailure = false;
+          try {
+            stoppedFailure = (await isRunCancelled(failedRunId))
+              || (await getRunRecord(failedRunId))?.status === 'stopped';
+          } catch (err: unknown) {
+            // A failed stop-state read must not skip the nack below or escape
+            // this catch: treat it as a plain (not stopped) failure.
+            logger.warn('Failed to read stop state for a terminal failure (treating as not stopped)', {
+              taskId: failedTask.taskId, modelRunId: failedRunId, error: String(err),
+            });
+          }
+          try {
+            await transitionTaskState(failedRunId, failedTask.model, stoppedFailure ? 'stopped' : 'failed', runnerId);
+          } catch (err: unknown) {
+            const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
+            logger.error(`transitionTaskState to "${stoppedFailure ? 'stopped' : 'failed'}" failed — run may be stuck in "running" state`, { taskId: failedTask.taskId, modelRunId: failedRunId, ...detail });
+          }
           // The dead-lettered attempt is this model's stop ack: if it was the
           // last sibling, clear the signal so the run is released.
           await acknowledgeStop(failedRunId, logger);
+          // nack requeues below the DLQ threshold — count failed + duration
+          // only when the nack dead-letters (terminal).
+          if (!taskCounted) {
+            taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: stoppedFailure ? 'stopped' : 'failed' });
+            if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
+            taskCounted = true;
+            // The nack below dead-letters this attempt, so the run's model task
+            // just reached a terminal state — finalize the run if all models are
+            // done, without waiting for the dashboard watcher. The terminal
+            // transition above was awaited, so the UPDATE has committed before
+            // this SELECT-based completeness check runs.
+            void maybeFinalizeRun(failedRunId, logger).catch(() => undefined);
+          }
+          // nack requeues below the DLQ threshold — count only when it dead-letters.
+          tasksFailed.inc();
         }
-        // nack requeues below the DLQ threshold — count failed + duration
-        // only when the nack dead-letters (terminal).
-        if (!taskCounted && terminalFailure) {
-          taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: stoppedFailure ? 'stopped' : 'failed' });
-          if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
-          taskCounted = true;
-          // The nack below dead-letters this attempt, so the run's model task
-          // just reached a terminal state — finalize the run if all models are
-          // done, without waiting for the dashboard watcher. The terminal
-          // transition above was awaited, so the UPDATE has committed before
-          // this SELECT-based completeness check runs.
-          void maybeFinalizeRun(failedRunId, logger).catch(() => undefined);
-        }
-        // nack requeues below the DLQ threshold — count only when it dead-letters.
-        if (terminalFailure) tasksFailed.inc();
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {

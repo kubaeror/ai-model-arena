@@ -549,7 +549,7 @@ test('runner keeps the stop gate closed when a per-model failure is retryable', 
 
     await waitFor(() => queue.nacked.length === 1, 10000, 'beta retryable nack');
     const betaRow = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get(runId, betaModel) as { status: string } | undefined;
-    assert.equal(betaRow?.status, 'failed', 'a retryable failure keeps the failed row');
+    assert.equal(betaRow?.status, 'claimed', 'a retryable failure leaves the row non-terminal so the retry keeps the stop gate closed');
     assert.equal(betaAdapterRequests, 1, 'beta attempt ran once');
     assert.equal(await isRunCancelled(runId), true, 'a retryable failure must not clear the stop signal');
 
@@ -564,6 +564,141 @@ test('runner keeps the stop gate closed when a per-model failure is retryable', 
     assert.equal(betaAdapterRequests, 1, 'the retry must not execute after the stop');
     assert.equal(queue.nacked.length, 1, 'the retry must be acked, not nacked');
     assert.equal(await isRunCancelled(runId), false, 'acking the retry clears the signal');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner keeps a 3-model stop gated until the retryable failure terminalizes', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stop-3model-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  const runId = 'run-stop-3model';
+  const alphaModel = 'GPT-4o';
+  const betaModel = 'claude-3.7';
+  const gammaModel = 'o3';
+  await upsertRun({
+    runId, scenario: 'smoke', models: [alphaModel, betaModel, gammaModel],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [alphaModel, betaModel, gammaModel].map((model) => ({ model, runId, status: 'running' })) as never,
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const { stopRun, isRunCancelled, prepareRunFinalization } = await import('../../src/orchestrator/run-lifecycle.js');
+  const { markRunCancelled } = await import('../../src/orchestrator/run-signals.js');
+  const { getRunRecord } = await import('../../src/db/runs.js');
+
+  class CompleteAdapter implements ModelAdapter {
+    async sendMessage(): Promise<import('../../src/types.js').ModelResponse> {
+      return {
+        text: 'done',
+        toolCalls: [{ id: 'alpha-tc', name: 'task_complete', arguments: { summary: 'done' } }],
+        usage: { prompt: 2, completion: 1, total: 3 },
+        stopReason: 'tool_calls',
+      };
+    }
+    supportsReasoning(): boolean { return false; }
+    supportsPromptCaching(): boolean { return false; }
+  }
+  const alphaFake = new CompleteAdapter();
+  let betaAdapterRequests = 0;
+
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    if (modelId === 'claude-3.7') {
+      betaAdapterRequests++;
+      // Arm the stop synchronously (in-memory signal store), then fail the
+      // attempt the way a provider construction error would.
+      void markRunCancelled(runId);
+      void stopRun(runId).catch(() => undefined);
+      throw new Error('transient adapter failure');
+    }
+    return alphaFake;
+  };
+
+  const queue = new RetryOnDemandQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+  const statusOf = (model: string): string | undefined =>
+    (getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?').get(runId, model) as { status: string } | undefined)?.status;
+
+  try {
+    await queue.enqueue(makeTask({
+      taskId: 'alpha-task', sessionId: 'alpha-session',
+      model: alphaModel, provider: 'openai', scenario: scenarioPath,
+      config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+    await waitFor(() => statusOf(alphaModel) === 'completed', 10000, 'alpha completes');
+
+    await queue.enqueue(makeTask({
+      taskId: 'beta-task', sessionId: 'beta-session',
+      model: betaModel, provider: 'anthropic', scenario: scenarioPath,
+      config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+    await waitFor(() => queue.nacked.length === 1, 10000, 'beta retryable nack');
+    assert.equal(statusOf(betaModel), 'claimed', 'a retryable failure leaves the row non-terminal');
+    assert.equal(await isRunCancelled(runId), true, 'a retryable failure must not clear the stop signal');
+
+    // Gamma reaches the stop pre-execution. Its ack is terminal, but beta's
+    // retry is still pending, so the signal must survive the sibling ack and
+    // the watcher gate must stay closed.
+    await queue.enqueue(makeTask({
+      taskId: 'gamma-task', sessionId: 'gamma-session',
+      model: gammaModel, provider: 'openai', scenario: scenarioPath,
+      config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+      attempts: 0,
+    }));
+    await waitFor(() => queue.acked.includes('gamma-task'), 10000, 'gamma stopped pre-execution');
+    assert.equal(statusOf(gammaModel), 'stopped', 'gamma terminalizes as stopped without executing');
+    assert.equal(await isRunCancelled(runId), true, 'a sibling ack must not clear the signal while the retry is pending');
+    assert.equal(await prepareRunFinalization(runId), false, 'the watcher must not finalize while the retry is pending');
+    assert.notEqual((await getRunRecord(runId))?.status, 'completed', 'the run must not finalize while the retry is pending');
+
+    // Redeliver the retry under the still-set stop: the pre-execution cancel
+    // check must intercept and terminalize it before any adapter is built.
+    queue.requeue('beta-task');
+    await waitFor(() => queue.acked.includes('beta-task'), 10000, 'retry intercepted by the stop');
+    assert.equal(betaAdapterRequests, 1, 'no model may execute after the stop');
+    assert.equal(statusOf(betaModel), 'stopped', 'the redelivered retry terminalizes as stopped');
+    assert.equal(await isRunCancelled(runId), false, 'the last terminal row releases the signal');
+    assert.equal(await prepareRunFinalization(runId), true, 'the run is finalizable once every row terminalized');
   } finally {
     ac.abort();
     await runnerDone;
@@ -798,10 +933,14 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
 
   tasksFailed.reset();
 
+  // attempts 4: the dead-lettering attempt. A retryable missing-key attempt
+  // now nacks and keeps its row non-terminal (see the next test), so the
+  // ack + terminal row + self-finalize assertions below need a terminal attempt.
   await queue.enqueue(makeTask({
     taskId: 'no-key', sessionId: 'no-key-session',
     model: 'GPT-4o', provider: 'openai',
     config: { modelRunId: 'run2', maxTurns: 5 },
+    attempts: 4,
   }));
 
   try {
@@ -822,6 +961,78 @@ test('runner fail-fasts on missing API key: ack + failed state + result.json', a
     assert.equal(result.success, false);
     assert.ok(result.errors[0]?.includes('Missing API key'));
     assert.equal(await tasksFailedValue(), 1, 'missing-key fast-fail (acked, never retried) must count as terminal');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('runner nacks a retryable missing-API-key fail-fast without terminalizing the row', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-runner-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  delete process.env.OPENAI_API_KEY;
+  initDb(dbFile);
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => MODELS_DEV,
+    text: async () => JSON.stringify(MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  await upsertRun({
+    runId: 'run-retry-key', scenario: 'express-rest', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{ model: 'GPT-4o', runId: 'run-retry-key', status: 'running' } as never],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const queue = new RetryOnDemandQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  tasksFailed.reset();
+
+  await queue.enqueue(makeTask({
+    taskId: 'retry-key', sessionId: 'retry-key-session',
+    model: 'GPT-4o', provider: 'openai',
+    config: { modelRunId: 'run-retry-key', maxTurns: 5 },
+    attempts: 0,
+  }));
+
+  try {
+    await waitFor(() => queue.nacked.length === 1, 8000, 'retryable missing-key nack');
+    const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get('run-retry-key', 'GPT-4o') as { status: string } | undefined;
+    assert.equal(row?.status, 'claimed', 'a retryable missing-key attempt must not terminalize the row');
+    assert.equal(queue.acked.includes('retry-key'), false, 'a retryable missing-key attempt is nacked, not acked');
+    assert.equal(await tasksFailedValue(), 0, 'a retryable missing-key attempt must not count as terminal');
+    const { getRunRecord } = await import('../../src/db/runs.js');
+    assert.notEqual((await getRunRecord('run-retry-key'))?.status, 'completed', 'the run must not finalize while a retry is pending');
+    assert.ok(fs.existsSync(path.join(outputs, MODEL_DIR, 'run-retry-key', 'result.json')), 'fail-fast artifacts still written');
+
+    // Redelivery re-enters the fail-fast path while attempts stay below the
+    // DLQ threshold: still nacked, still non-terminal.
+    queue.requeue('retry-key');
+    await waitFor(() => queue.nacked.length === 2, 8000, 'retry redelivered and nacked');
+    const retryRow = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+      .get('run-retry-key', 'GPT-4o') as { status: string } | undefined;
+    assert.equal(retryRow?.status, 'claimed', 'the redelivered attempt keeps the row non-terminal');
   } finally {
     ac.abort();
     await runnerDone;
