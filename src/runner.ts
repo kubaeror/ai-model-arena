@@ -918,30 +918,40 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         // self-finalize would be skipped with no retry (SQLite's synchronous
         // driver serializes this and cannot reproduce the race).
         const failedRunId = failedTask.config.modelRunId as string ?? failedTask.sessionId;
+        // A retryable failure must not ack the stop: the nack below requeues
+        // the task and the still-set signal keeps the finalize gate closed
+        // until the retry lands. A terminal attempt under an active stop is
+        // this model's stop ack, so it terminalizes as 'stopped' like the
+        // success path (mirrors maybeFinalizeRun's terminal-failure guard).
+        const terminalFailure = isTerminalFailure(failedTask.attempts);
+        const stoppedFailure = terminalFailure
+          && ((await isRunCancelled(failedRunId)) || (await getRunRecord(failedRunId))?.status === 'stopped');
         try {
-          await transitionTaskState(failedRunId, failedTask.model, 'failed', runnerId);
+          await transitionTaskState(failedRunId, failedTask.model, stoppedFailure ? 'stopped' : 'failed', runnerId);
         } catch (err: unknown) {
           const detail = err instanceof Error ? { message: err.message, stack: err.stack } : { error: String(err) };
-          logger.error('transitionTaskState to "failed" failed — run may be stuck in "running" state', { taskId: failedTask.taskId, modelRunId: failedRunId, ...detail });
+          logger.error(`transitionTaskState to "${stoppedFailure ? 'stopped' : 'failed'}" failed — run may be stuck in "running" state`, { taskId: failedTask.taskId, modelRunId: failedRunId, ...detail });
         }
-        // A terminated model is a stop ack even on failure: if it was the last
-        // sibling, clear the signal so the run is not held to the grace window.
-        await acknowledgeStop(failedRunId, logger);
+        if (terminalFailure) {
+          // The dead-lettered attempt is this model's stop ack: if it was the
+          // last sibling, clear the signal so the run is released.
+          await acknowledgeStop(failedRunId, logger);
+        }
         // nack requeues below the DLQ threshold — count failed + duration
         // only when the nack dead-letters (terminal).
-        if (!taskCounted && isTerminalFailure(failedTask.attempts)) {
-          taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: 'failed' });
+        if (!taskCounted && terminalFailure) {
+          taskCounter.inc({ model: failedTask.model, scenario: failedTask.scenario, status: stoppedFailure ? 'stopped' : 'failed' });
           if (taskStartedAt) taskDuration.observe({ model: failedTask.model, scenario: failedTask.scenario }, (Date.now() - taskStartedAt.getTime()) / 1000);
           taskCounted = true;
           // The nack below dead-letters this attempt, so the run's model task
           // just reached a terminal state — finalize the run if all models are
-          // done, without waiting for the dashboard watcher. The 'failed'
+          // done, without waiting for the dashboard watcher. The terminal
           // transition above was awaited, so the UPDATE has committed before
           // this SELECT-based completeness check runs.
           void maybeFinalizeRun(failedRunId, logger).catch(() => undefined);
         }
         // nack requeues below the DLQ threshold — count only when it dead-letters.
-        if (isTerminalFailure(failedTask.attempts)) tasksFailed.inc();
+        if (terminalFailure) tasksFailed.inc();
         await queue.nack(failedTask._redisId ?? failedTask.taskId, msg);
       }
     } finally {

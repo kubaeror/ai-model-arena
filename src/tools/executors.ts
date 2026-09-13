@@ -551,8 +551,9 @@ function quantifierEnd(pattern: string, quantifier: RegexQuantifier | null, fall
 /**
  * Find the first quantified group that can backtrack exponentially: a nested
  * unbounded quantifier (`(a+)+`), a variable-length inner repeat (`(a{2,3})+`,
- * `(a{2,3}){35}`), a nullable body under a large bounded repeat (`(a?){35}`),
- * an ambiguous nullable sequence (`(a?b?)+`), or an ambiguous alternation,
+ * `(a{2,3}){35}`), a nullable body under a large bounded or min-only unbounded
+ * repeat (`(a?){35}`, `(a?){8,}`), an ambiguous nullable sequence (`(a?b?)+`),
+ * or an ambiguous alternation,
  * including one hidden behind wrapper groups (`((a|aa))+`). Ambiguous
  * alternations are rejected under any outer quantifier with max >= 2; nullable
  * bodies and variable-length inner repeats only at max >= 8, so IPv4's
@@ -682,7 +683,9 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
       // exponentially. A bounded outer only does so at a large max: a nullable
       // body or a variable-length inner repeat needs many iterations before the
       // split count explodes, while small counts (IPv4's `(...){3}`) stay
-      // cheap. Fixed-length inner repeats (`(a{2}){35}`) are linear either way.
+      // cheap. An unbounded outer with a large min (`(a?){8,}`) explodes just
+      // like a large max, so it must clear the same threshold. Fixed-length
+      // inner repeats (`(a{2}){35}`) are linear either way.
       if (q && (q.max === null || q.max >= 2)) {
         if (group.hasUnboundedQuantifier) {
           return { kind: 'nested-quantifier', construct: pattern.slice(group.start, q.end + 1) };
@@ -694,7 +697,8 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
           if (group.hasVariableRepeat) {
             return { kind: 'nested-quantifier', construct: pattern.slice(group.start, q.end + 1) };
           }
-          if (q.max !== null && group.nullable) {
+          const reachesThreshold = q.max !== null || q.min >= BOUNDED_OUTER_REPEAT_MAX;
+          if (reachesThreshold && group.nullable) {
             return { kind: 'ambiguous-repeat', construct: pattern.slice(group.start, q.end + 1) };
           }
         }

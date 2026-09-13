@@ -540,6 +540,10 @@ describe('search_code regex shape guard', () => {
     '(a|[]x|a)+',
     // `[^]` is the negated empty class (matches any code unit), not an empty set.
     '([^]|a)+',
+    // A min-only unbounded repeat explodes once its minimum reaches the
+    // bounded-repeat threshold, even though there is no max to check.
+    '(a?){8,}',
+    '(a?){20,}',
   ];
   for (const query of rejected) {
     it(`rejects ${query}`, async () => {
