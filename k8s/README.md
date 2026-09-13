@@ -101,8 +101,9 @@ kubectl apply -f k8s/argocd/ai-arena-app.yaml
 > **Required re-seal (metrics-token) and webhook-secret.** The committed
 > `dashboard-auth` SealedSecret does not contain a `metrics-token` key
 > (see the NOTE in `k8s/base/arena-secrets-sealed.yaml`). Its dashboard
-> `secretKeyRef` is `optional: true` purely so the pod can boot; metrics
-> scraping is unauthenticated/disabled until the secret is re-sealed:
+> `secretKeyRef` is `optional: true` purely so the pod can boot; until the
+> secret is re-sealed, the Prometheus `arena-dashboard` scrape job still
+> runs but fails auth — the dashboard falls back to requiring an admin JWT:
 >
 > ```bash
 > kubectl create secret generic dashboard-auth -n ai-arena \
@@ -110,6 +111,12 @@ kubectl apply -f k8s/argocd/ai-arena-app.yaml
 >   --from-literal=metrics-token=$(openssl rand -hex 32) \
 >   --dry-run=client -o yaml | kubeseal --format yaml > sealed.yaml
 > # replace the dashboard-auth resource in k8s/base/arena-secrets-sealed.yaml
+>
+> # Mirror the new metrics token into the observability namespace so the
+> # Prometheus bearer-token scrape can authenticate (same as the dev block):
+> kubectl -n observability create secret generic metrics-token \
+>   --from-literal=token=$(kubectl -n ai-arena get secret dashboard-auth -o jsonpath='{.data.metrics-token}' | base64 -d) \
+>   --dry-run=client -o yaml | kubectl apply -f -
 > ```
 >
 > A `webhook-secret` (key: `key`) must also be provisioned (sealed or created

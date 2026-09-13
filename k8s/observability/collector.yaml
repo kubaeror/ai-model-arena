@@ -49,7 +49,11 @@ data:
         endpoint: http://loki.observability:3100/loki/api/v1/push
       debug:
         verbosity: basic
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
     service:
+      extensions: [health_check]
       pipelines:
         traces:
           receivers: [otlp]
