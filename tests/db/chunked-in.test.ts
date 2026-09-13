@@ -12,7 +12,7 @@ function insert(id: string): Promise<void> {
   });
 }
 
-test('chunkedIn splits an id set into multiple IN clauses at the chunk boundary', () => {
+test('chunkedIn splits an id set into multiple IN clauses at the chunk boundary', async () => {
   initDb(':memory:');
   const db = getDrizzleDb();
   const compiled = db.select().from(files)
@@ -20,10 +20,10 @@ test('chunkedIn splits an id set into multiple IN clauses at the chunk boundary'
     .toSQL();
   assert.equal((compiled.sql.match(/ in /gi) ?? []).length, 3, 'five ids at size two span three IN clauses');
   assert.equal(compiled.params.length, 5);
-  closeDb();
+  await closeDb();
 });
 
-test('chunkedIn emits a single IN clause for a single chunk', () => {
+test('chunkedIn emits a single IN clause for a single chunk', async () => {
   initDb(':memory:');
   const db = getDrizzleDb();
   const compiled = db.select().from(files)
@@ -31,7 +31,7 @@ test('chunkedIn emits a single IN clause for a single chunk', () => {
     .toSQL();
   assert.equal((compiled.sql.match(/ in /gi) ?? []).length, 1);
   assert.equal(compiled.params.length, 2);
-  closeDb();
+  await closeDb();
 });
 
 test('chunkedIn with an empty id set matches nothing', async () => {
@@ -40,7 +40,7 @@ test('chunkedIn with an empty id set matches nothing', async () => {
   const db = getDrizzleDb();
   const rows = await db.select().from(files).where(chunkedIn(files.id, []));
   assert.equal(rows.length, 0);
-  closeDb();
+  await closeDb();
 });
 
 test('chunkedIn returns every matching row across chunk boundaries', async () => {
@@ -50,5 +50,5 @@ test('chunkedIn returns every matching row across chunk boundaries', async () =>
   const db = getDrizzleDb();
   const rows = await db.select().from(files).where(chunkedIn(files.id, ids, 3)) as Array<{ id: string }>;
   assert.deepEqual(rows.map((r) => r.id).sort(), [...ids].sort());
-  closeDb();
+  await closeDb();
 });

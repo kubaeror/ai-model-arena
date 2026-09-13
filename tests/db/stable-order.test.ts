@@ -16,8 +16,10 @@ const fileColumns = {
 };
 
 afterEach(async () => {
-  closeDb();
+  await closeDb();
 });
+
+const isPostgres = (process.env.DB_DRIVER ?? 'sqlite').toLowerCase() === 'postgres';
 
 const AT = '2026-08-03T00:00:00.000Z';
 
@@ -84,7 +86,11 @@ test('listMessagesBySession breaks turn/created_at ties by id across offset page
   assert.deepEqual([...p1, ...p2].map((m) => m.id), ['m-a', 'm-b', 'm-c', 'm-d']);
 });
 
-test('listModelCallsForSession breaks turn ties by id across offset pages', async () => {
+test('listModelCallsForSession breaks turn ties by id across offset pages', {
+  skip: isPostgres
+    ? 'SQLite-only fixture: Postgres enforces UNIQUE(session_id, turn) and dropping the index would leak into the shared PG test database'
+    : false,
+}, async () => {
   initDb(':memory:');
   await createSession({ id: 'session-1', model: 'gpt-4o', createdAt: AT, updatedAt: AT });
   getDb().exec('DROP INDEX IF EXISTS uq_model_calls_session_turn');
