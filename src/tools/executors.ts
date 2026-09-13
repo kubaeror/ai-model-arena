@@ -365,7 +365,11 @@ function parseCharClass(pattern: string, start: number): { set: CharSet | null; 
     negated = true;
     i += 1;
   }
-  if (pattern[i] === ']') i += 1;
+  if (pattern[i] === ']') {
+    // JS closes `[]`/`[^]` here (unlike POSIX, where a leading `]` is literal):
+    // `[]` never matches and `[^]` matches any code unit.
+    return { set: negated ? complementCharSet([]) : [], end: i };
+  }
   const ranges: CharRange[] = [];
   let understood = true;
   while (i < pattern.length && pattern[i] !== ']') {
@@ -399,13 +403,93 @@ function branchFirstSetsDisjoint(sets: CharSet[]): boolean {
   return true;
 }
 
+function unionCharSets(a: CharSet | null, b: CharSet | null): CharSet | null {
+  if (a === null || b === null) return null;
+  return [...a, ...b];
+}
+
+const foldedCharSetCache = new WeakMap<CharSet, CharSet>();
+const foldedCodePointCache = new Map<number, CharSet>();
+
+function addCaseVariants(points: Set<number>, code: number): void {
+  points.add(code);
+  const ch = String.fromCharCode(code);
+  const lower = ch.toLowerCase();
+  const upper = ch.toUpperCase();
+  if (lower.length === 1) points.add(lower.charCodeAt(0));
+  if (upper.length === 1) points.add(upper.charCodeAt(0));
+}
+
+function pointsToRanges(points: Set<number>): CharSet {
+  const out: [number, number][] = [];
+  for (const code of [...points].sort((a, b) => a - b)) {
+    const last = out[out.length - 1];
+    if (last && last[1] + 1 === code) last[1] = code;
+    else out.push([code, code]);
+  }
+  return out;
+}
+
+/** Case-fold a set the way `/i` matches: every code point plus its single-code-unit lower/upper variants. */
+function foldCharSet(set: CharSet): CharSet {
+  const cached = foldedCharSetCache.get(set);
+  if (cached) return cached;
+  const single = set.length === 1 && set[0]![0] === set[0]![1] ? set[0]![0] : -1;
+  const cachedSingle = single >= 0 ? foldedCodePointCache.get(single) : undefined;
+  if (cachedSingle) return cachedSingle;
+
+  let span = 0;
+  for (const [lo, hi] of set) span += hi - lo + 1;
+  let folded: CharSet;
+  if (span <= 4096) {
+    const points = new Set<number>();
+    for (const [lo, hi] of set) {
+      for (let code = lo; code <= hi; code++) addCaseVariants(points, code);
+    }
+    folded = pointsToRanges(points);
+  } else {
+    const present = new Uint8Array(0x10000);
+    for (const [lo, hi] of set) {
+      for (let code = lo; code <= hi; code++) present[code] = 1;
+    }
+    for (let code = 0; code <= 0xffff; code++) {
+      if (!present[code]) continue;
+      const ch = String.fromCharCode(code);
+      const lower = ch.toLowerCase();
+      const upper = ch.toUpperCase();
+      if (lower.length === 1) present[lower.charCodeAt(0)] = 1;
+      if (upper.length === 1) present[upper.charCodeAt(0)] = 1;
+    }
+    const ranges: [number, number][] = [];
+    let runStart = -1;
+    for (let code = 0; code <= 0xffff; code++) {
+      if (present[code]) {
+        if (runStart === -1) runStart = code;
+      } else if (runStart !== -1) {
+        ranges.push([runStart, code - 1]);
+        runStart = -1;
+      }
+    }
+    if (runStart !== -1) ranges.push([runStart, 0xffff]);
+    folded = ranges;
+  }
+  foldedCharSetCache.set(set, folded);
+  if (single >= 0) foldedCodePointCache.set(single, folded);
+  return folded;
+}
+
 interface RegexGroupState {
   start: number;
   hasUnboundedQuantifier: boolean;
   hasAmbiguousAlternation: boolean;
+  hasBoundedRepeat: boolean;
+  hasAmbiguousSequence: boolean;
   first: CharSet | null;
+  nullable: boolean;
   branchFirst: CharSet | null | undefined; // undefined = the current branch has no atom yet
+  branchNullable: boolean;
   branchFirsts: (CharSet | null)[];
+  branchNullables: boolean[];
   sawAlternation: boolean;
 }
 
@@ -414,52 +498,113 @@ function newGroupState(start: number): RegexGroupState {
     start,
     hasUnboundedQuantifier: false,
     hasAmbiguousAlternation: false,
+    hasBoundedRepeat: false,
+    hasAmbiguousSequence: false,
     first: null,
+    nullable: true,
     branchFirst: undefined,
+    branchNullable: true,
     branchFirsts: [],
+    branchNullables: [],
     sawAlternation: false,
   };
 }
 
 interface RegexShapeFinding {
-  kind: 'nested-quantifier' | 'ambiguous-alternation';
+  kind: 'nested-quantifier' | 'ambiguous-alternation' | 'ambiguous-repeat';
   construct: string;
 }
 
-/** Return the end index of an unbounded quantifier (`*`, `+`, `{n,}`) at `index`, else null. */
-function unboundedQuantifierAt(pattern: string, index: number): { end: number } | null {
+interface RegexQuantifier {
+  end: number;
+  min: number;
+  max: number | null; // null = unbounded
+}
+
+/** Parse a quantifier at `index`; null means no quantifier (e.g. a literal `{`). */
+function quantifierAt(pattern: string, index: number): RegexQuantifier | null {
   const ch = pattern[index];
-  if (ch === '*' || ch === '+') return { end: index };
+  if (ch === '*') return { end: index, min: 0, max: null };
+  if (ch === '+') return { end: index, min: 1, max: null };
+  if (ch === '?') return { end: index, min: 0, max: 1 };
   if (ch !== '{') return null;
   const match = /^\{(\d+)(,(\d*))?\}/.exec(pattern.slice(index));
   if (!match) return null;
-  const digitsAfterComma = match[3];
-  const isUnbounded = match[2] !== undefined && (digitsAfterComma === undefined || digitsAfterComma === '');
-  return isUnbounded ? { end: index + match[0].length - 1 } : null;
+  const end = index + match[0].length - 1;
+  const min = Number(match[1]);
+  if (match[2] === undefined) return { end, min, max: min };
+  const digits = match[3];
+  if (digits === undefined || digits === '') return { end, min, max: null };
+  return { end, min, max: Number(digits) };
+}
+
+/** End of an atom's quantifier, including a trailing laziness modifier (`*?`, `{2,3}?`). */
+function quantifierEnd(pattern: string, quantifier: RegexQuantifier | null, fallback: number): number {
+  if (!quantifier) return fallback;
+  return pattern[quantifier.end + 1] === '?' ? quantifier.end + 1 : quantifier.end;
 }
 
 /**
  * Find the first quantified group that can backtrack exponentially: a nested
- * unbounded quantifier (`(a+)+`) or an ambiguous alternation, including one
- * hidden behind wrapper groups (`((a|aa))+`). Alternations whose branches
- * start with provably disjoint characters (`(foo|bar)+`) are permitted.
+ * unbounded quantifier (`(a+)+`), a bounded inner repeat under an unbounded
+ * outer one (`(a{2,3})+`), an ambiguous nullable sequence (`(a?b?)+`), or an
+ * ambiguous alternation, including one hidden behind wrapper groups
+ * (`((a|aa))+`). Alternations whose branches start with provably disjoint
+ * characters after case folding (`(foo|bar)+`) are permitted. Anything the
+ * analysis cannot prove stays ambiguous, so the failure mode is a false
+ * rejection, never a hang.
  */
-function findCatastrophicRegexShape(pattern: string): RegexShapeFinding | null {
+function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): RegexShapeFinding | null {
   const stack: RegexGroupState[] = [newGroupState(0)];
+
+  const fold = (set: CharSet | null): CharSet | null =>
+    set !== null && !caseSensitive ? foldCharSet(set) : set;
+
+  // Branch first sets only grow through atoms while everything before them can
+  // match empty; that is what makes `(a?b|b)+` collide on `b`. A nullable prefix
+  // followed by a nullable or overlapping atom (`(a?b?)+`, `(a?a)+`) also
+  // leaves the repeat boundary ambiguous.
+  const applyAtom = (group: RegexGroupState, first: CharSet | null, nullable: boolean): void => {
+    if (group.branchFirst === undefined) {
+      group.branchFirst = first;
+    } else if (group.branchNullable) {
+      if (
+        nullable ||
+        group.branchFirst === null ||
+        first === null ||
+        !charSetsDisjoint(group.branchFirst, first)
+      ) {
+        group.hasAmbiguousSequence = true;
+      }
+      group.branchFirst = unionCharSets(group.branchFirst, first);
+    }
+    group.branchNullable = group.branchNullable && nullable;
+  };
+
+  const noteQuantifier = (group: RegexGroupState, q: RegexQuantifier | null): void => {
+    if (!q) return;
+    if (q.max === null) group.hasUnboundedQuantifier = true;
+    else if (q.max >= 2) group.hasBoundedRepeat = true;
+  };
+
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i];
     const current = stack[stack.length - 1]!;
 
     if (ch === '\\') {
       const esc = parseEscapeSet(pattern, i);
-      if (current.branchFirst === undefined) current.branchFirst = esc.set;
-      i = esc.end;
+      const q = quantifierAt(pattern, esc.end + 1);
+      noteQuantifier(current, q);
+      applyAtom(current, fold(esc.set), q !== null && q.min === 0);
+      i = quantifierEnd(pattern, q, esc.end);
       continue;
     }
     if (ch === '[') {
       const cls = parseCharClass(pattern, i);
-      if (current.branchFirst === undefined) current.branchFirst = cls.set;
-      i = cls.end;
+      const q = quantifierAt(pattern, cls.end + 1);
+      noteQuantifier(current, q);
+      applyAtom(current, fold(cls.set), q !== null && q.min === 0);
+      i = quantifierEnd(pattern, q, cls.end);
       continue;
     }
     if (ch === '(') {
@@ -482,6 +627,10 @@ function findCatastrophicRegexShape(pattern: string): RegexShapeFinding | null {
       const group = stack.pop()!;
       const parent = stack[stack.length - 1]!;
       group.branchFirsts.push(group.branchFirst ?? null);
+      group.branchNullables.push(group.branchNullable);
+      group.nullable = group.sawAlternation
+        ? group.branchNullables.some(Boolean)
+        : group.branchNullable;
       if (group.sawAlternation) {
         const branches = group.branchFirsts;
         const disjoint = branches.every((b) => b !== null) && branchFirstSetsDisjoint(branches as CharSet[]);
@@ -491,42 +640,57 @@ function findCatastrophicRegexShape(pattern: string): RegexShapeFinding | null {
         group.first = group.branchFirsts[0] ?? null;
       }
 
-      const quantifier = unboundedQuantifierAt(pattern, i + 1);
-      if (quantifier) {
+      const q = quantifierAt(pattern, i + 1);
+      if (q && q.max === null) {
         if (group.hasUnboundedQuantifier) {
-          return { kind: 'nested-quantifier', construct: pattern.slice(group.start, quantifier.end + 1) };
+          return { kind: 'nested-quantifier', construct: pattern.slice(group.start, q.end + 1) };
         }
         if (group.hasAmbiguousAlternation) {
-          return { kind: 'ambiguous-alternation', construct: pattern.slice(group.start, quantifier.end + 1) };
+          return { kind: 'ambiguous-alternation', construct: pattern.slice(group.start, q.end + 1) };
         }
-        parent.hasUnboundedQuantifier = true;
-      } else {
-        parent.hasUnboundedQuantifier ||= group.hasUnboundedQuantifier;
+        if (group.hasBoundedRepeat) {
+          return { kind: 'nested-quantifier', construct: pattern.slice(group.start, q.end + 1) };
+        }
+        if (group.hasAmbiguousSequence) {
+          return { kind: 'ambiguous-repeat', construct: pattern.slice(group.start, q.end + 1) };
+        }
       }
+
+      if (q && q.max !== null && q.max >= 2) parent.hasBoundedRepeat = true;
+      if (q && q.max === null) parent.hasUnboundedQuantifier = true;
+      else parent.hasUnboundedQuantifier ||= group.hasUnboundedQuantifier;
       parent.hasAmbiguousAlternation ||= group.hasAmbiguousAlternation;
-      if (parent.branchFirst === undefined) parent.branchFirst = group.first;
+      parent.hasBoundedRepeat ||= group.hasBoundedRepeat;
+      parent.hasAmbiguousSequence ||= group.hasAmbiguousSequence;
+      applyAtom(parent, group.first, group.nullable || (q !== null && q.min === 0));
+      i = quantifierEnd(pattern, q, i);
       continue;
     }
     if (ch === '|') {
       current.branchFirsts.push(current.branchFirst ?? null);
+      current.branchNullables.push(current.branchNullable);
       current.branchFirst = undefined;
+      current.branchNullable = true;
       current.sawAlternation = true;
       continue;
     }
-    if (ch === '*' || ch === '+' || ch === '{') {
-      const quantifier = unboundedQuantifierAt(pattern, i);
-      if (quantifier) {
-        current.hasUnboundedQuantifier = true;
-        i = quantifier.end;
+    if (ch === '*' || ch === '+' || ch === '?' || ch === '{') {
+      const stray = quantifierAt(pattern, i);
+      if (stray) {
+        if (stray.max === null) current.hasUnboundedQuantifier = true;
+        i = stray.end;
         continue;
       }
     }
+    const q = quantifierAt(pattern, i + 1);
+    noteQuantifier(current, q);
     if (ch === '.' || ch === '^' || ch === '$') {
       // Wildcards and anchors cannot prove a disjoint first character.
-      if (current.branchFirst === undefined) current.branchFirst = null;
-      continue;
+      applyAtom(current, null, ch === '^' || ch === '$' || (q !== null && q.min === 0));
+    } else {
+      applyAtom(current, fold(singleCharSet(ch!.charCodeAt(0))), q !== null && q.min === 0);
     }
-    if (current.branchFirst === undefined) current.branchFirst = singleCharSet(ch!.charCodeAt(0));
+    i = quantifierEnd(pattern, q, i);
   }
   return null;
 }
@@ -548,11 +712,13 @@ const searchCode: ToolExecutor = async (args, ctx) => {
     } catch (e) {
       return { content: `Error: invalid regular expression: ${(e as Error).message}`, isError: true };
     }
-    const shape = findCatastrophicRegexShape(query);
+    const shape = findCatastrophicRegexShape(query, caseSensitive);
     if (shape) {
       const offending = shape.kind === 'nested-quantifier'
         ? `nested quantifier in \`${shape.construct}\``
-        : `ambiguous alternation in \`${shape.construct}\``;
+        : shape.kind === 'ambiguous-alternation'
+          ? `ambiguous alternation in \`${shape.construct}\``
+          : `ambiguous nullable repetition in \`${shape.construct}\``;
       return {
         content: `Error: regular expression rejected: ${offending} can cause catastrophic backtracking. Rewrite branches so each starts with a distinct character (e.g. \`(foo|bar)+\`) and avoid repeating a quantified group.`,
         isError: true,

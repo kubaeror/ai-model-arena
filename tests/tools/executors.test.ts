@@ -495,7 +495,7 @@ describe('search_code regex shape guard', () => {
   });
   after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  const accepted = ['(foo|bar)+', '(a|b)+', '[ab]+', 'a+', '(ab)*', '([ab]|c)+', '((foo|bar))+'];
+  const accepted = ['(foo|bar)+', '(a|b)+', '[ab]+', 'a+', '(ab)*', '([ab]|c)+', '((foo|bar))+', '(a?b)+', '(a?)+'];
   for (const query of accepted) {
     it(`accepts ${query}`, async () => {
       const r = await search({ query, regex: true }, shapeCtx);
@@ -512,6 +512,23 @@ describe('search_code regex shape guard', () => {
     '((a+))+$',
     '(a|ab)+',
     '(\\.|.)+',
+    // Case-insensitive (the default) folding makes these branches overlap.
+    '(a|A)+',
+    '([a]|[A])+',
+    '(foo|FOO)+',
+    // Nullable leading atoms hide overlapping first characters.
+    '(a?b|b)+',
+    '(a{0,1}b|b)+',
+    // Consecutive or overlapping nullable atoms make the repeat boundary ambiguous.
+    '(a?a)+',
+    '(a?b?)+',
+    '((a?)(b?))+',
+    // Bounded inner quantifiers still compose exponentially.
+    '(a{2,3})+',
+    '(a{1,2})+',
+    '(a{0,2})+',
+    // `[]` closes immediately in JS; the rest of the group must stay visible.
+    '(a|[]x|a)+',
   ];
   for (const query of rejected) {
     it(`rejects ${query}`, async () => {
@@ -524,4 +541,9 @@ describe('search_code regex shape guard', () => {
       );
     });
   }
+
+  it('accepts case-variant branches when case-sensitive', async () => {
+    const r = await search({ query: '(a|A)+', regex: true, caseSensitive: true }, shapeCtx);
+    assert.strictEqual(r.isError, false, `expected case-sensitive \`(a|A)+\` to be accepted, got: ${r.content}`);
+  });
 });
