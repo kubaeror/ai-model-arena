@@ -222,6 +222,9 @@ export async function registerRun(spec: RunSpec, source: 'cli' | 'dashboard' | '
     runId: spec.runId, scenario: spec.scenario, models: spec.models.map((m) => m.model),
     startedAt: spec.startedAt, finishedAt: null, status: 'running', source, perModel,
     comparisonMdPath: null, comparisonJsonPath: null, createdBy,
+    // A new execution begins: a marker left by a previous reap must not make a
+    // fresh run settle 'errored'.
+    reapedAt: null,
   });
 }
 
@@ -449,9 +452,11 @@ export const RUN_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
 
 export function runStaleAfterMs(): number {
   const raw = process.env.RUN_STALE_AFTER_MS;
-  if (raw !== undefined && raw !== '') {
-    const parsed = Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  // Positive integers only: 0/NaN/trailing garbage would collapse the reap
+  // window to <= 0 and make fresh runs reaper-eligible.
+  if (raw !== undefined && /^\d+$/.test(raw)) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
   }
   return RUN_STALE_AFTER_MS;
 }
@@ -465,6 +470,21 @@ export function isStaleRunningRun(run: { status: string; startedAt: string }, no
   if (run.status !== 'running') return false;
   const started = Date.parse(run.startedAt);
   return Number.isFinite(started) && now - started >= runStaleAfterMs();
+}
+
+/**
+ * Persist the dead-runner reap marker before any finalization work starts.
+ * Persisted (not a per-tick flag) so a finalizer crash after the claim cannot
+ * make the stale retry settle a reaped run as 'completed'. Conditional on the
+ * run still being 'running': a concurrent finalize claim must not be marked.
+ */
+export async function markRunReaped(runId: string, now = new Date()): Promise<boolean> {
+  const db = getDrizzleDb();
+  const updated = await db.update(runs)
+    .set({ reaped_at: now.toISOString() })
+    .where(and(eq(runs.run_id, runId), eq(runs.status, 'running')))
+    .returning({ run_id: runs.run_id });
+  return updated.length > 0;
 }
 
 /**
@@ -517,9 +537,13 @@ export async function prepareRunFinalization(runId: string): Promise<boolean> {
  * number it returned keys the ledger writes so a stale-retry of the same
  * attempt cannot duplicate rows.
  */
-async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, finalizationAttempt: number, judgeAdapter?: ModelAdapter, reaped = false): Promise<{ mdPath: string; jsonPath: string; completed: boolean }> {
+async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, finalizationAttempt: number, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string; completed: boolean }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
+  // Read the reaped marker from the record, never from a caller flag: a finalize
+  // crash-retry starts from a fresh caller, and only the persisted marker still
+  // knows the runner was reaped.
+  const reaped = rec.reapedAt != null;
   const root = projectRoot();
   // Release budget reservations against the same state root they were
   // reserved under in startRun, so estimates always match.
@@ -584,11 +608,10 @@ async function finalizeClaimedRun(
   logger: Logger,
   finalizationAttempt: number,
   judgeAdapter?: ModelAdapter,
-  reaped = false,
 ): Promise<{ entries: ComparisonEntry[]; mdPath: string; jsonPath: string; completed: boolean }> {
   try {
     const { entries, mdPath, jsonPath } = aggregate(projectRoot(), { runId, scenario, startedAt, models });
-    const core = await finalizeCore(runId, entries, mdPath, jsonPath, logger, finalizationAttempt, judgeAdapter, reaped);
+    const core = await finalizeCore(runId, entries, mdPath, jsonPath, logger, finalizationAttempt, judgeAdapter);
     return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath, completed: core.completed };
   } catch (err) {
     logger.error('Run finalization failed — leaving run finalizing for retry', {
@@ -625,10 +648,11 @@ export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: 
  *  watcher. Returns true only when this call won the atomic claim and the run
  *  actually reached a terminal status ('completed', or 'errored' for a reaped
  *  run with no successful model); false when the run is missing, another
- *  finalizer holds a fresh claim, or the run was reset mid-finalize. The
- *  `reaped` flag is set by the stale-running reconciliation: it forces a
- *  dead-runner run with no completed model to settle as 'errored'. */
-export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter, reaped = false): Promise<boolean> {
+ *  finalizer holds a fresh claim, or the run was reset mid-finalize. The reap
+ *  marker is read from the run record (`reaped_at`), so a crash-retry started
+ *  by a fresh call still settles a dead-runner run with no completed model as
+ *  'errored'. */
+export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<boolean> {
   const rec = await getRunRecord(runId);
   if (!rec) return false;
   const attempt = await claimRunFinalization(runId);
@@ -639,7 +663,7 @@ export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAda
   const { completed } = await finalizeClaimedRun(
     runId, rec.scenario, rec.startedAt,
     rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-    logger, attempt, judgeAdapter, reaped,
+    logger, attempt, judgeAdapter,
   );
   return completed;
 }
@@ -695,6 +719,20 @@ export async function stopRun(runId: string): Promise<void> {
 export async function restartRun(runId: string): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
+  // Reset the record BEFORE clearing the signal and enqueueing: a watcher tick
+  // racing the restart must not observe the old (possibly stopped/stale) record
+  // with the cancel signal already gone — it could reap/finalize it, only for
+  // the reset to clobber that finalization.
+  await updateRun(runId, (r) => {
+    r.status = 'running';
+    // Restarting restarts the stale-run clock: reusing the original start time
+    // would make the restarted run immediately reaper-eligible.
+    r.startedAt = new Date().toISOString();
+    r.finishedAt = null;
+    // A new execution begins: a previous reap must not settle it 'errored'.
+    r.reapedAt = null;
+    for (const m of r.perModel) { m.status = 'running'; m.success = undefined; }
+  });
   await clearRunCancelledSignal(runId);
   const queue = createQueue();
   const ts = timestamp();
@@ -727,12 +765,4 @@ export async function restartRun(runId: string): Promise<void> {
     };
     await queue.enqueue(task);
   }
-  await updateRun(runId, (r) => {
-    r.status = 'running';
-    // Restarting restarts the stale-run clock: reusing the original start time
-    // would make the restarted run immediately reaper-eligible.
-    r.startedAt = new Date().toISOString();
-    r.finishedAt = null;
-    for (const m of r.perModel) { m.status = 'running'; m.success = undefined; }
-  });
 }

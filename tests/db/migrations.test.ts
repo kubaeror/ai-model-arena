@@ -118,7 +118,7 @@ const HOT_QUERY_INDEXES: { name: string; columns: string[] }[] = [
   { name: 'idx_run_models_status', columns: ['status'] },
 ];
 
-test('0020 dedupes legacy cost_ledger duplicates before creating the unique index', () => {
+test('0020 renumbers legacy cost_ledger duplicates losslessly before creating the unique index', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-db-dedupe-'));
   const dbPath = path.join(tmp, 'test.db');
   // A pre-0020 migration folder: dropping only the journal entry keeps every
@@ -127,7 +127,9 @@ test('0020 dedupes legacy cost_ledger duplicates before creating the unique inde
   fs.cpSync(path.join(ROOT, 'drizzle'), partialDir, { recursive: true });
   const journalPath = path.join(partialDir, 'meta', '_journal.json');
   const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8')) as { entries: { tag: string }[] };
-  journal.entries = journal.entries.filter((e) => e.tag !== '0020_cute_shriek');
+  // Truncate at 0020 (not just drop it): any later migration applied first would
+  // advance drizzle's high-water mark and make it skip 0020 on the full rerun.
+  journal.entries = journal.entries.slice(0, journal.entries.findIndex((e) => e.tag === '0020_cute_shriek'));
   fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2));
 
   const sqlite = new Database(dbPath);
@@ -148,23 +150,57 @@ test('0020 dedupes legacy cost_ledger duplicates before creating the unique inde
 
     migrate(db, { migrationsFolder: path.join(ROOT, 'drizzle') });
 
-    const rows = sqlite.prepare('SELECT id, cost_usd FROM cost_ledger WHERE run_id = ? ORDER BY id').all('r1') as
-      { id: number; cost_usd: number }[];
-    assert.equal(rows.length, 1, 'only the lowest-id duplicate survives the migration');
-    assert.ok(Math.abs(rows[0]!.cost_usd - 0.01) < 1e-9, 'the lowest id (first crash-retry write) is retained');
+    const rows = sqlite.prepare(
+      'SELECT id, cost_usd, finalization_attempt FROM cost_ledger WHERE run_id = ? ORDER BY id'
+    ).all('r1') as { id: number; cost_usd: number; finalization_attempt: number }[];
+    assert.equal(rows.length, 2, 'both legacy rows are preserved: dedupe must not silently drop spend');
+    assert.deepEqual(
+      rows.map((r) => r.cost_usd).sort((a, b) => a - b),
+      [0.01, 0.02],
+      'both crash-retry costs survive the migration',
+    );
+    const attempts = rows.map((r) => r.finalization_attempt);
+    assert.equal(new Set(attempts).size, 2, 'legacy rows get distinct finalization attempts');
+    assert.ok(attempts.every((a) => a < 0), 'legacy attempts are negative so positive new attempts never collide');
 
     const index = sqlite.prepare(
       "SELECT name FROM sqlite_master WHERE type='index' AND name = 'uq_cost_ledger_run_model_attempt'"
     ).get();
-    assert.ok(index, 'unique index exists after the dedupe');
+    assert.ok(index, 'unique index exists after the renumbering');
 
+    const insertAttempt = sqlite.prepare(
+      "INSERT INTO cost_ledger (run_id, model, cost_usd, currency, recorded_at, finalization_attempt) VALUES ('r1', 'a', ?, 'USD', ?, ?)"
+    );
+    insertAttempt.run(0.03, '2026-01-03T00:00:00.000Z', 1);
     assert.throws(
-      () => insert.run(0.03, '2026-01-03T00:00:00.000Z'),
+      () => insertAttempt.run(0.04, '2026-01-04T00:00:00.000Z', 1),
       /UNIQUE constraint failed/,
-      'the unique index now rejects a same-attempt duplicate',
+      'the unique index rejects a duplicate positive attempt',
+    );
+    assert.equal(
+      (sqlite.prepare('SELECT COUNT(*) as c FROM cost_ledger WHERE run_id = ?').get('r1') as { c: number }).c,
+      3,
+      'a new positive attempt coexists with the negative legacy attempts',
     );
   } finally {
     sqlite.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('latest migration adds a nullable runs.reaped_at marker', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-db-reaped-'));
+  const dbPath = path.join(tmp, 'test.db');
+  try {
+    const db = initDb(dbPath);
+    const columns = db.prepare("PRAGMA table_info('runs')").all() as
+      { name: string; notnull: number; dflt_value: string | null }[];
+    const reaped = columns.find((c) => c.name === 'reaped_at');
+    assert.ok(reaped, 'runs.reaped_at must exist after migrations');
+    assert.equal(reaped.notnull, 0, 'reaped_at is nullable');
+    assert.equal(reaped.dflt_value, null, 'reaped_at defaults to NULL');
+    closeDb();
+  } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

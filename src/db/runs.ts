@@ -32,6 +32,8 @@ export interface RunIndexRecord {
   comparisonMdPath: string | null;
   comparisonJsonPath: string | null;
   createdBy?: string;
+  /** Set when the dashboard reaps a stale dead-runner run; cleared on restart. */
+  reapedAt?: string | null;
 }
 
 export interface RunIndexFile {
@@ -136,6 +138,7 @@ function toRunRecord(r: DbRun, perModel: DbRunModel[]): RunIndexRecord {
     comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
     comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
     createdBy: r.created_by ? String(r.created_by) : undefined,
+    reapedAt: r.reaped_at ? String(r.reaped_at) : null,
   };
 }
 
@@ -157,6 +160,7 @@ export async function getRunRecord(runId: string): Promise<RunIndexRecord | unde
     comparisonMdPath: r.comparison_md_path ? String(r.comparison_md_path) : null,
     comparisonJsonPath: r.comparison_json_path ? String(r.comparison_json_path) : null,
     createdBy: r.created_by ? String(r.created_by) : undefined,
+    reapedAt: r.reaped_at ? String(r.reaped_at) : null,
   };
 }
 
@@ -173,6 +177,7 @@ export async function upsertRun(record: RunIndexRecord): Promise<void> {
     comparison_md_path: record.comparisonMdPath,
     comparison_json_path: record.comparisonJsonPath,
     created_by: record.createdBy ?? null,
+    reaped_at: record.reapedAt ?? null,
   }).onConflictDoUpdate({
     target: runs.run_id,
     set: {
@@ -185,6 +190,7 @@ export async function upsertRun(record: RunIndexRecord): Promise<void> {
       comparison_md_path: record.comparisonMdPath,
       comparison_json_path: record.comparisonJsonPath,
       created_by: record.createdBy ?? null,
+      reaped_at: record.reapedAt ?? null,
     },
   });
   if (record.perModel && record.perModel.length > 0) {

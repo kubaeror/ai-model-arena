@@ -1,20 +1,29 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
-import { upsertRun, getRunRecord } from '../../src/db/runs.js';
+import { upsertRun, getRunRecord, updateRun } from '../../src/db/runs.js';
 import { transitionTaskState } from '../../src/db/query.js';
 import { attemptFinalizeCandidate, reconcileStaleRunningRun } from '../../src/dashboard-server/live.js';
 import { createLogger } from '../../src/logger/pino-logger.js';
 import { markRunCancelled, clearRunCancelled } from '../../src/orchestrator/run-signals.js';
-import { stopRun, prepareRunFinalization } from '../../src/orchestrator/run-lifecycle.js';
+import {
+  stopRun,
+  prepareRunFinalization,
+  finalizeRunByRunId,
+  runStaleAfterMs,
+  RUN_STALE_AFTER_MS,
+} from '../../src/orchestrator/run-lifecycle.js';
 
 const logger = createLogger('test:stop-finalize', 'warn');
 
 let tmp = '';
 let outputs = '';
+let notifyServer: http.Server;
 
 function modelDir(runId: string, model = 'alpha'): string {
   return path.join(outputs, model, runId);
@@ -81,7 +90,7 @@ function notificationCount(runId: string): number {
   return rows.filter((r) => String(r.payload_json).includes(runId)).length;
 }
 
-before(() => {
+before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stop-finalize-'));
   outputs = path.join(tmp, 'outputs');
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
@@ -90,13 +99,38 @@ before(() => {
   process.env.DB_DRIVER = 'sqlite';
   process.env.QUEUE_DRIVER = 'memory';
   initDb(process.env.ARENA_DB_PATH);
+
+  // Local sink so completion notifications persist an outbox row with their
+  // failed/success payload without network retries. Must exist before the first
+  // finalize: loadNotificationConfig caches process-wide on first call.
+  notifyServer = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+  });
+  await new Promise<void>((resolve) => notifyServer.listen(0, '127.0.0.1', resolve));
+  const notifyPort = (notifyServer.address() as AddressInfo).port;
+  fs.mkdirSync(path.join(tmp, 'configs'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'configs', 'notifications.yaml'), [
+    'channels:',
+    '  test-channel:',
+    '    type: slack',
+    `    webhookUrl: http://127.0.0.1:${notifyPort}/hook`,
+    'routing:',
+    '  onRunCompleted:',
+    '    - test-channel',
+    '',
+  ].join('\n'));
 });
 
-after(() => {
+after(async () => {
   delete process.env.ARENA_DB_PATH;
   delete process.env.OUTPUT_ROOT;
   delete process.env.AI_ARENA_ROOT;
   closeDb();
+  await new Promise<void>((resolve) => {
+    notifyServer.close(() => resolve());
+    notifyServer.closeAllConnections();
+  });
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -328,6 +362,52 @@ test('a reaped run with no result.json finalizes as errored, never as success', 
   );
 });
 
+test('a reaped run settles errored when a crashed finalizer retries', async () => {
+  const runId = 'stale-running-crash-retry';
+  await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
+    runStatus: 'running',
+    finishedAt: null,
+    startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+  });
+
+  const stale = (await getRunRecord(runId))!;
+  assert.equal(await reconcileStaleRunningRun(stale, logger), true, 'the watcher reaps the dead-runner run');
+  assert.ok(
+    (await getRunRecord(runId))?.reapedAt,
+    'the reap marker must be persisted on the run, not held in the per-tick boolean',
+  );
+
+  // The first finalizer crashes after winning the claim: comparisons/ exists as
+  // a file, so aggregation throws before the run reaches a terminal status.
+  const comparisonsDir = path.join(outputs, 'comparisons');
+  fs.rmSync(comparisonsDir, { recursive: true, force: true });
+  fs.writeFileSync(comparisonsDir, 'not a directory');
+  try {
+    await assert.rejects(finalizeRunByRunId(runId, logger), 'the forced aggregation failure must propagate');
+  } finally {
+    fs.rmSync(comparisonsDir, { force: true });
+  }
+  assert.equal((await getRunRecord(runId))?.status, 'finalizing', 'the crash leaves the run reclaimable');
+
+  // Age the claim past the stale window, as the watcher does for a crashed finalizer.
+  await updateRun(runId, (r) => { r.finishedAt = new Date(Date.now() - 3 * 60_000).toISOString(); });
+
+  assert.equal(await finalizeRunByRunId(runId, logger), true, 'the stale retry finalizes');
+  const rec = (await getRunRecord(runId))!;
+  assert.equal(rec.status, 'errored', 'the retry must settle a reaped run errored, not completed');
+
+  const statuses = (getDb().prepare('SELECT payload_json FROM notifications').all() as Array<{ payload_json: string }>)
+    .filter((r) => r.payload_json.includes(runId))
+    .map((r) => (JSON.parse(r.payload_json) as { status?: string }).status);
+  assert.ok(statuses.length > 0, 'the run dispatches a completion notification');
+  assert.ok(statuses.every((s) => s === 'failed'), `the retry must notify failure, not success (got ${statuses.join(',')})`);
+
+  const attempt = getDb().prepare('SELECT finalization_attempt FROM runs WHERE run_id = ?').get(runId) as
+    { finalization_attempt: number };
+  assert.equal(attempt.finalization_attempt, 1, 'the retry continues the single finalization attempt (one ledger attempt key)');
+  assert.equal(ledgerRows(runId).length, 0, 'no model completed, so no spend is recorded');
+});
+
 test('a fresh running run is not reaped', async () => {
   const runId = 'fresh-running';
   await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
@@ -362,6 +442,43 @@ test('a stale running run with a live cancel signal is not reaped', async () => 
   );
   assert.equal((await getRunRecord(runId))?.perModel[0]?.status, 'running', 'the row is untouched');
   assert.equal((await getRunRecord(runId))?.status, 'running', 'the run stays running');
+});
+
+test('RUN_STALE_AFTER_MS accepts only a positive integer', () => {
+  const prior = process.env.RUN_STALE_AFTER_MS;
+  try {
+    for (const raw of ['0', '-1', 'NaN', '12abc', 'not-a-number', '']) {
+      process.env.RUN_STALE_AFTER_MS = raw;
+      assert.equal(runStaleAfterMs(), RUN_STALE_AFTER_MS, `"${raw}" must fall back to the default`);
+    }
+    process.env.RUN_STALE_AFTER_MS = '90000';
+    assert.equal(runStaleAfterMs(), 90000, 'a positive integer override is honored');
+  } finally {
+    if (prior === undefined) delete process.env.RUN_STALE_AFTER_MS;
+    else process.env.RUN_STALE_AFTER_MS = prior;
+  }
+});
+
+test('RUN_STALE_AFTER_MS=0 cannot reap a fresh run', async () => {
+  const runId = 'stale-zero-override';
+  await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
+    runStatus: 'running',
+    finishedAt: null,
+    startedAt: new Date().toISOString(),
+  });
+  const prior = process.env.RUN_STALE_AFTER_MS;
+  process.env.RUN_STALE_AFTER_MS = '0';
+  try {
+    assert.equal(
+      await reconcileStaleRunningRun((await getRunRecord(runId))!, logger),
+      false,
+      'a zero override must fall back to the default, not reap a fresh run',
+    );
+    assert.equal((await getRunRecord(runId))?.perModel[0]?.status, 'running', 'the fresh row is untouched');
+  } finally {
+    if (prior === undefined) delete process.env.RUN_STALE_AFTER_MS;
+    else process.env.RUN_STALE_AFTER_MS = prior;
+  }
 });
 
 test('RUN_STALE_AFTER_MS raises the reap threshold', async () => {

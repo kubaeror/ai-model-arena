@@ -13,7 +13,8 @@ export async function insertCostLedgerEntry(data: {
   const db = getDrizzleDb();
   // One ledger row per (run, model, finalization attempt): a finalize retry
   // that re-runs the same attempt's ledger write conflicts and is silently
-  // dropped.
+  // dropped. Invariant: on conflict the first attempt's row (cost, tokens,
+  // recorded_at) wins — the retry never overwrites the original values.
   await db.insert(cost_ledger).values({
     run_id: data.runId, model: data.model, cost_usd: data.costUsd,
     currency: data.currency ?? 'USD', input_tokens: data.inputTokens ?? null,

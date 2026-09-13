@@ -414,6 +414,31 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.strictEqual(ledger.length, 1, 'the retry must not duplicate the ledger row for the same attempt');
   });
 
+  it('a staleMs=0 reclaim is admitted at the same millisecond', async () => {
+    const runId = 'run_same_ms_reclaim';
+    const alpha = makePerModel(runId, 'alpha', root, 't-samems');
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'dashboard');
+
+    const attempt = await claimRunFinalization(runId);
+    assert.strictEqual(typeof attempt, 'number', 'a won claim returns the attempt number');
+    const claimedAt = (await getRunRecord(runId))!.finishedAt!;
+
+    const realNow = Date.now;
+    try {
+      // Pin the clock to the instant the claim was stamped: with staleMs=0 the
+      // claim must be reclaimable even when finished_at === staleBefore.
+      Date.now = () => Date.parse(claimedAt);
+      assert.strictEqual(
+        await claimRunFinalization(runId, 0),
+        attempt,
+        'a same-millisecond claim is immediately reclaimable when staleMs=0',
+      );
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   it('a new finalization attempt after restartRun records its own ledger row', async () => {
     const runId = 'run_ledger_new_attempt';
     const alpha = makePerModel(runId, 'alpha', root, 't-new-attempt');

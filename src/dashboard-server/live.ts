@@ -10,6 +10,7 @@ import {
   prepareRunFinalization,
   isStaleRunningRun,
   failNonTerminalModels,
+  markRunReaped,
   isRunCancelled,
   type RunIndexRecord,
 } from '../orchestrator/orchestrator.js';
@@ -87,9 +88,11 @@ export async function readLogAppend(
  * Dead-runner reconciliation for a run still 'running' past RUN_STALE_AFTER_MS
  * whose cancel signal is absent: the runner died without writing a terminal
  * model row (e.g. its task dead-lettered), so the normal finalize gate would
- * never admit it. Non-terminal rows are failed (runner died) and the run then
- * finalizes through the normal gate. Fresh runs and runs with a live cancel
- * signal are untouched. Returns true when the run was stale and reconciled.
+ * never admit it. The reap marker is persisted on the run (markRunReaped) so a
+ * later finalize crash-retry still knows the run was reaped; non-terminal rows
+ * are failed (runner died) and the run then finalizes through the normal gate.
+ * Fresh runs and runs with a live cancel signal are untouched. Returns true
+ * when the run was stale and reconciled.
  */
 export async function reconcileStaleRunningRun(
   run: Pick<RunIndexRecord, 'runId' | 'status' | 'startedAt'>,
@@ -98,6 +101,7 @@ export async function reconcileStaleRunningRun(
 ): Promise<boolean> {
   if (!isStaleRunningRun(run, now)) return false;
   if (await isRunCancelled(run.runId)) return false;
+  await markRunReaped(run.runId, new Date(now));
   await failNonTerminalModels(run.runId, logger);
   return true;
 }
@@ -115,9 +119,9 @@ export async function attemptFinalizeCandidate(
   run: Pick<RunIndexRecord, 'runId' | 'status' | 'finishedAt' | 'startedAt'>,
   logger: Logger,
 ): Promise<boolean> {
-  const reaped = await reconcileStaleRunningRun(run, logger);
+  await reconcileStaleRunningRun(run, logger);
   if (!(await prepareRunFinalization(run.runId))) return false;
-  return finalizeRunByRunId(run.runId, logger, undefined, reaped);
+  return finalizeRunByRunId(run.runId, logger);
 }
 
 /**

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { and, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import type { Logger } from '../../types.js';
 import { writeComparison, type ComparisonEntry } from '../../logger/comparison-logger.js';
 import { updateRun, type RunIndexRecord, type RunIndexModelEntry } from '../run-index.js';
@@ -92,7 +92,9 @@ export async function claimRunFinalization(runId: string, staleMs = FINALIZE_STA
       or(
         ne(runs.status, 'finalizing'),
         isNull(runs.finished_at),
-        lt(runs.finished_at, staleBefore),
+        // lte, not lt: staleMs=0 must admit a claim stamped in the same
+        // millisecond (the documented "immediately reclaimable" contract).
+        lte(runs.finished_at, staleBefore),
       ),
     ))
     .returning({ attempt: runs.finalization_attempt });

@@ -201,6 +201,9 @@ const runsColumns = {
   comparison_json_path: { type: 'text' as const },
   created_by: { type: 'text' as const },
   finalization_attempt: { type: 'int' as const, notNull: true, default: 0 },
+  // Set when the dashboard reaps a stale 'running' run; survives a crashed
+  // finalizer so the retry still settles 'errored' (see finalizeCore).
+  reaped_at: { type: 'text' as const },
 } satisfies Record<string, ColumnDef>;
 
 const costLedgerColumns = {

@@ -9,6 +9,7 @@ import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import type { Task } from '../../src/queue/types.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
 import { stopRun, restartRun, registerRun, isRunCancelled, isStaleRunningRun, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
+import { markRunCancelled } from '../../src/orchestrator/run-signals.js';
 
 const ORIG_ENV = { ...process.env };
 
@@ -166,6 +167,62 @@ test('restartRun refreshes started_at so an old run is not immediately reap-elig
       'restart must stamp a fresh started_at, not the original start',
     );
     assert.equal(isStaleRunningRun(rec), false, 'a freshly restarted run must not be immediately reap-eligible');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('restartRun resets the record before clearing the signal and enqueueing', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-restart-order-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'restart-order', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+      finishedAt: new Date().toISOString(), status: 'errored', source: 'dashboard',
+      perModel: [{ model: 'gpt-4o', runId: 'restart-order', status: 'errored', success: false } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+      reapedAt: '2026-09-13T00:00:00.000Z',
+    });
+    await markRunCancelled('restart-order');
+
+    // A watcher tick racing the restart must never observe the old record after
+    // the signal is cleared (it could reap/finalize the stale record and then be
+    // clobbered by the reset). Enqueue is the observation point.
+    const observed: Array<{
+      status: string; finishedAt: string | null; reapedAt: string | null | undefined;
+      perModelStatus: string; cancelSignal: boolean;
+    }> = [];
+    const orig = InMemoryQueue.prototype.enqueue;
+    InMemoryQueue.prototype.enqueue = async function (): Promise<void> {
+      const rec = (await getRunRecord('restart-order'))!;
+      observed.push({
+        status: rec.status,
+        finishedAt: rec.finishedAt,
+        reapedAt: rec.reapedAt,
+        perModelStatus: rec.perModel[0]!.status,
+        cancelSignal: await isRunCancelled('restart-order'),
+      });
+    };
+    try {
+      await restartRun('restart-order');
+    } finally {
+      InMemoryQueue.prototype.enqueue = orig;
+    }
+
+    assert.equal(observed.length, 1, 'restart enqueues one task per model');
+    const at = observed[0]!;
+    assert.equal(at.status, 'running', 'the record reset must land before enqueue');
+    assert.equal(at.finishedAt, null, 'finishedAt must be cleared before enqueue');
+    assert.equal(at.reapedAt, null, 'a previous reap marker must be cleared before enqueue');
+    assert.equal(at.perModelStatus, 'running', 'per-model rows must be reset before enqueue');
+    assert.equal(at.cancelSignal, false, 'the cancel signal must be cleared before enqueue');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });
