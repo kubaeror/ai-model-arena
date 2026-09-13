@@ -181,6 +181,35 @@ test('no_tool_calls completion calls onTurnComplete once with the turn usage', a
   assert.equal(capturedUsage?.prompt, 10);
 });
 
+test('each completed turn flushes the conversation transcript at the turn boundary', async () => {
+  const tool: ToolDefinition = { name: 'list_files', description: '', parameters: {} };
+  const adapter = stubAdapter([
+    { text: '', toolCalls: [{ id: 'tc1', name: 'list_files', arguments: {} }], usage: { prompt: 10, completion: 5 }, stopReason: 'tool_call' },
+    { text: 'done', toolCalls: [], usage: { prompt: 10, completion: 5 }, stopReason: 'no_tool_calls' },
+  ]);
+  let flushes = 0;
+  const conv = {
+    append: () => {},
+    flush: () => { flushes++; },
+    setEnded: () => {},
+  } as unknown as ConversationLogger;
+
+  const flushesAtTurnComplete: number[] = [];
+  const result = await runAgentLoop({
+    ...baseOpts(),
+    adapter: adapter as ModelAdapter, tools: [tool],
+    executors: { list_files: async () => ({ content: 'files', isError: false }) },
+    conv,
+    onTurnComplete: async () => { flushesAtTurnComplete.push(flushes); },
+  });
+
+  assert.equal(result.turnsUsed, 2);
+  // onTurnComplete runs just before that turn's flush, so turn N's callback
+  // must observe the N-1 boundary flushes from the turns before it.
+  assert.deepStrictEqual(flushesAtTurnComplete, [0, 1]);
+  assert.equal(flushes, 3, 'one turn-boundary flush per completed turn plus the final flush');
+});
+
 test('api_error does not call onTurnComplete', async () => {
   const adapter: ModelAdapter = {
     sendMessage: async () => { throw new Error('API down'); },

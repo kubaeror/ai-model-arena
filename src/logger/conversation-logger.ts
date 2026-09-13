@@ -148,7 +148,18 @@ export class ConversationLogger {
 
   private writeFile(): void {
     if (this.disableFile) return;
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify(this.file, null, 2));
+    const dir = path.dirname(this.filePath);
+    fs.mkdirSync(dir, { recursive: true });
+    // Temp-then-rename keeps readers from ever observing a torn transcript:
+    // the destination is replaced atomically, so a crash mid-write leaves the
+    // previous complete file in place.
+    const tmpPath = path.join(dir, `${path.basename(this.filePath)}.tmp-${process.pid}-${crypto.randomUUID()}`);
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(this.file, null, 2));
+      fs.renameSync(tmpPath, this.filePath);
+    } catch (err) {
+      try { fs.unlinkSync(tmpPath); } catch { /* temp may never have been created */ }
+      throw err;
+    }
   }
 }

@@ -55,6 +55,35 @@ test('a pending append is persisted by the debounce timer without an explicit fl
   ]);
 });
 
+test('flush writes atomically and leaves no temp files behind', () => {
+  const filePath = tmpConvPath();
+  const dir = path.dirname(filePath);
+  const conv = new ConversationLogger(filePath, META);
+
+  conv.append({ type: 'info', content: 'atomic', timestamp: '2026-01-01T00:00:05.000Z' });
+  conv.flush();
+
+  assert.deepEqual(fs.readdirSync(dir), ['conversation.json'], 'flush must not leave temp files behind');
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.deepEqual(parsed.entries, [
+    { type: 'info', content: 'atomic', timestamp: '2026-01-01T00:00:05.000Z' },
+  ]);
+});
+
+test('a failed flush cleans up its temp file', () => {
+  const filePath = tmpConvPath();
+  const dir = path.dirname(filePath);
+  const conv = new ConversationLogger(filePath, META);
+
+  conv.append({ type: 'info', content: 'x', timestamp: '2026-01-01T00:00:06.000Z' });
+  // A directory at the destination makes renameSync fail after the temp write.
+  fs.mkdirSync(filePath);
+  assert.throws(() => conv.flush());
+
+  const leftoverTemps = fs.readdirSync(dir).filter((name) => name.includes('.tmp-'));
+  assert.deepEqual(leftoverTemps, [], 'failed flush must not leave a temp file behind');
+});
+
 test('flushing mid-run keeps earlier entries and appends later ones', () => {
   const filePath = tmpConvPath();
   const conv = new ConversationLogger(filePath, META);
