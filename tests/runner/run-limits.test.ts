@@ -8,7 +8,7 @@ import { fetchSync } from '../../src/catalog/sync.js';
 import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import type { Task } from '../../src/queue/types.js';
 import { startRunner } from '../../src/runner.js';
-import { evaluateRunLimits } from '../../src/runner/limits.js';
+import { evaluateRunLimits, resolveExecutionStartMs } from '../../src/runner/limits.js';
 import { upsertRun } from '../../src/db/runs.js';
 import { ProviderRegistry } from '../../src/providers/index.js';
 import type { ModelAdapter } from '../../src/providers/adapters/base.js';
@@ -67,11 +67,11 @@ async function syncCatalog(): Promise<void> {
   }
 }
 
-async function registerRun(runId: string, outputs: string): Promise<void> {
+async function registerRun(runId: string, outputs: string, startedAt = new Date().toISOString()): Promise<void> {
   const modelRunDir = path.join(outputs, MODEL_DIR, runId);
   await upsertRun({
     runId, scenario: 'smoke', models: ['GPT-4o'],
-    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    startedAt, finishedAt: null, status: 'running', source: 'cli',
     perModel: [{
       model: 'GPT-4o', runId, status: 'running',
       outputDir: modelRunDir,
@@ -149,6 +149,21 @@ test('evaluateRunLimits treats zero limits as unlimited', () => {
     { maxExecutionSec: 0, maxCostUsd: 0 },
     { elapsedMs: 10 * 24 * 3600 * 1000, runCostUsd: 1_000_000 },
   ), null);
+});
+
+test('evaluateRunLimits stays silent exactly at both limits (strict > semantics)', () => {
+  assert.equal(evaluateRunLimits(
+    { maxExecutionSec: 600, maxCostUsd: 5 },
+    { elapsedMs: 600_000, runCostUsd: 5 },
+  ), null);
+});
+
+test('resolveExecutionStartMs prefers a valid persisted start and falls back to the attempt start', () => {
+  const persisted = Date.parse('2026-01-01T00:00:00.000Z');
+  assert.equal(resolveExecutionStartMs('2026-01-01T00:00:00.000Z', 123), persisted);
+  assert.equal(resolveExecutionStartMs(undefined, 123), 123);
+  assert.equal(resolveExecutionStartMs(null, 123), 123);
+  assert.equal(resolveExecutionStartMs('not-a-date', 123), 123);
 });
 
 test('scenario maxTurns caps the run even when the enqueued resolver default is larger', { timeout: 30000 }, async () => {
@@ -240,7 +255,6 @@ test('maxExecutionSec breach stops the run with a distinct stop reason', { timeo
     'systemPrompt: You are a test agent.',
     'task: Loop forever.',
   ].join('\n'));
-  await registerRun('run-time', outputs);
 
   const fake = new LoopingAdapter();
   const restore = stubAdapter(fake);
@@ -249,8 +263,11 @@ test('maxExecutionSec breach stops the run with a distinct stop reason', { timeo
 
   // read-only-analysis caps execution at 600s; jump the wall clock past it
   // inside the first send so the next turn's check trips deterministically.
+  // node:test's mock Date epoch starts at 0, so the persisted run start must
+  // be epoch-aligned for the wall-clock anchor to see the jump.
   t.mock.timers.enable({ apis: ['Date'] });
   fake.onCall = () => { t.mock.timers.setTime(Date.now() + 601_000); };
+  await registerRun('run-time', outputs, new Date(0).toISOString());
 
   const runnerDone = startRunner({ queue, signal: ac.signal });
 
@@ -276,6 +293,46 @@ test('maxExecutionSec breach stops the run with a distinct stop reason', { timeo
     assert.equal(fake.calls, 1);
   } finally {
     t.mock.timers.reset();
+    await teardown(ac, runnerDone, restore, queue, tmp);
+  }
+});
+
+test('maxExecutionSec counts from the persisted run start, not the attempt start', { timeout: 30000 }, async () => {
+  const { tmp, outputs } = setupEnvironment('arena-runstart-');
+  await syncCatalog();
+  const scenarioPath = path.join(tmp, 'run-start.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: run-start',
+    'systemPrompt: You are a test agent.',
+    'task: Loop forever.',
+  ].join('\n'));
+  // read-only-analysis caps execution at 600s; the run started 601s ago, so a
+  // fresh attempt start would hide the breach in every retry/restart.
+  await registerRun('run-old', outputs, new Date(Date.now() - 601_000).toISOString());
+
+  const fake = new LoopingAdapter();
+  const restore = stubAdapter(fake);
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  try {
+    const task: Task = {
+      taskId: 'run-old-task', sessionId: 'run-old-session',
+      provider: 'openai', model: 'GPT-4o', scenario: scenarioPath,
+      config: { modelRunId: 'run-old', maxTurns: 20, scenarioSource: 'cli' },
+      enqueuedAt: new Date().toISOString(), attempts: 0,
+    };
+    await queue.enqueue(task);
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+
+    const result = JSON.parse(
+      fs.readFileSync(path.join(outputs, MODEL_DIR, 'run-old', 'result.json'), 'utf8'),
+    ) as { stopReason: string; turnsUsed: number };
+    assert.equal(result.stopReason, 'max_execution_time_exceeded');
+    assert.equal(result.turnsUsed, 0, 'an already-exceeded cap trips before the first send');
+    assert.equal(fake.calls, 0);
+  } finally {
     await teardown(ac, runnerDone, restore, queue, tmp);
   }
 });

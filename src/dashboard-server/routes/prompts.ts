@@ -8,7 +8,7 @@ import { notFound, parseBody } from '../helpers.js';
 import {
   getPromptById, listPromptsWithLatestVersion, listPromptVersions,
   insertPrompt, updatePromptMetadata, deletePromptById,
-  insertPromptVersion, getLatestPromptVersion,
+  insertPromptVersion, getLatestPromptVersion, getPromptVersion,
   getModelByNameOrId,
 } from '../../db/query.js';
 
@@ -179,6 +179,12 @@ export function createPromptsRouter(): Router {
     }
 
     const version = parsed.promptVersion ?? await getLatestPromptVersion(parsed.promptId);
+    // An enqueue that references a missing version would otherwise fail only
+    // later in the runner (nack/DLQ); reject it at the API boundary instead.
+    if (!(await getPromptVersion(parsed.promptId, version))) {
+      res.status(400).json({ error: `Prompt version not found: ${parsed.promptId}@${version}` });
+      return;
+    }
 
     const { createQueue } = await import('../../queue/index.js');
 

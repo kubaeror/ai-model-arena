@@ -7,6 +7,7 @@ import { createLogger } from '../logger/pino-logger.js';
 import { loadBudgetConfig, checkBudget, reserveBudget, releaseReservation, computeCost, recordRunReservations, releaseRunReservations, budgetStateRoot } from '../cost-tracking/index.js';
 import { projectRoot, timestamp } from './utils.js';
 import { resolveModelForRun } from '../db/model-resolver.js';
+import { getSessionById } from '../db/query.js';
 import { initDb, getDrizzleDb } from '../db/index.js';
 import { runs, run_models } from '../db/schema.js';
 import { and, eq, inArray, notInArray } from 'drizzle-orm';
@@ -542,9 +543,15 @@ export async function restartRun(runId: string): Promise<void> {
   const idemKey = makeIdempotencyKey(rec.scenario, rec.perModel.map((m) => m.model));
   for (const m of rec.perModel) {
     const resolved = await resolveModelForRun(m.model);
+    // The runner persists the prompt reference on the run's session (ids are
+    // deterministic: `${runId}-${model}`), so a restart preserves the prompt
+    // instead of silently reverting to the scenario text.
+    const session = await getSessionById(`${runId}-${m.model}`);
     const task: Task = {
       taskId: `${runId}-${m.model}`,
       sessionId: `${runId}-${m.model}`,
+      promptId: session?.prompt_id ?? undefined,
+      promptVersion: session?.prompt_version ?? undefined,
       provider: resolved?.providerId ?? 'unknown',
       model: m.model,
       scenario: rec.scenario,

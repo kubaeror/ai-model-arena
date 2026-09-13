@@ -446,6 +446,52 @@ test('POST /api/prompts/enqueue rejects traversal scenario and model identifiers
   }
 });
 
+test('POST /api/prompts/enqueue rejects a missing prompt version with 400', async (t) => {
+  await boot(t);
+  const now = new Date().toISOString();
+  await insertPrompt({ id: 'prompt-v', name: 'Prompt V', description: null, createdAt: now, updatedAt: now });
+  await insertPromptVersion({
+    id: 'version-v1', promptId: 'prompt-v', version: 1,
+    systemPrompt: 'system', task: 'task', config: null, tag: null,
+    createdAt: now, createdBy: 'tester',
+  });
+
+  const express = (await import('express')).default;
+  const { createPromptsRouter } = await import('../../src/dashboard-server/routes/prompts.js');
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as { user?: { sub: string; role: string } }).user = { sub: 'tester', role: 'admin' };
+    next();
+  });
+  app.use('/api/prompts', createPromptsRouter());
+
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  try {
+    const missing = await fetch(`${base}/api/prompts/enqueue`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ promptId: 'prompt-v', promptVersion: 99, models: ['gpt-4o'], scenario: 'smoke' }),
+    });
+    assert.equal(missing.status, 400, 'unknown version must be rejected at enqueue');
+    const missingBody = (await missing.json()) as { error: string };
+    assert.match(missingBody.error, /Prompt version not found/);
+
+    const existing = await fetch(`${base}/api/prompts/enqueue`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ promptId: 'prompt-v', promptVersion: 1, models: ['gpt-4o'], scenario: 'smoke' }),
+    });
+    assert.equal(existing.status, 200, 'an existing version must still enqueue');
+  } finally {
+    server.close();
+    server.closeIdleConnections();
+  }
+});
+
 test('GET /api/runs only lists runs owned by the caller for non-admins', async (t) => {
   const h = await boot(t, { seedViewerUser: true });
   await upsertRun(runFixture('owned-by-viewer1', TEST_VIEWER.username, h.tmpDir));

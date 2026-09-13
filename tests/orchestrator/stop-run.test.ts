@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
-import { transitionTaskState } from '../../src/db/query.js';
+import { transitionTaskState, createSession } from '../../src/db/query.js';
+import { InMemoryQueue } from '../../src/queue/in-memory.js';
+import type { Task } from '../../src/queue/types.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
 import { stopRun, restartRun, registerRun, isRunCancelled, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
 
@@ -93,6 +95,46 @@ test('restartRun resets a finalizing run to running', async () => {
     assert.equal(rec?.status, 'running', 'restart must clear the finalizing claim');
     assert.equal(rec?.finishedAt, null, 'restart must clear finishedAt');
     assert.equal(rec?.perModel[0]?.status, 'running', 'restart must reset model rows');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('restartRun carries promptId/promptVersion from the run session', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-restart-prompt-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'restart-prompt', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      status: 'completed', source: 'dashboard',
+      perModel: [{ model: 'gpt-4o', runId: 'restart-prompt', status: 'completed' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+    const now = new Date().toISOString();
+    await createSession({
+      id: 'restart-prompt-gpt-4o', promptId: 'prompt-1', promptVersion: 3,
+      model: 'gpt-4o', status: 'completed', createdAt: now, updatedAt: now,
+    });
+
+    const captured: Task[] = [];
+    const orig = InMemoryQueue.prototype.enqueue;
+    InMemoryQueue.prototype.enqueue = async function (task: Task): Promise<void> { captured.push(task); };
+    try {
+      await restartRun('restart-prompt');
+    } finally {
+      InMemoryQueue.prototype.enqueue = orig;
+    }
+
+    assert.equal(captured.length, 1, 'restart must enqueue one task');
+    assert.equal(captured[0]?.promptId, 'prompt-1', 'restart must preserve the prompt id');
+    assert.equal(captured[0]?.promptVersion, 3, 'restart must preserve the prompt version');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });

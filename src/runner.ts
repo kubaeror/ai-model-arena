@@ -21,7 +21,7 @@ import { SandboxGit, writeDiffPatch } from './sandbox/git.js';
 import { SHELL_METACHAR_RE } from './sandbox/shell-policy.js';
 import { generateManifest, writeManifest, buildProducedByTool } from './sandbox/artifact-manifest.js';
 import { getProfile, getAllowedTools } from './profiles/definitions.js';
-import { evaluateRunLimits } from './runner/limits.js';
+import { evaluateRunLimits, resolveExecutionStartMs } from './runner/limits.js';
 import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
@@ -342,6 +342,17 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       logger.info('Task dequeued', { taskId: task.taskId, model: task.model, scenario: task.scenario });
 
+      // Wall-clock cap is per run, not per attempt: seed from the persisted
+      // run start so retries and dashboard restarts cannot reset the budget.
+      // A direct enqueue with no run record falls back to this attempt's start.
+      let executionStartedAtMs = startedAt.getTime();
+      try {
+        const persistedStart = (await getRunRecord(runId))?.startedAt;
+        executionStartedAtMs = resolveExecutionStartMs(persistedStart, executionStartedAtMs);
+      } catch (e) {
+        logger.warn('Failed to read persisted run start; using attempt start for wall-clock cap', { runId, err: String(e) });
+      }
+
       // Transition task to 'claimed' state (persisted in DB). Awaited so the
       // ordering contract holds on Postgres (queries spread across pool
       // connections): terminal writes must never land before the claimed/
@@ -608,7 +619,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             executors,
             systemPrompt,
             task: taskPrompt,
-            maxTurns: scenario.maxTurns ?? profile.maxTurns ?? resolved.maxTurns,
+            maxTurns: scenario.maxTurns ?? profile.maxTurns,
             toolCtx,
             conv,
             logger: logger.child('loop'),
@@ -694,7 +705,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                 logger.info('Run cancelled during execution', { runId: cancelledRunId });
                 return false;
               }
-              const elapsedMs = Date.now() - startedAt.getTime();
+              const elapsedMs = Date.now() - executionStartedAtMs;
               const limitReason = evaluateRunLimits(
                 { maxExecutionSec: profile.maxExecutionSec, maxCostUsd: profile.maxCostUsd },
                 { elapsedMs, runCostUsd: prevRunCost },
