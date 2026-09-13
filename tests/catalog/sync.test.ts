@@ -194,3 +194,39 @@ test('fetchSync records error status on fetch failure', async () => {
     cleanup();
   }
 });
+
+test('fetchSync persists provider api URL as api_base and drops unsafe URLs', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  const model = (id: string) => ({
+    id, name: id, attachment: false, reasoning: false, temperature: true, tool_call: true,
+    cost: { input: 1, output: 2 }, limit: { context: 128000, output: 4096 },
+  });
+  const payload = {
+    synth: { id: 'synth', name: 'Synth', api: 'https://api.synth.example/v1', env: ['SYNTH_API_KEY'], models: { 'synth-1': model('synth-1') } },
+    sneaky: { id: 'sneaky', name: 'Sneaky', api: 'http://169.254.169.254/latest/meta-data', env: ['SNEAKY_API_KEY'], models: { 'sneaky-1': model('sneaky-1') } },
+  };
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    assert.equal(result.ok, true);
+    const rows = getDb().prepare('SELECT id, api_base FROM providers ORDER BY id').all() as Array<{ id: string; api_base: string | null }>;
+    assert.deepEqual(rows, [
+      { id: 'sneaky', api_base: null },
+      { id: 'synth', api_base: 'https://api.synth.example/v1' },
+    ]);
+
+    payload.synth.api = 'https://api.synth-v2.example/v1';
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    const updated = getDb().prepare('SELECT api_base FROM providers WHERE id = ?').get('synth') as { api_base: string };
+    assert.equal(updated.api_base, 'https://api.synth-v2.example/v1');
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});

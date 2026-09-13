@@ -69,6 +69,16 @@ export async function listCustomProviders(): Promise<ProviderRow[]> {
   return db.select().from(providers).where(eq(providers.is_builtin, 0)).orderBy(providers.id);
 }
 
+/**
+ * Every provider row regardless of origin: user-created (is_builtin=0) and
+ * catalog-synced (is_builtin=1). Used by the registry, which merges these with
+ * the static descriptor table.
+ */
+export async function listAllProviders(): Promise<ProviderRow[]> {
+  const db = getDrizzleDb();
+  return db.select().from(providers).orderBy(providers.id);
+}
+
 export async function deleteCustomProvider(id: string): Promise<void> {
   const db = getDrizzleDb();
   await db.delete(provider_versions).where(eq(provider_versions.provider_id, id));

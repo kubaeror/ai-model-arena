@@ -2,6 +2,7 @@ import { getDrizzleDb } from '../db/index.js';
 import { isStale } from './cache.js';
 import { ModelsDevResponseSchema, type ModelsDevResponse } from './types.js';
 import { normalizeModelId } from './match.js';
+import { validateProviderUrl } from '../providers/url-validator.js';
 import { resetPricingCache } from '../cost-tracking/pricing.js';
 import {
   providers, models, model_providers, pricing,
@@ -79,14 +80,17 @@ async function upsertCatalog(db: BetterSQLite3Database, data: ModelsDevResponse)
   for (const [providerId, provider] of Object.entries(data)) {
     const adapter = PROVIDER_ADAPTER_MAP[providerId] ?? 'openai-compat';
     const authScheme = providerId === 'anthropic' ? 'x-api-key' : providerId.startsWith('google') ? 'google' : providerId === 'amazon-bedrock' ? 'bedrock' : 'bearer';
+    // models.dev is remote input: only persist an endpoint that passes the same
+    // SSRF gate as dashboard-created providers (the registry re-validates too).
+    const apiBase = provider.api && validateProviderUrl(provider.api).ok ? provider.api : null;
     await db.insert(providers).values({
       id: providerId, name: provider.name,
-      api_base: null, auth_scheme: authScheme,
+      api_base: apiBase, auth_scheme: authScheme,
       env_var: provider.env[0] ?? null, is_builtin: 1, adapter,
       header_name: null, created_at: now, updated_at: now,
     }).onConflictDoUpdate({
       target: providers.id,
-      set: { name: provider.name, env_var: provider.env[0] ?? null, adapter, updated_at: now },
+      set: { name: provider.name, api_base: apiBase, env_var: provider.env[0] ?? null, adapter, updated_at: now },
     });
 
     for (const [modelId, model] of Object.entries(provider.models)) {

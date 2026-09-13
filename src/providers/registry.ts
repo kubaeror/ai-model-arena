@@ -48,14 +48,25 @@ export class ProviderRegistry {
     for (const d of descriptors) this.register(d);
   }
 
+  /**
+   * Merge every DB-backed provider (custom and catalog-synced) into the
+   * registry. Descriptors registered earlier — i.e. the static builtins — win
+   * on id conflicts.
+   */
   async loadCustomFromDb(): Promise<void> {
-    const { listCustomProviders } = await import('./custom.js');
-    const rows = await listCustomProviders();
+    const { listAllProviders } = await import('./custom.js');
+    const rows = await listAllProviders();
     for (const r of rows) {
+      // Static descriptors are registered first and win on id conflicts, so
+      // neither user custom rows nor catalog-synced rows shadow a builtin.
+      if (this.descriptors.has(r.id)) continue;
       this.register({
         id: r.id, name: r.name, apiBase: r.api_base ?? undefined,
         authScheme: r.auth_scheme, envVar: r.env_var ?? undefined,
-        headerName: r.header_name ?? undefined, adapter: r.adapter, isBuiltin: false,
+        headerName: r.header_name ?? undefined, adapter: r.adapter,
+        // DB-backed URLs are untrusted input (catalog URLs come from remote
+        // JSON), so createAdapter re-validates them on every construction.
+        isBuiltin: false,
       });
     }
   }
