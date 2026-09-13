@@ -28,10 +28,42 @@ function safeLedgerModel(modelName: string): boolean {
 
 const LOCK_FILE = '.budget.lock';
 /** Give up on a lock only after the stale timeout has had a chance to break it. */
-const LOCK_ACQUIRE_TIMEOUT_MS = 20_000;
+export const DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS = 10_000;
 /** Locks older than this belong to a crashed holder and can be broken. */
-const LOCK_STALE_MS = 15_000;
+export const DEFAULT_LOCK_STALE_MS = 5_000;
 const LOCK_RETRY_MS = 25;
+
+/**
+ * Read a positive-integer lock env override, falling back to `fallback` for
+ * missing/garbage values ('0', negatives, NaN, decimals, trailing junk).
+ */
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  // Strict digits-only: Number()/parseInt would accept '1e3', ' 12 ' or
+  // '12abc' and silently mis-size the stall window.
+  if (raw !== undefined && /^\d+$/.test(raw)) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return fallback;
+}
+
+export function lockAcquireTimeoutMs(): number {
+  return positiveIntEnv('BUDGET_LOCK_TIMEOUT_MS', DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS);
+}
+
+export function lockStaleMs(): number {
+  return positiveIntEnv('BUDGET_LOCK_STALE_MS', DEFAULT_LOCK_STALE_MS);
+}
+
+/**
+ * Test seam: `onBeforeRename` runs in the read→rename window that cannot be
+ * interleaved on a single-threaded event loop, letting tests inject a
+ * concurrent replacement deterministically.
+ */
+export interface LockRaceHooks {
+  onBeforeRename?: () => void;
+}
 
 function getEmptyState(): BudgetState {
   return {
@@ -104,14 +136,29 @@ function budgetLockPath(rootDir: string): string {
   return path.join(budgetStateRoot(rootDir), LOCK_FILE);
 }
 
+function lockTokenAt(lockPath: string): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as { token?: unknown };
+    return typeof parsed.token === 'string' ? parsed.token : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Try to create the lockfile, breaking a stale one as a side effect. Returns
  * the owner token written into the lock on success, null when another live
  * holder has it. The token lets a stalled holder detect that its lock was
  * stale-broken and replaced before it resumes: only the current owner may
  * remove the file.
+ *
+ * Stale breaks are rename-then-verify: the lock is renamed to a unique path,
+ * the renamed file is re-read, and the break only completes when its token
+ * still matches the one observed before the rename. A mismatch means another
+ * process replaced the lock in between, so the file is renamed back and the
+ * break is abandoned.
  */
-export function tryAcquireLock(rootDir: string, logger?: Logger): string | null {
+export function tryAcquireLock(rootDir: string, logger?: Logger, hooks?: LockRaceHooks): string | null {
   const lockPath = budgetLockPath(rootDir);
   ensureDir(path.dirname(lockPath));
   const token = crypto.randomBytes(16).toString('hex');
@@ -125,23 +172,33 @@ export function tryAcquireLock(rootDir: string, logger?: Logger): string | null 
 
   try {
     const raw = fs.readFileSync(lockPath, 'utf8');
+    let observedToken: string | null = null;
     let createdAt: number | undefined;
     try {
-      createdAt = (JSON.parse(raw) as { createdAt?: number }).createdAt;
+      const parsed = JSON.parse(raw) as { createdAt?: number; token?: unknown };
+      createdAt = parsed.createdAt;
+      if (typeof parsed.token === 'string') observedToken = parsed.token;
     } catch {
       // Unparsable lock content — fall back to the file mtime.
     }
     const age = Date.now() - (typeof createdAt === 'number' ? createdAt : fs.statSync(lockPath).mtimeMs);
-    if (age > LOCK_STALE_MS) {
-      // Rename before deleting so a lock another process just re-created is never removed.
+    if (age > lockStaleMs()) {
       const stalePath = `${lockPath}.stale.${process.pid}.${Date.now()}`;
       try {
+        hooks?.onBeforeRename?.();
+        // Rename before deleting so a lock another process just re-created is never removed.
         fs.renameSync(lockPath, stalePath);
+        // The rename may have grabbed a replacement written after our staleness
+        // read: only a token that still matches the observed one is really stale.
+        if (lockTokenAt(stalePath) !== observedToken) {
+          fs.renameSync(stalePath, lockPath);
+          return null;
+        }
         fs.rmSync(stalePath, { force: true });
+        logger?.warn('Broke stale budget lock', { path: lockPath, ageMs: age });
       } catch {
         // Another process broke the stale lock first.
       }
-      logger?.warn('Broke stale budget lock', { path: lockPath, ageMs: age });
     }
   } catch {
     // Lock disappeared between attempts; retry.
@@ -150,23 +207,32 @@ export function tryAcquireLock(rootDir: string, logger?: Logger): string | null 
 }
 
 /**
- * Remove the lockfile only when it still carries `token`. Read-verify-unlink:
- * a stalled holder whose lock was stale-broken and re-created by a new holder
- * must not delete the new holder's lock on resume.
+ * Remove the lockfile only when it still carries `token`. Rename-verify-unlink:
+ * the lock is renamed to a unique path and the renamed file is re-read; it is
+ * only unlinked when its token still matches. Read-verify-unlink alone leaves a
+ * read→unlink window where a stale break plus a new acquisition could hand us a
+ * fresh holder's lock, which this closes. A mismatch restores the file.
  */
-export function releaseLock(rootDir: string, token: string): void {
+export function releaseLock(rootDir: string, token: string, hooks?: LockRaceHooks): void {
   const lockPath = budgetLockPath(rootDir);
+  if (lockTokenAt(lockPath) !== token) return;
+
+  const releasePath = `${lockPath}.release.${process.pid}.${Date.now()}`;
   try {
-    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as { token?: unknown };
-    if (parsed.token !== token) return;
+    hooks?.onBeforeRename?.();
+    fs.renameSync(lockPath, releasePath);
+    if (lockTokenAt(releasePath) !== token) {
+      fs.renameSync(releasePath, lockPath);
+      return;
+    }
+    fs.rmSync(releasePath, { force: true });
   } catch {
-    // Lock already removed or unreadable: only a verified owner may unlink it.
-    return;
-  }
-  try {
-    fs.rmSync(lockPath, { force: true });
-  } catch {
-    // Best effort: a failed unlink must not fail an already-written mutation.
+    // Best effort: a failed rename/unlink must not fail an already-written mutation.
+    try {
+      if (!fs.existsSync(lockPath) && fs.existsSync(releasePath)) fs.renameSync(releasePath, lockPath);
+    } catch {
+      // Another process holds the path now; leave the renamed file to the OS.
+    }
   }
 }
 
@@ -174,7 +240,7 @@ const lockSleep = new Int32Array(new SharedArrayBuffer(4));
 
 /** Synchronous lock wait for the sync APIs, which cannot await. */
 function acquireLockSync(rootDir: string, logger?: Logger): () => void {
-  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
+  const deadline = Date.now() + lockAcquireTimeoutMs();
   for (;;) {
     const token = tryAcquireLock(rootDir, logger);
     if (token !== null) return () => releaseLock(rootDir, token);
@@ -184,7 +250,7 @@ function acquireLockSync(rootDir: string, logger?: Logger): () => void {
 }
 
 async function acquireLock(rootDir: string, logger?: Logger): Promise<() => void> {
-  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
+  const deadline = Date.now() + lockAcquireTimeoutMs();
   for (;;) {
     const token = tryAcquireLock(rootDir, logger);
     if (token !== null) return () => releaseLock(rootDir, token);

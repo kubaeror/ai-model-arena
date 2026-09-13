@@ -14,6 +14,10 @@ import {
   mutateBudgetState,
   tryAcquireLock,
   releaseLock,
+  lockAcquireTimeoutMs,
+  lockStaleMs,
+  DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS,
+  DEFAULT_LOCK_STALE_MS,
 } from '../../src/cost-tracking/budget.js';
 
 const CONFIG = `
@@ -459,6 +463,176 @@ test('an old holder release never deletes a lock a new holder acquired after a s
     releaseLock(rootDir, newToken);
     assert.equal(fs.existsSync(lockPath), false, 'the owner release removes its own lock');
   } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a stale break aborts and restores the lock when a different token appears before the rename', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  const observedToken = 'stale-observed-token';
+  const replacementToken = 'fresh-replacement-token';
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 4242, createdAt: Date.now() - 10 * 60 * 1000, token: observedToken,
+    }));
+
+    // A concurrent process replaces the lock between our staleness read and our
+    // rename. The break must detect the mismatch, restore the file, and give up.
+    const token = tryAcquireLock(rootDir, undefined, {
+      onBeforeRename: () => {
+        fs.writeFileSync(lockPath, JSON.stringify({
+          pid: 5252, createdAt: Date.now(), token: replacementToken,
+        }));
+      },
+    });
+
+    assert.equal(token, null, 'the break aborts instead of deleting the replacement');
+    assert.equal(fs.existsSync(lockPath), true, 'the replacement lock is restored');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, replacementToken,
+      "the replacement holder's token survives");
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a stale break still succeeds when the observed token matches at break time', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  const observedToken = 'still-stale-token';
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 4242, createdAt: Date.now() - 10 * 60 * 1000, token: observedToken,
+    }));
+
+    assert.equal(tryAcquireLock(rootDir), null, 'the matching stale lock is broken (caller retries)');
+    assert.equal(fs.existsSync(lockPath), false, 'the verified stale lock file is gone');
+
+    const token = tryAcquireLock(rootDir);
+    assert.ok(token, 'the next attempt acquires the now-free lock');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, token, 'new holder owns the lock');
+    releaseLock(rootDir, token!);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('releaseLock with a stale token does not delete a newer holder lock (verified unlink)', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  try {
+    loadBudgetConfig(configPath);
+    const newToken = 'new-holder-token';
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 5252, createdAt: Date.now(), token: newToken,
+    }));
+
+    releaseLock(rootDir, 'stale-old-token');
+
+    assert.equal(fs.existsSync(lockPath), true, "the newer holder's lock survives a stale release");
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, newToken, 'newer token is untouched');
+    releaseLock(rootDir, newToken);
+    assert.equal(fs.existsSync(lockPath), false, 'the actual owner can still release');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('releaseLock restores the lock when its token changes between read and rename', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  const newToken = 'fresh-newer-token';
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 5252, createdAt: Date.now(), token: 'our-token',
+    }));
+
+    // The file is ours at read time, but a stale-break plus a new acquisition
+    // lands just before our rename: the rename grabs the new holder's file.
+    releaseLock(rootDir, 'our-token', {
+      onBeforeRename: () => {
+        fs.writeFileSync(lockPath, JSON.stringify({
+          pid: 6363, createdAt: Date.now(), token: newToken,
+        }));
+      },
+    });
+
+    assert.equal(fs.existsSync(lockPath), true, 'the newer lock is restored, not deleted');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, newToken, 'newer holder still owns the lock');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('lock env overrides: valid integers are accepted', () => {
+  const prevTimeout = process.env.BUDGET_LOCK_TIMEOUT_MS;
+  const prevStale = process.env.BUDGET_LOCK_STALE_MS;
+  try {
+    delete process.env.BUDGET_LOCK_TIMEOUT_MS;
+    delete process.env.BUDGET_LOCK_STALE_MS;
+    assert.equal(lockAcquireTimeoutMs(), DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS, 'timeout default');
+    assert.equal(lockStaleMs(), DEFAULT_LOCK_STALE_MS, 'stale default');
+    assert.equal(DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS, 10_000);
+    assert.equal(DEFAULT_LOCK_STALE_MS, 5_000);
+
+    process.env.BUDGET_LOCK_TIMEOUT_MS = '25000';
+    process.env.BUDGET_LOCK_STALE_MS = '7500';
+    assert.equal(lockAcquireTimeoutMs(), 25_000);
+    assert.equal(lockStaleMs(), 7_500);
+  } finally {
+    if (prevTimeout === undefined) delete process.env.BUDGET_LOCK_TIMEOUT_MS;
+    else process.env.BUDGET_LOCK_TIMEOUT_MS = prevTimeout;
+    if (prevStale === undefined) delete process.env.BUDGET_LOCK_STALE_MS;
+    else process.env.BUDGET_LOCK_STALE_MS = prevStale;
+  }
+});
+
+test('lock env overrides: 0, negative, NaN and non-numeric values fall back to defaults', () => {
+  const prevTimeout = process.env.BUDGET_LOCK_TIMEOUT_MS;
+  const prevStale = process.env.BUDGET_LOCK_STALE_MS;
+  try {
+    for (const bad of ['0', '-1', 'NaN', '12abc', 'Infinity', '1.5', '']) {
+      process.env.BUDGET_LOCK_TIMEOUT_MS = bad;
+      process.env.BUDGET_LOCK_STALE_MS = bad;
+      assert.equal(lockAcquireTimeoutMs(), DEFAULT_LOCK_ACQUIRE_TIMEOUT_MS, `timeout rejects ${bad || '<empty>'}`);
+      assert.equal(lockStaleMs(), DEFAULT_LOCK_STALE_MS, `stale rejects ${bad || '<empty>'}`);
+    }
+  } finally {
+    if (prevTimeout === undefined) delete process.env.BUDGET_LOCK_TIMEOUT_MS;
+    else process.env.BUDGET_LOCK_TIMEOUT_MS = prevTimeout;
+    if (prevStale === undefined) delete process.env.BUDGET_LOCK_STALE_MS;
+    else process.env.BUDGET_LOCK_STALE_MS = prevStale;
+  }
+});
+
+test('BUDGET_LOCK_STALE_MS shortens the stale window used when breaking locks', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  const prevStale = process.env.BUDGET_LOCK_STALE_MS;
+  try {
+    process.env.BUDGET_LOCK_STALE_MS = '1';
+    loadBudgetConfig(configPath);
+    // Age the lock just past the custom 1ms window but not the default 5s.
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 4242, createdAt: Date.now() - 50, token: 'aged' }));
+    assert.equal(tryAcquireLock(rootDir), null, 'the shortened window breaks a 50ms-old lock');
+    assert.equal(fs.existsSync(lockPath), false, 'the stale lock is removed');
+    assert.ok(tryAcquireLock(rootDir), 'the next attempt acquires the lock');
+  } finally {
+    if (prevStale === undefined) delete process.env.BUDGET_LOCK_STALE_MS;
+    else process.env.BUDGET_LOCK_STALE_MS = prevStale;
     resetBudgetCache();
     fs.rmSync(tmp, { recursive: true, force: true });
   }
