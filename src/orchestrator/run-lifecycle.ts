@@ -21,6 +21,7 @@ import {
 import type { ModelAdapter } from '../providers/adapters/base.js';
 import {
   aggregate,
+  claimRunFinalization,
   patchIndexAfterFinalize,
   buildPerModelEntries,
 } from './finalize/aggregate.js';
@@ -366,17 +367,14 @@ export async function isRunCompleteByRunId(runId: string): Promise<boolean> {
  * Aggregates results, patches the index, releases budget, records spend/ledger,
  * runs anomaly analysis + stats writeback, persists judge scores, and dispatches
  * the run_completed notification + webhook. Never throws on ancillary failures.
+ *
+ * Callers must hold the atomic claim from `claimRunFinalization` before calling
+ * this: it is the only guard that prevents a concurrent finalizer from
+ * duplicating ledger rows, notifications, and stats.
  */
 async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
-  // Idempotency guard: the CLI and the dashboard watcher can both finalize a
-  // run (watcher polls every 3s). A second pass would duplicate cost_ledger
-  // and tool_call_stats rows and re-fire notifications.
-  if (rec.status === 'completed') {
-    logger.info('Run already finalized — skipping', { runId });
-    return { mdPath: rec.comparisonMdPath ?? '', jsonPath: rec.comparisonJsonPath ?? '' };
-  }
   const root = projectRoot();
   // Release budget reservations against the same state root they were
   // reserved under in startRun, so estimates always match.
@@ -398,12 +396,19 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: s
   return { mdPath, jsonPath };
 }
 
-/** Read results, write comparison, update index. Used by the CLI (has a spec). */
+/** Read results, write comparison, update index. Used by the CLI (has a spec).
+ *  The atomic claim runs before aggregation so a losing finalizer does no work. */
 export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: ModelAdapter): Promise<{
   entries: ComparisonEntry[];
   mdPath: string;
   jsonPath: string;
 }> {
+  if (!(await claimRunFinalization(spec.runId))) {
+    const existing = await getRunRecord(spec.runId);
+    if (!existing) throw new Error(`Run not found: ${spec.runId}`);
+    logger.info('Run already finalized — skipping', { runId: spec.runId });
+    return { entries: [], mdPath: existing.comparisonMdPath ?? '', jsonPath: existing.comparisonJsonPath ?? '' };
+  }
   const { entries, mdPath, jsonPath } = aggregate(spec.root!, {
     runId: spec.runId, scenario: spec.scenario, startedAt: spec.startedAt,
     models: spec.models.map((m) => ({ model: m.model, resultPath: m.resultPath })),
@@ -412,16 +417,23 @@ export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: 
   return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath };
 }
 
-/** Finalize by runId (resolves paths from the index). Used by the dashboard watcher. */
-export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<void> {
+/** Finalize by runId (resolves paths from the index). Used by the dashboard
+ *  watcher. Returns true when this call won the atomic claim (and finalized);
+ *  false when the run is missing or another finalizer already claimed it. */
+export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<boolean> {
   const rec = await getRunRecord(runId);
-  if (!rec) return;
+  if (!rec) return false;
+  if (!(await claimRunFinalization(runId))) {
+    logger.info('Run already finalized — skipping', { runId });
+    return false;
+  }
   const root = projectRoot();
   const { entries, mdPath, jsonPath } = aggregate(root, {
     runId, scenario: rec.scenario, startedAt: rec.startedAt,
     models: rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
   });
   await finalizeCore(runId, entries, mdPath, jsonPath, logger, judgeAdapter);
+  return true;
 }
 
 import {
@@ -447,10 +459,13 @@ export function isRunCancelled(runId: string): Promise<boolean> { return isRunCa
 /** Mark a run's cancellation as acknowledged (cleared by runner after stopping). */
 export function clearRunCancelled(runId: string): Promise<void> { return clearRunCancelledSignal(runId); }
 
-/** Stop a running run (marks as stopped in the index and signals cancellation). */
+/** Stop a running run (marks as stopped in the index and signals cancellation).
+ *  A completed run is terminal: re-marking it stopped would let the dashboard
+ *  watcher finalize it again (duplicate ledger rows/notifications). */
 export async function stopRun(runId: string): Promise<void> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
+  if (rec.status === 'completed') return;
   await markRunCancelledSignal(runId);
   await updateRun(runId, (r) => {
     r.status = 'stopped';

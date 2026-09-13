@@ -230,6 +230,19 @@ test('GET /api/runs returns seeded runs', async (t) => {
   assert.equal(run!.perModel[0]?.status, 'completed');
 });
 
+test('POST /api/runs/:runId/stop on a completed run is a no-op', async (t) => {
+  const h = await boot(t);
+  await upsertRun(runFixture('stop-completed-run', undefined, h.tmpDir));
+
+  const res = await postJson(h.base, h.adminToken, '/api/runs/stop-completed-run/stop', {});
+  assert.equal(res.status, 200);
+
+  const rec = await getRunRecord('stop-completed-run');
+  assert.equal(rec?.status, 'completed', 'a finalized run must not regress to stopped');
+  assert.equal(rec?.finishedAt, '2026-02-01T00:01:00.000Z', 'finishedAt must not change');
+  assert.equal(rec?.perModel[0]?.status, 'completed');
+});
+
 test('GET /api/queues reports queue entries, admin only', async (t) => {
   const h = await boot(t, { seedViewerUser: true });
 

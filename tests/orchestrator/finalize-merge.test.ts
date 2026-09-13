@@ -3,9 +3,11 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { initDb, closeDb, getDb, getDrizzleDb } from '../../src/db/index.js';
 import { resetBudgetCache, loadBudgetConfig, getBudgetStatus } from '../../src/cost-tracking/budget.js';
-import { cost_ledger } from '../../src/db/schema.js';
+import { cost_ledger, notifications } from '../../src/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { createLogger } from '../../src/logger/pino-logger.js';
 import {
@@ -17,8 +19,23 @@ import {
   type RunSpec,
   type PerModelSpec,
 } from '../../src/orchestrator/run-lifecycle.js';
-import { getRunRecord, updateRun } from '../../src/orchestrator/run-index.js';
+import { getRunRecord, updateRun, upsertRun } from '../../src/orchestrator/run-index.js';
 import { writeJudgeResult } from '../../src/evaluation/judge.js';
+
+async function countRunNotifications(runId: string): Promise<number> {
+  const db = getDrizzleDb();
+  const rows = await db.select().from(notifications).all();
+  return rows.filter((r: Record<string, unknown>) => String(r.payload_json ?? '').includes(runId)).length;
+}
+
+async function waitForRunNotifications(runId: string, expected: number, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await countRunNotifications(runId)) >= expected) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.fail(`expected ${expected} notification(s) for ${runId}`);
+}
 
 function makePerModel(runId: string, model: string, root: string, _ts: string): PerModelSpec {
   const outputDir = path.join(root, 'outputs', model, runId);
@@ -75,8 +92,9 @@ describe('finalize merge (run-lifecycle single core)', () => {
   let tmp: string;
   let root: string;
   let logger: ReturnType<typeof createLogger>;
+  let notifyServer: http.Server;
 
-  before(() => {
+  before(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-finalize-'));
     root = tmp;
     process.env.ARENA_DB_PATH = path.join(tmp, 'arena.db');
@@ -85,10 +103,36 @@ describe('finalize merge (run-lifecycle single core)', () => {
     initDb(path.join(tmp, 'arena.db'));
     resetBudgetCache();
     logger = createLogger('test:finalize', 'warn');
+
+    // Local sink for the completion notification so finalize's fire-and-forget
+    // dispatch persists exactly one outbox row per successful claim, without
+    // network retries. Must be configured before the first finalize in this
+    // file (loadNotificationConfig caches process-wide).
+    notifyServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ok');
+    });
+    await new Promise<void>((resolve) => notifyServer.listen(0, '127.0.0.1', resolve));
+    const notifyPort = (notifyServer.address() as AddressInfo).port;
+    fs.mkdirSync(path.join(root, 'configs'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'configs', 'notifications.yaml'), [
+      'channels:',
+      '  test-channel:',
+      '    type: slack',
+      `    webhookUrl: http://127.0.0.1:${notifyPort}/hook`,
+      'routing:',
+      '  onRunCompleted:',
+      '    - test-channel',
+      '',
+    ].join('\n'));
   });
 
   after(async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      notifyServer.close(() => resolve());
+      notifyServer.closeAllConnections();
+    });
     delete process.env.ARENA_DB_PATH;
     delete process.env.OUTPUT_ROOT;
     delete process.env.AI_ARENA_ROOT;
@@ -154,9 +198,9 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.strictEqual(rec?.perModel.find((m) => m.model === 'alpha')?.status, 'completed');
   });
 
-  it('finalizeRunByRunId on a missing run returns undefined without throwing', async () => {
+  it('finalizeRunByRunId on a missing run returns false without throwing', async () => {
     const res = await finalizeRunByRunId('run_does_not_exist', logger);
-    assert.strictEqual(res, undefined);
+    assert.strictEqual(res, false);
   });
 
   it('merged finalize with costUsd>0 writes one cost_ledger row and credits budget spend once', async () => {
@@ -194,6 +238,67 @@ describe('finalize merge (run-lifecycle single core)', () => {
     const status = getBudgetStatus(root, logger);
     assert.strictEqual(status.models.alpha!.daily.spent, 0.02, 'budget daily spend credited once (0.02, not 0.04)');
     assert.strictEqual(status.global.daily.spent, 0.02, 'global budget daily spend credited once');
+  });
+
+  it('concurrent double finalize is idempotent: one ledger row, one notification, stable finishedAt', async () => {
+    const runId = 'run_double_finalize';
+    const alpha = makePerModel(runId, 'alpha', root, 't-double');
+    writeResult(alpha, { costUsd: 0.03 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'dashboard');
+
+    await Promise.all([
+      finalizeRunByRunId(runId, logger),
+      finalizeRunByRunId(runId, logger),
+    ]);
+
+    const db = getDrizzleDb();
+    const ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'exactly one cost_ledger row despite concurrent finalize');
+
+    const first = await getRunRecord(runId);
+    assert.strictEqual(first?.status, 'completed');
+    assert.ok(first?.finishedAt, 'finalize stamps finishedAt');
+    const firstFinishedAt = first!.finishedAt;
+
+    await waitForRunNotifications(runId, 1);
+
+    const second = await finalizeRunByRunId(runId, logger);
+    assert.strictEqual(second, false, 're-finalize loses the atomic claim');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.status, 'completed');
+    assert.strictEqual(rec?.finishedAt, firstFinishedAt, 'finishedAt must not change on re-finalize');
+    assert.strictEqual(await countRunNotifications(runId), 1, 'exactly one run_completed notification');
+  });
+
+  it('a stopped run with all models terminal finalizes exactly once through the claim', async () => {
+    const runId = 'run_stopped_claim';
+    const alpha = makePerModel(runId, 'alpha', root, 't-stopped');
+    writeResult(alpha, { costUsd: 0.04 });
+    await upsertRun({
+      runId, scenario: 'basic', models: ['alpha'],
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      status: 'stopped', source: 'dashboard',
+      perModel: [{
+        model: 'alpha', runId, outputDir: alpha.outputDir, sandboxDir: alpha.sandboxDir,
+        resultPath: alpha.resultPath, conversationPath: alpha.conversationPath,
+        reportPath: alpha.reportPath, logFile: alpha.logFile, status: 'stopped',
+      } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    assert.strictEqual(await isRunCompleteByRunId(runId), true, 'stopped models are terminal');
+    await finalizeRunByRunId(runId, logger);
+
+    const rec = await getRunRecord(runId);
+    assert.strictEqual(rec?.status, 'completed');
+    const db = getDrizzleDb();
+    const ledger = await db.select().from(cost_ledger).where(eq(cost_ledger.run_id, runId));
+    assert.strictEqual(ledger.length, 1, 'exactly one cost_ledger row for the stopped run');
+
+    assert.strictEqual(await finalizeRunByRunId(runId, logger), false, 'second finalize loses the claim');
   });
 
   it('judge_score.json is NOT written when judge is disabled', async () => {

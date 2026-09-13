@@ -6,7 +6,7 @@ import path from 'node:path';
 import { initDb, closeDb } from '../../src/db/client.js';
 import { transitionTaskState } from '../../src/db/query.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
-import { stopRun, registerRun, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
+import { stopRun, registerRun, isRunCancelled, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
 
 const ORIG_ENV = { ...process.env };
 
@@ -41,17 +41,18 @@ test('stopRun marks per-model rows terminal', async () => {
   }
 });
 
-test('stopRun on a completed run keeps terminal statuses intact', async () => {
+test('stopRun on a completed run is a no-op (never regresses to stopped)', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-stoprun2-'));
   process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
   process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
   process.env.DB_DRIVER = 'sqlite';
   initDb(process.env.ARENA_DB_PATH);
 
+  const finishedAt = '2026-01-01T00:00:00.000Z';
   try {
     await upsertRun({
       runId: 'stop-2', scenario: 'smoke', models: ['gpt-4o'],
-      startedAt: new Date().toISOString(), finishedAt: null, status: 'completed', source: 'cli',
+      startedAt: new Date().toISOString(), finishedAt, status: 'completed', source: 'cli',
       perModel: [{ model: 'gpt-4o', runId: 'stop-2', status: 'completed' } as never],
       comparisonMdPath: null, comparisonJsonPath: null,
     });
@@ -59,8 +60,10 @@ test('stopRun on a completed run keeps terminal statuses intact', async () => {
     await stopRun('stop-2');
 
     const rec = await getRunRecord('stop-2');
-    assert.equal(rec?.status, 'stopped');
+    assert.equal(rec?.status, 'completed', 'a finalized run must not regress to stopped');
+    assert.equal(rec?.finishedAt, finishedAt, 'finishedAt must not change');
     assert.equal(rec?.perModel[0]?.status, 'completed', 'terminal model rows must not be regressed');
+    assert.equal(await isRunCancelled('stop-2'), false, 'no-op stop must not record a cancellation signal');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });

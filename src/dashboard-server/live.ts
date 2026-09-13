@@ -242,13 +242,15 @@ export class LiveHub {
   private async finalizeRuns(): Promise<void> {
     // 'stopped' runs are included: stopRun marks their per-model rows
     // terminal, and a stopped run whose runner died would otherwise never
-    // finalize (no aggregation, no reservation release). finalizeCore's
-    // idempotency guard keeps this safe against the runner racing us.
+    // finalize (no aggregation, no reservation release). finalizeRunByRunId
+    // wins or loses the atomic claim, so racing the runner is harmless; only
+    // the winner's call returns true and gets the run_completed broadcast.
     const active = (await listRuns()).filter((r) => r.status === 'running' || r.status === 'stopped');
     for (const rec of active) {
       try {
         if (await isRunCompleteByRunId(rec.runId)) {
-          await finalizeRunByRunId(rec.runId, this.logger);
+          const finalized = await finalizeRunByRunId(rec.runId, this.logger);
+          if (!finalized) continue;
           this.broadcastToSubscribers(rec.runId, { type: 'run_completed', runId: rec.runId });
           for (const [key] of this.convSeen) {
             if (key.startsWith(rec.runId)) {
