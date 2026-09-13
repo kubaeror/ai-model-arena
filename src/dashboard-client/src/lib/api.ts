@@ -104,6 +104,10 @@ export async function login(username: string, password: string): Promise<{ token
   return r;
 }
 
+export async function logout(): Promise<void> {
+  await apiFetch('/api/auth/logout', { method: 'POST' });
+}
+
 // ── Models ───────────────────────────────────────────────────────────────────
 export async function listModels(): Promise<ModelConfig[]> {
   const r = await apiFetch<{ models: ModelConfig[] }>('/api/models');

@@ -50,6 +50,13 @@ describe('Anomalies', () => {
     expect(screen.getByText('open')).toBeInTheDocument();
   });
 
+  it('links run ids with router links, not hash hrefs', async () => {
+    renderWithProviders(<Anomalies />);
+    const link = await screen.findByRole('link', { name: 'run-123' });
+    expect(link).toHaveAttribute('href', '/runs/run-123');
+    expect(link.getAttribute('href')).not.toContain('#');
+  });
+
   it('resolves an anomaly via the Resolve button', async () => {
     renderWithProviders(<Anomalies />);
     await waitFor(() => {

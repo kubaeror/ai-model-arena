@@ -5,6 +5,10 @@ import { LiveProvider, useRunLive } from '../../src/hooks/useLive.js';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
   url: string;
   protocols: string[];
   sent: string[] = [];
@@ -87,6 +91,20 @@ describe('useLive resubscribe', () => {
     // The new socket must resubscribe the still-active run.
     act(() => second.open());
     expect(second.sent).toContain(JSON.stringify({ type: 'subscribe', runId: 'run-1' }));
+  });
+
+  it('does not send while the socket is CONNECTING and flushes on open', () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <LiveProvider>{children}</LiveProvider>
+    );
+
+    renderHook(() => useRunLive('run-3', 'gpt-4o'), { wrapper });
+    const ws = MockWebSocket.instances[0]!;
+    expect(ws.readyState).toBe(MockWebSocket.CONNECTING);
+    expect(ws.sent).toHaveLength(0);
+
+    act(() => ws.open());
+    expect(ws.sent).toContain(JSON.stringify({ type: 'subscribe', runId: 'run-3' }));
   });
 
   it('sends unsubscribe on unmount and does not reconnect after disposal', async () => {

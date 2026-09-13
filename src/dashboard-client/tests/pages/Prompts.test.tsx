@@ -143,6 +143,18 @@ describe('Prompts', () => {
     });
   });
 
+  it('surfaces prompt delete failures', async () => {
+    deletePromptMock.mockRejectedValueOnce(new Error('delete exploded'));
+    renderWithProviders(<Prompts />);
+    await waitFor(() => {
+      expect(screen.getByText(/api-builder/)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('delete exploded');
+  });
+
   it('selecting a prompt shows its versions', async () => {
     renderWithProviders(<Prompts />);
     await waitFor(() => {

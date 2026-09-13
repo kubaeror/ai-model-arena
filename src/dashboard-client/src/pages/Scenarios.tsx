@@ -14,6 +14,7 @@ import type { ScenarioConfig } from '../lib/types.js';
 export function Scenarios() {
   const qc = useQueryClient();
   const [mode, setMode] = useState<{ kind: 'list' } | { kind: 'create' } | { kind: 'edit'; name: string }>({ kind: 'list' });
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const list = useQuery({ queryKey: ['scenarios'], queryFn: listScenarios });
 
   const editQuery = useQuery({
@@ -24,7 +25,11 @@ export function Scenarios() {
 
   const del = useMutation({
     mutationFn: (name: string) => deleteScenario(name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['scenarios'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['scenarios'] });
+      setDeleteError(null);
+    },
+    onError: (e) => setDeleteError((e as Error).message),
   });
 
   if (mode.kind === 'create') {
@@ -64,6 +69,9 @@ export function Scenarios() {
       loading={list.isLoading}
     >
       <Panel className="divide-y divide-border">
+        {deleteError && (
+          <p role="alert" className="p-3 text-12 text-danger">{deleteError}</p>
+        )}
         {list.data && list.data.length ? (
           list.data.map((s: ScenarioConfig) => (
             <div key={s.name} className="flex items-center justify-between p-3">
@@ -77,7 +85,7 @@ export function Scenarios() {
               </div>
               <div className="flex items-center gap-1">
                 <Button size="sm" variant="ghost" onClick={() => setMode({ kind: 'edit', name: s.name })}><Pencil size={14} /></Button>
-                <Button size="sm" variant="ghost" onClick={() => del.mutate(s.name)}><Trash2 size={14} /></Button>
+                <Button size="sm" variant="ghost" aria-label={`Delete ${s.name}`} onClick={() => del.mutate(s.name)}><Trash2 size={14} /></Button>
               </div>
             </div>
           ))

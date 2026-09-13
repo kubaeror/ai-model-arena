@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { CommandPalette, type CommandItem } from '../../../src/components/CommandPalette';
 
-function renderPalette(overrides: { query?: string } = {}) {
+function renderPalette(overrides: { query?: string; onClose?: () => void } = {}) {
   const filtered: CommandItem[] = [
     { id: 'home', label: 'Home', href: '/', category: 'Pages' },
     { id: 'catalog', label: 'Catalog', href: '/catalog', category: 'Pages' },
@@ -14,7 +14,7 @@ function renderPalette(overrides: { query?: string } = {}) {
     <MemoryRouter>
       <CommandPalette
         open={true}
-        onClose={vi.fn()}
+        onClose={overrides.onClose ?? vi.fn()}
         query={overrides.query ?? ''}
         onQueryChange={vi.fn()}
         filtered={filtered}
@@ -94,5 +94,21 @@ describe('CommandPalette', () => {
   it('has a close button', () => {
     renderPalette();
     expect(screen.getByText('Esc')).toBeInTheDocument();
+  });
+
+  it('does not close when clicking inside the dialog', () => {
+    const onClose = vi.fn();
+    renderPalette({ onClose });
+    fireEvent.click(screen.getByPlaceholderText(/Search pages/i));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes when clicking the backdrop', () => {
+    const onClose = vi.fn();
+    const { container } = renderPalette({ onClose });
+    const backdrop = container.querySelector('[aria-hidden="true"]');
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop!);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

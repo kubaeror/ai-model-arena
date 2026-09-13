@@ -7,7 +7,14 @@ import { Sessions } from '../../src/pages/Sessions';
 import { SessionDetail } from '../../src/pages/SessionDetail';
 import { Files } from '../../src/pages/Files';
 import { Audit } from '../../src/pages/Audit';
-import { getSession, getSessionMessages, getSessionCalls } from '../../src/lib/api';
+import {
+  getSession,
+  getSessionMessages,
+  getSessionCalls,
+  listSessions,
+  listFiles,
+  listAudit,
+} from '../../src/lib/api';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
 
@@ -51,6 +58,38 @@ describe('Sessions', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/Sessions/i).length).toBeGreaterThan(0);
       expect(screen.getByText(/gpt-4o/)).toBeInTheDocument();
+    });
+  });
+
+  it('appends the next page instead of replacing rows when Load more is clicked', async () => {
+    const row = (id: string) => ({
+      id,
+      prompt_id: null,
+      prompt_version: null,
+      model: 'gpt-4o',
+      status: 'active',
+      created_at: '2026-08-04T00:00:00.000Z',
+      updated_at: '2026-08-04T00:00:00.000Z',
+      message_count: 1,
+      call_count: 1,
+    });
+    vi.mocked(listSessions).mockReset();
+    vi.mocked(listSessions)
+      .mockResolvedValueOnce({ sessions: [row('sess-A')], total: 2 })
+      .mockResolvedValueOnce({ sessions: [row('sess-B')], total: 2 });
+
+    renderWithProviders(<Sessions />);
+    expect(await screen.findByText(/sess-A/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+
+    await waitFor(() => {
+      expect(listSessions).toHaveBeenCalledWith({ limit: 50, offset: 50 });
+    });
+    expect(await screen.findByText(/sess-B/)).toBeInTheDocument();
+    expect(screen.getByText(/sess-A/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
     });
   });
 });
@@ -199,6 +238,33 @@ describe('Files', () => {
       expect(screen.getByText(/src\/app.ts/)).toBeInTheDocument();
     });
   });
+
+  it('appends the next page instead of replacing files when Load more is clicked', async () => {
+    const row = (id: number, path: string) => ({
+      id,
+      run_id: 'run-1',
+      prompt_id: null,
+      model: 'gpt-4o',
+      produced_at: '2026-08-04T00:00:00.000Z',
+      produced_by_tool: 'write_file',
+      path,
+    });
+    vi.mocked(listFiles).mockReset();
+    vi.mocked(listFiles)
+      .mockResolvedValueOnce({ files: [row(1, 'src/first.ts')], total: 2 })
+      .mockResolvedValueOnce({ files: [row(2, 'src/second.ts')], total: 2 });
+
+    renderWithProviders(<Files />);
+    expect(await screen.findByText('src/first.ts')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+
+    await waitFor(() => {
+      expect(listFiles).toHaveBeenCalledWith({ limit: 50, offset: 50 });
+    });
+    expect(await screen.findByText('src/second.ts')).toBeInTheDocument();
+    expect(screen.getByText('src/first.ts')).toBeInTheDocument();
+  });
 });
 
 describe('Audit', () => {
@@ -208,5 +274,33 @@ describe('Audit', () => {
       expect(screen.getByText(/Audit Log/i)).toBeInTheDocument();
       expect(screen.getByText(/user.delete/)).toBeInTheDocument();
     });
+  });
+
+  it('appends the next page instead of replacing entries when Load more is clicked', async () => {
+    const row = (id: number, actor: string) => ({
+      id,
+      actor,
+      action: 'user.delete',
+      entity_type: 'user',
+      entity_id: `u${id}`,
+      at: '2026-08-04T00:00:00.000Z',
+      before: null,
+      after: null,
+    });
+    vi.mocked(listAudit).mockReset();
+    vi.mocked(listAudit)
+      .mockResolvedValueOnce({ entries: [row(1, 'alice')], total: 2 })
+      .mockResolvedValueOnce({ entries: [row(2, 'bob')], total: 2 });
+
+    renderWithProviders(<Audit />);
+    expect(await screen.findByText('alice')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+
+    await waitFor(() => {
+      expect(listAudit).toHaveBeenCalledWith({ actor: undefined, action: undefined, limit: 50, offset: 50 });
+    });
+    expect(await screen.findByText('bob')).toBeInTheDocument();
+    expect(screen.getByText('alice')).toBeInTheDocument();
   });
 });

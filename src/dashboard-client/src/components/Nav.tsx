@@ -114,8 +114,8 @@ export function Nav() {
             <>
               <span className="hidden sm:inline font-mono text-13 text-fg-2 select-none">{username}</span>
               <button
-                onClick={() => {
-                  logout();
+                onClick={async () => {
+                  await logout();
                   navigate('/login');
                 }}
                 aria-label="Logout"

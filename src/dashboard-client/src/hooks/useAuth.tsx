@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
-import { getToken, getUser, clearToken, login as apiLogin } from '../lib/api.js';
+import { getToken, getUser, clearToken, login as apiLogin, logout as apiLogout } from '../lib/api.js';
 
 interface AuthContextValue {
   token: string | null;
   username: string | null;
   isAuthenticated: boolean;
   login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -21,7 +21,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUsername(r.username);
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      await apiLogout();
+    } catch {
+      // Local session must always be cleared even if server revocation fails.
+    }
     clearToken();
     setTokenState(null);
     setUsername(null);

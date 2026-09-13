@@ -128,6 +128,34 @@ describe('Settings', () => {
     });
   });
 
+  it('surfaces webhook delete failures', async () => {
+    deleteWebhookMock.mockRejectedValueOnce(new Error('Delete failed'));
+    renderWithProviders(<Settings />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Webhooks' }));
+    await waitFor(() => {
+      expect(screen.getByText('https://example.com/hook')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Delete failed');
+  });
+
+  it('surfaces webhook create failures', async () => {
+    registerWebhookMock.mockRejectedValueOnce(new Error('Invalid webhook URL'));
+    renderWithProviders(<Settings />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Webhooks' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'New Webhook' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Webhook' }));
+    fireEvent.change(screen.getByPlaceholderText('https://example.com/webhook'), { target: { value: 'bad-url' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid webhook URL');
+  });
+
   it('renders the secrets panel on the API Keys tab', async () => {
     renderWithProviders(<Settings />);
     fireEvent.click(screen.getByRole('tab', { name: 'API Keys' }));

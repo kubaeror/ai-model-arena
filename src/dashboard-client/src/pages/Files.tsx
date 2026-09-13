@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -32,12 +32,20 @@ const PAGE = 50;
 export function Files() {
   const navigate = useNavigate();
   const [model, setModel] = useState<string>('');
-  const [offset, setOffset] = useState(0);
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['files', model, offset],
-    queryFn: () => listFiles({ limit: PAGE, offset, ...(model ? { model } : {}) }),
+  const {
+    data, isLoading, isError, refetch,
+    fetchNextPage, hasNextPage, isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['files', model],
+    queryFn: ({ pageParam }) => listFiles({ limit: PAGE, offset: pageParam, ...(model ? { model } : {}) }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages, lastPageParam) => {
+      const loaded = allPages.reduce((n, p) => n + p.files.length, 0);
+      return loaded < lastPage.total ? lastPageParam + PAGE : undefined;
+    },
     refetchInterval: 15_000,
   });
+  const files = data?.pages.flatMap((p) => p.files) ?? [];
 
   return (
     <PageShell title="Files" description="Artifacts produced by runs — from the artifact manifests">
@@ -47,7 +55,7 @@ export function Files() {
           actions={
             <input
               value={model}
-              onChange={(e) => { setModel(e.target.value.trim()); setOffset(0); }}
+              onChange={(e) => setModel(e.target.value.trim())}
               placeholder="Filter by model…"
               className="rounded-inner border border-border bg-bg-1 px-2 py-1 font-mono text-12"
               aria-label="Filter by model"
@@ -59,19 +67,21 @@ export function Files() {
             <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading files…</div>
           ) : isError ? (
             <ErrorState message="Failed to load files" onRetry={() => void refetch()} />
-          ) : (data?.files.length ?? 0) === 0 ? (
+          ) : files.length === 0 ? (
             <EmptyState title="No files yet" description="Files appear after a run completes and its manifest is recorded." />
           ) : (
             <>
               <DataTable
                 columns={columns}
-                data={data?.files ?? []}
+                data={files}
                 getRowId={(r) => String(r.id)}
                 onRowClick={(r) => navigate(`/runs/${encodeURIComponent(r.run_id)}`)}
               />
-              {(data?.files.length ?? 0) < (data?.total ?? 0) && (
+              {hasNextPage && (
                 <div className="flex justify-center p-3">
-                  <Button variant="ghost" size="sm" onClick={() => setOffset((o) => o + PAGE)}>Load more</Button>
+                  <Button variant="ghost" size="sm" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
+                    {isFetchingNextPage ? 'Loading…' : 'Load more'}
+                  </Button>
                 </div>
               )}
             </>

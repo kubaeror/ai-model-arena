@@ -98,6 +98,39 @@ describe('Runners', () => {
     });
   });
 
+  it('renders a usable scale input size', async () => {
+    renderWithProviders(<Runners />);
+    const input = await screen.findByRole('spinbutton');
+    expect(input.className).toContain('h-8');
+    expect(input.className).toContain('w-16');
+  });
+
+  it('surfaces scale failures instead of leaving the rejection unhandled', async () => {
+    apiPostMock.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ error: 'scale exploded' }) });
+    renderWithProviders(<Runners />);
+    const input = await screen.findByRole('spinbutton');
+    fireEvent.change(input, { target: { value: '3' } });
+    fireEvent.blur(input);
+    expect(await screen.findByRole('alert')).toHaveTextContent('scale exploded');
+  });
+
+  it('surfaces drain failures', async () => {
+    apiPostMock.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ error: 'drain exploded' }) });
+    renderWithProviders(<Runners />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Drain' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('drain exploded');
+  });
+
+  it('refetches runners after a successful drain', async () => {
+    apiGetMock.mockClear();
+    renderWithProviders(<Runners />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Drain' }));
+    await waitFor(() => {
+      const runnerFetches = apiGetMock.mock.calls.filter(([path]) => path === '/api/runners');
+      expect(runnerFetches.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   it('loads logs into the modal when Logs is clicked', async () => {
     renderWithProviders(<Runners />);
     await waitFor(() => {

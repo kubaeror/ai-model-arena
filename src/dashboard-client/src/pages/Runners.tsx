@@ -16,6 +16,7 @@ export function Runners() {
   const [logRunner, setLogRunner] = useState<string | null>(null);
   const [logLines, setLogLines] = useState('');
   const [logLoading, setLogLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function viewLogs(name: string) {
     setLogRunner(name);
@@ -30,6 +31,21 @@ export function Runners() {
     }
   }
 
+  function handleScale(name: string, rawValue: string) {
+    const value = parseInt(rawValue, 10);
+    if (Number.isNaN(value) || value < 0 || value > 10) return;
+    setActionError(null);
+    scale.mutate(
+      { name, replicas: value },
+      { onError: (e) => setActionError((e as Error).message) },
+    );
+  }
+
+  function handleDrain(name: string) {
+    setActionError(null);
+    drain.mutate(name, { onError: (e) => setActionError((e as Error).message) });
+  }
+
   return (
     <PageShell
       title="Runners"
@@ -41,6 +57,9 @@ export function Runners() {
       <Panel>
         <PanelHeader title="Runner Deployments" />
         <PanelBody>
+          {actionError && (
+            <p role="alert" className="mb-3 text-12 text-danger">{actionError}</p>
+          )}
           {isLoading ? <Spinner /> :
            !runners || runners.length === 0 ? <EmptyState title="No runners deployed" /> : (
             <div className="flex flex-col gap-4">
@@ -64,13 +83,15 @@ export function Runners() {
                       min={0}
                       max={10}
                       defaultValue={r.desiredReplicas}
-                      className="h-2 w-4 rounded border border-border bg-bg-1 px-2 text-center font-mono text-12"
-                      onBlur={(e) => {
-                        const v = parseInt(e.target.value, 10);
-                        if (v >= 0) scale.mutateAsync({ name: r.name, replicas: v });
-                      }}
+                      className="h-8 w-16 rounded border border-border bg-bg-1 px-2 text-center font-mono text-12"
+                      onBlur={(e) => handleScale(r.name, e.target.value)}
                     />
-                    <Button variant="ghost" size="sm" onClick={() => drain.mutateAsync(r.name)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDrain(r.name)}
+                      disabled={drain.isPending}
+                    >
                       Drain
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => viewLogs(r.name)}>

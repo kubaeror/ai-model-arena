@@ -144,6 +144,7 @@ export function CommandPalette({
         aria-modal="true"
         aria-label="Command palette"
         className="relative z-10 w-full max-w-lg rounded-panel border border-border bg-bg-1 shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <div className="flex items-center border-b border-border px-4">

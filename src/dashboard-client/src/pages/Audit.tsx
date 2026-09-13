@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelHeader, PanelBody } from '../components/ui/Panel';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -30,17 +30,25 @@ const PAGE = 50;
 export function Audit() {
   const [actor, setActor] = useState<string>('');
   const [action, setAction] = useState<string>('');
-  const [offset, setOffset] = useState(0);
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['audit', actor, action, offset],
-    queryFn: () => listAudit({
+  const {
+    data, isLoading, isError, refetch,
+    fetchNextPage, hasNextPage, isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['audit', actor, action],
+    queryFn: ({ pageParam }) => listAudit({
       actor: actor || undefined,
       action: action || undefined,
       limit: PAGE,
-      offset,
+      offset: pageParam,
     }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages, lastPageParam) => {
+      const loaded = allPages.reduce((n, p) => n + p.entries.length, 0);
+      return loaded < lastPage.total ? lastPageParam + PAGE : undefined;
+    },
     refetchInterval: 15_000,
   });
+  const entries = data?.pages.flatMap((p) => p.entries) ?? [];
 
   return (
     <PageShell title="Audit Log" description="Admin-only — every sensitive action, who did it, and what changed">
@@ -51,14 +59,14 @@ export function Audit() {
             <div className="flex gap-2">
               <input
                 value={actor}
-                onChange={(e) => { setActor(e.target.value.trim()); setOffset(0); }}
+                onChange={(e) => setActor(e.target.value.trim())}
                 placeholder="Filter by actor…"
                 className="rounded-inner border border-border bg-bg-1 px-2 py-1 font-mono text-12"
                 aria-label="Filter by actor"
               />
               <input
                 value={action}
-                onChange={(e) => { setAction(e.target.value.trim()); setOffset(0); }}
+                onChange={(e) => setAction(e.target.value.trim())}
                 placeholder="Filter by action…"
                 className="rounded-inner border border-border bg-bg-1 px-2 py-1 font-mono text-12"
                 aria-label="Filter by action"
@@ -71,18 +79,20 @@ export function Audit() {
             <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading audit log…</div>
           ) : isError ? (
             <ErrorState message="Failed to load audit log" onRetry={() => void refetch()} />
-          ) : (data?.entries.length ?? 0) === 0 ? (
+          ) : entries.length === 0 ? (
             <EmptyState title="No audit entries" description="Audit entries appear as users take sensitive actions." />
           ) : (
             <>
               <DataTable
                 columns={columns}
-                data={data?.entries ?? []}
+                data={entries}
                 getRowId={(r) => String(r.id)}
               />
-              {(data?.entries.length ?? 0) < (data?.total ?? 0) && (
+              {hasNextPage && (
                 <div className="flex justify-center p-3">
-                  <Button variant="ghost" size="sm" onClick={() => setOffset((o) => o + PAGE)}>Load more</Button>
+                  <Button variant="ghost" size="sm" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
+                    {isFetchingNextPage ? 'Loading…' : 'Load more'}
+                  </Button>
                 </div>
               )}
             </>
