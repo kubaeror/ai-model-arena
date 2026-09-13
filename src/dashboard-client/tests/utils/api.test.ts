@@ -76,17 +76,31 @@ describe('session transcript pagination', () => {
     vi.unstubAllGlobals();
   });
 
-  it('getSessionCalls sends limit and offset', async () => {
+  it('getSessionMessages sends limit and offset for later pages', async () => {
     let captured: string | undefined;
     vi.stubGlobal('fetch', async (url: string) => {
       captured = url;
-      return okJson({ calls: [{ id: 'c1' }], limit: 400, offset: 0 });
+      return okJson({ messages: [{ id: 'm200' }], limit: 200, offset: 200 });
     });
 
-    const calls = await getSessionCalls('s1', { limit: 400, offset: 0 });
+    const messages = await getSessionMessages('s1', { limit: 200, offset: 200 });
 
-    expect(captured).toBe('/api/sessions/s1/calls?limit=400&offset=0');
-    expect(calls).toEqual([{ id: 'c1' }]);
+    expect(captured).toBe('/api/sessions/s1/messages?limit=200&offset=200');
+    expect(messages).toEqual([{ id: 'm200' }]);
+    vi.unstubAllGlobals();
+  });
+
+  it('getSessionCalls sends limit and offset for later pages', async () => {
+    let captured: string | undefined;
+    vi.stubGlobal('fetch', async (url: string) => {
+      captured = url;
+      return okJson({ calls: [{ id: 'c200' }], limit: 200, offset: 200 });
+    });
+
+    const calls = await getSessionCalls('s1', { limit: 200, offset: 200 });
+
+    expect(captured).toBe('/api/sessions/s1/calls?limit=200&offset=200');
+    expect(calls).toEqual([{ id: 'c200' }]);
     vi.unstubAllGlobals();
   });
 });

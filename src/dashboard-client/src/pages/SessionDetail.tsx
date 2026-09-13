@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PageShell } from '../components/ui/PageShell';
 import { Panel, PanelBody } from '../components/ui/Panel';
 import { Badge } from '../components/ui/Badge';
@@ -17,6 +17,22 @@ const TAB_ITEMS = [
   { id: 'calls', label: 'LLM calls' },
 ];
 
+const PAGE_SIZE = 200;
+type TranscriptRow = Record<string, unknown>;
+
+/** Keep the first occurrence of each row id so overlapping offset pages never render duplicates. */
+function dedupeById(rows: TranscriptRow[]): TranscriptRow[] {
+  const seen = new Set<unknown>();
+  const out: TranscriptRow[] = [];
+  for (const row of rows) {
+    const id = row.id;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(row);
+  }
+  return out;
+}
+
 function jsonOrText(v: unknown): string {
   if (v === null || v === undefined) return '';
   if (typeof v === 'string') return v;
@@ -29,22 +45,34 @@ export function SessionDetail() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [tab, setTab] = useState<string>('messages');
-  const [messagesLimit, setMessagesLimit] = useState(200);
-  const [callsLimit, setCallsLimit] = useState(200);
 
   const sessionQuery = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => getSession(sessionId),
     retry: false,
   });
-  const messagesQuery = useQuery({
-    queryKey: ['session-messages', sessionId, messagesLimit],
-    queryFn: () => getSessionMessages(sessionId, { limit: messagesLimit }),
+  const messagesQuery = useInfiniteQuery({
+    queryKey: ['session-messages', sessionId],
+    queryFn: ({ pageParam }) =>
+      getSessionMessages(sessionId, pageParam > 0 ? { limit: PAGE_SIZE, offset: pageParam } : { limit: PAGE_SIZE }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flat()).length;
+      return loaded < (sessionQuery.data?.message_count ?? 0) ? loaded : undefined;
+    },
     enabled: tab === 'messages',
   });
-  const callsQuery = useQuery({
-    queryKey: ['session-calls', sessionId, callsLimit],
-    queryFn: () => getSessionCalls(sessionId, { limit: callsLimit }),
+  const callsQuery = useInfiniteQuery({
+    queryKey: ['session-calls', sessionId],
+    queryFn: ({ pageParam }) =>
+      getSessionCalls(sessionId, pageParam > 0 ? { limit: PAGE_SIZE, offset: pageParam } : { limit: PAGE_SIZE }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flat()).length;
+      return loaded < (sessionQuery.data?.call_count ?? 0) ? loaded : undefined;
+    },
     enabled: tab === 'calls',
   });
 
@@ -63,6 +91,8 @@ export function SessionDetail() {
     return <PageShell title="Session"><EmptyState title="Session not found" /></PageShell>;
   }
   const session = sessionQuery.data;
+  const messages = dedupeById(messagesQuery.data?.pages.flat() ?? []);
+  const calls = dedupeById(callsQuery.data?.pages.flat() ?? []);
 
   return (
     <PageShell
@@ -85,12 +115,12 @@ export function SessionDetail() {
           <PanelBody>
             {messagesQuery.isLoading ? (
               <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading…</div>
-            ) : (messagesQuery.data?.length ?? 0) === 0 ? (
+            ) : messages.length === 0 ? (
               <EmptyState title="No messages" />
             ) : (
               <>
                 <div className="flex flex-col gap-2 font-mono text-12">
-                  {(messagesQuery.data ?? []).map((m) => (
+                  {messages.map((m) => (
                     <div key={String(m.id)} className="rounded-inner border border-border/50 p-2">
                       <div className="flex gap-2 text-fg-1">
                         <span className="text-accent">[{String(m.role)}]</span>
@@ -102,10 +132,10 @@ export function SessionDetail() {
                     </div>
                   ))}
                 </div>
-                {(messagesQuery.data?.length ?? 0) < session.message_count && (
+                {messages.length < session.message_count && messagesQuery.hasNextPage && (
                   <div className="flex justify-center py-2">
-                    <Button variant="ghost" size="sm" onClick={() => setMessagesLimit((l) => l + 200)} disabled={messagesQuery.isFetching}>
-                      {messagesQuery.isFetching ? 'Loading…' : 'Load more'}
+                    <Button variant="ghost" size="sm" onClick={() => void messagesQuery.fetchNextPage()} disabled={messagesQuery.isFetchingNextPage}>
+                      {messagesQuery.isFetchingNextPage ? 'Loading…' : 'Load more'}
                     </Button>
                   </div>
                 )}
@@ -120,7 +150,7 @@ export function SessionDetail() {
           <PanelBody>
             {callsQuery.isLoading ? (
               <div className="flex gap-2 items-center p-4 text-fg-1 text-sm"><Spinner /> Loading…</div>
-            ) : (callsQuery.data?.length ?? 0) === 0 ? (
+            ) : calls.length === 0 ? (
               <EmptyState title="No model calls recorded" />
             ) : (
               <>
@@ -135,7 +165,7 @@ export function SessionDetail() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(callsQuery.data ?? []).map((c) => (
+                    {calls.map((c) => (
                       <tr key={String(c.id)} className="border-b border-border/50 align-top">
                         <td className="py-2 pr-4 text-accent">{String(c.turn)}</td>
                         <td className="py-2 pr-4 text-fg-1">{String(c.provider)}</td>
@@ -146,10 +176,10 @@ export function SessionDetail() {
                     ))}
                   </tbody>
                 </table>
-                {(callsQuery.data?.length ?? 0) < session.call_count && (
+                {calls.length < session.call_count && callsQuery.hasNextPage && (
                   <div className="flex justify-center py-2">
-                    <Button variant="ghost" size="sm" onClick={() => setCallsLimit((l) => l + 200)} disabled={callsQuery.isFetching}>
-                      {callsQuery.isFetching ? 'Loading…' : 'Load more'}
+                    <Button variant="ghost" size="sm" onClick={() => void callsQuery.fetchNextPage()} disabled={callsQuery.isFetchingNextPage}>
+                      {callsQuery.isFetchingNextPage ? 'Loading…' : 'Load more'}
                     </Button>
                   </div>
                 )}

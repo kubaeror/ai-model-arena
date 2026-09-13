@@ -7,7 +7,7 @@ import { Sessions } from '../../src/pages/Sessions';
 import { SessionDetail } from '../../src/pages/SessionDetail';
 import { Files } from '../../src/pages/Files';
 import { Audit } from '../../src/pages/Audit';
-import { getSessionMessages } from '../../src/lib/api';
+import { getSession, getSessionMessages, getSessionCalls } from '../../src/lib/api';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
 
@@ -55,6 +55,51 @@ describe('Sessions', () => {
   });
 });
 
+const PAGE_SIZE = 200;
+
+function sessionRow(messageCount: number, callCount: number) {
+  return {
+    id: 'sess-1',
+    prompt_id: null,
+    prompt_version: null,
+    model: 'gpt-4o',
+    status: 'active',
+    created_at: '2026-08-04T00:00:00.000Z',
+    updated_at: '2026-08-04T00:00:00.000Z',
+    message_count: messageCount,
+    call_count: callCount,
+  };
+}
+
+function messagesPage(offset: number, count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `m${offset + i}`,
+    role: i % 2 === 0 ? 'user' : 'assistant',
+    turn: offset + i,
+    content: `message ${offset + i}`,
+  }));
+}
+
+function callsPage(offset: number, count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `c${offset + i}`,
+    turn: offset + i,
+    provider: 'openai',
+    model: 'gpt-4o',
+    latency_ms: offset + i,
+    response_text: `call ${offset + i}`,
+  }));
+}
+
+function renderSessionDetail() {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/sessions/:sessionId" element={<SessionDetail />} />
+    </Routes>,
+    ['/sessions/sess-1'],
+  );
+}
+
 describe('SessionDetail', () => {
   it('renders session info and messages', async () => {
     renderWithProviders(<SessionDetail />, ['/sessions/sess-1']);
@@ -64,21 +109,85 @@ describe('SessionDetail', () => {
     });
   });
 
-  it('requests an explicit limit and raises it on load more', async () => {
-    vi.mocked(getSessionMessages).mockResolvedValue([{ id: 'm1', role: 'user', turn: 0, content: 'hi' }]);
-    vi.mocked(getSessionMessages).mockClear();
-    renderWithProviders(
-      <Routes>
-        <Route path="/sessions/:sessionId" element={<SessionDetail />} />
-      </Routes>,
-      ['/sessions/sess-1'],
-    );
+  it('loads later message pages by offset, appends without duplicates, and hides the control when complete', async () => {
+    vi.mocked(getSession).mockResolvedValue(sessionRow(202, 0));
+    vi.mocked(getSessionMessages).mockReset();
+    vi.mocked(getSessionMessages)
+      .mockResolvedValueOnce(messagesPage(0, PAGE_SIZE))
+      .mockResolvedValueOnce([
+        { id: 'm199', role: 'assistant', turn: 199, content: 'message 199' },
+        { id: 'm200', role: 'assistant', turn: 200, content: 'message 200' },
+        { id: 'm201', role: 'user', turn: 201, content: 'message 201' },
+      ]);
+
+    renderSessionDetail();
 
     await waitFor(() => expect(getSessionMessages).toHaveBeenCalledWith('sess-1', { limit: 200 }));
+    expect(await screen.findByText('message 0')).toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole('button', { name: /load more/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
 
-    await waitFor(() => expect(getSessionMessages).toHaveBeenCalledWith('sess-1', { limit: 400 }));
+    await waitFor(() => expect(getSessionMessages).toHaveBeenCalledWith('sess-1', { limit: 200, offset: 200 }));
+    expect(await screen.findByText('message 201')).toBeInTheDocument();
+    expect(screen.getByText('message 200')).toBeInTheDocument();
+    expect(screen.getAllByText('message 0')).toHaveLength(1);
+    expect(screen.getAllByText('message 199')).toHaveLength(1);
+    expect(screen.getAllByText('message 200')).toHaveLength(1);
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument());
+    const limits = vi.mocked(getSessionMessages).mock.calls.map(([, params]) => params?.limit);
+    expect(limits).toEqual([200, 200]);
+  });
+
+  it('keeps accumulated rows visible with a per-control pending state while the next page loads', async () => {
+    let resolvePage2!: (rows: Array<Record<string, unknown>>) => void;
+    const pendingPage2 = new Promise<Array<Record<string, unknown>>>((resolve) => {
+      resolvePage2 = resolve;
+    });
+
+    vi.mocked(getSession).mockResolvedValue(sessionRow(3, 0));
+    vi.mocked(getSessionMessages).mockReset();
+    vi.mocked(getSessionMessages)
+      .mockResolvedValueOnce([{ id: 'm1', role: 'user', turn: 0, content: 'first message' }])
+      .mockReturnValueOnce(pendingPage2);
+
+    renderSessionDetail();
+    expect(await screen.findByText('first message')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+
+    await waitFor(() => expect(getSessionMessages).toHaveBeenCalledWith('sess-1', { limit: 200, offset: 1 }));
+    expect(screen.getByText('first message')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /loading/i })).toBeDisabled();
+
+    resolvePage2([{ id: 'm2', role: 'assistant', turn: 1, content: 'second message' }]);
+    expect(await screen.findByText('second message')).toBeInTheDocument();
+    expect(screen.getByText('first message')).toBeInTheDocument();
+  });
+
+  it('loads later call pages by offset and hides the control when complete', async () => {
+    vi.mocked(getSession).mockResolvedValue(sessionRow(0, 202));
+    vi.mocked(getSessionMessages).mockReset().mockResolvedValue([]);
+    vi.mocked(getSessionCalls).mockReset();
+    vi.mocked(getSessionCalls)
+      .mockResolvedValueOnce(callsPage(0, PAGE_SIZE))
+      .mockResolvedValueOnce([
+        { id: 'c200', turn: 200, provider: 'openai', model: 'gpt-4o', latency_ms: 200, response_text: 'call 200' },
+        { id: 'c201', turn: 201, provider: 'openai', model: 'gpt-4o', latency_ms: 201, response_text: 'call 201' },
+      ]);
+
+    renderSessionDetail();
+
+    fireEvent.click(await screen.findByRole('tab', { name: /llm calls/i }));
+    await waitFor(() => expect(getSessionCalls).toHaveBeenCalledWith('sess-1', { limit: 200 }));
+    expect(await screen.findByText('call 0')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+
+    await waitFor(() => expect(getSessionCalls).toHaveBeenCalledWith('sess-1', { limit: 200, offset: 200 }));
+    expect(await screen.findByText('call 201')).toBeInTheDocument();
+    expect(screen.getByText('call 0')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument());
   });
 });
 
