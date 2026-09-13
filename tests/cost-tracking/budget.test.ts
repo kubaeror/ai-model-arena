@@ -11,6 +11,7 @@ import {
   releaseReservation,
   resetBudgetCache,
   budgetStateRoot,
+  mutateBudgetState,
 } from '../../src/cost-tracking/budget.js';
 
 const CONFIG = `
@@ -18,6 +19,9 @@ global:
   daily: 10
 stateFile: outputs/.budget-state.json
 `;
+
+const LOCK_FILE = '.budget.lock';
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function setup() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-budget-'));
@@ -256,5 +260,194 @@ test('checkBudget reads the ledger under OUTPUT_ROOT (containerized deployments)
     if (prev === undefined) delete process.env.OUTPUT_ROOT;
     else process.env.OUTPUT_ROOT = prev;
     resetBudgetCache();
+  }
+});
+
+test('checkBudget re-reads the state file instead of serving a cached snapshot', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  try {
+    loadBudgetConfig(configPath);
+    assert.equal(checkBudget('gpt-4o', rootDir).allowed, true, 'no state file yet');
+    writeState(statePath); // another process records gpt-4o daily spend = 15 (limit 10)
+    const result = checkBudget('gpt-4o', rootDir);
+    assert.equal(result.allowed, false, 'fresh read must see the other process spend');
+    assert.equal(result.percentUsed, 150);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('addSpend merges spend written by another process after our first read', async () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  try {
+    loadBudgetConfig(configPath);
+    await addSpend('gpt-4o', 1, rootDir); // this process caches its own state
+
+    // Another process reads the current file, adds its own spend, writes back.
+    const other = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    other.global.daily[dayKey] = 5;
+    other.models.claude = { daily: { [dayKey]: 5 }, monthly: {} };
+    fs.writeFileSync(statePath, JSON.stringify(other, null, 2));
+
+    await addSpend('gpt-4o', 1, rootDir);
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(persisted.models.claude?.daily[dayKey], 5, "another process's model spend survives");
+    assert.equal(persisted.global.daily[dayKey], 6, 'global spend includes both processes');
+    assert.equal(persisted.models['gpt-4o']?.daily[dayKey], 2, 'our spend is added on top');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('reserveBudget merges reservations written by another process after our first read', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  try {
+    writeState(statePath, { models: {} });
+    loadBudgetConfig(configPath);
+    assert.equal(reserveBudget('gpt-4o', 2, rootDir).ok, true);
+
+    // Another process appends its own reservation to the shared file.
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    state.reservations = state.reservations ?? {};
+    state.reservations.claude = [{ amount: 2, dailyKey: dayKey, expiresAt: Date.now() + 60_000 }];
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+    assert.equal(reserveBudget('gpt-4o', 2, rootDir).ok, true);
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(persisted.reservations.claude?.length, 1, "another process's reservation survives");
+    assert.equal(persisted.reservations['gpt-4o']?.length, 2, 'both gpt-4o reservations are persisted');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('simulated second process keeps the first process spend while recording its own', async () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  try {
+    loadBudgetConfig(configPath);
+    await addSpend('gpt-4o', 1, rootDir);
+
+    resetBudgetCache(); // second process starts with fresh module state
+    loadBudgetConfig(configPath);
+    await addSpend('claude', 2, rootDir);
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(persisted.global.daily[dayKey], 3, 'both processes counted in the global ledger');
+    assert.equal(persisted.models['gpt-4o']?.daily[dayKey], 1);
+    assert.equal(persisted.models.claude?.daily[dayKey], 2);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a mutation waits for a fresh lock held by another process', async () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 4242, createdAt: Date.now() }));
+    const pending = addSpend('gpt-4o', 1, rootDir);
+    await sleep(150);
+    assert.equal(fs.existsSync(statePath), false, 'mutation must not write while the lock is held');
+    fs.rmSync(lockPath, { force: true });
+    await pending;
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(persisted.models['gpt-4o'].daily[dayKey], 1);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a stale lock is broken so an async mutation can proceed', async () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  try {
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 4242, createdAt: Date.now() - 10 * 60 * 1000 }));
+    await addSpend('gpt-4o', 1, rootDir);
+    assert.equal(fs.existsSync(lockPath), false, 'stale lock is gone after the mutation');
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(persisted.models['gpt-4o'].daily[dayKey], 1);
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('a stale lock is broken so a synchronous reservation can proceed', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  try {
+    writeState(statePath, { models: {} });
+    loadBudgetConfig(configPath);
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: 4242, createdAt: Date.now() - 10 * 60 * 1000 }));
+    assert.equal(reserveBudget('gpt-4o', 2, rootDir).ok, true);
+    assert.equal(fs.existsSync(lockPath), false, 'stale lock is gone after the reservation');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('interleaved async spend and sync reserve/release keep every update', async () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  try {
+    writeState(statePath, { models: {} });
+    loadBudgetConfig(configPath);
+
+    const spend = addSpend('gpt-4o', 1, rootDir);
+    assert.equal(reserveBudget('gpt-4o', 2, rootDir).ok, true);
+    await spend;
+    releaseReservation('gpt-4o', 2, 0, rootDir);
+    await Promise.all([addSpend('claude', 3, rootDir), addSpend('gpt-4o', 1, rootDir)]);
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(persisted.global.daily[dayKey], 5, 'all spend updates are counted');
+    assert.equal(persisted.models['gpt-4o'].daily[dayKey], 2);
+    assert.equal(persisted.models.claude.daily[dayKey], 3);
+    assert.equal(persisted.reservations?.['gpt-4o']?.length ?? 0, 0, 'released reservation is gone');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('mutateBudgetState serializes concurrent read-modify-write mutations', async () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath, statePath } = setup();
+  const dayKey = new Date().toISOString().slice(0, 10);
+  try {
+    loadBudgetConfig(configPath);
+    const bump = () => mutateBudgetState(rootDir, (state) => {
+      state.global.daily[dayKey] = (state.global.daily[dayKey] ?? 0) + 1;
+    });
+    await Promise.all([bump(), bump(), bump()]);
+
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(persisted.global.daily[dayKey], 3, 'every serialized mutation is applied');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

@@ -165,4 +165,32 @@ describe('reserve/release/extra-spend/status (fresh state per test)', () => {
     assert.strictEqual(r.ok, true);
     releaseReservation('test-model', 1, 0, tmp);
   });
+
+  it('dashboard reservation and runner spend both survive a simulated process boundary', async () => {
+    resetBudgetCache();
+    const statePath = path.join(tmp, '.budget-test-state.json');
+    fs.rmSync(statePath, { force: true });
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+
+    // Dashboard process reserves budget for a model.
+    assert.strictEqual(reserveBudget('test-model', 1.5, tmp).ok, true);
+
+    // Runner process (fresh module state, same shared file) records actual spend.
+    resetBudgetCache();
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+    await addSpend('test-model', 1, tmp);
+
+    // The dashboard re-reads: spend plus the surviving reservation must both count.
+    // 1 spent + 1.5 reserved + 3 = 5.5 > daily limit 5 -> denied.
+    resetBudgetCache();
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+    assert.strictEqual(checkBudget('test-model', tmp).spentUsd, 1);
+    assert.strictEqual(reserveBudget('test-model', 3, tmp).ok, false,
+      'the dashboard reservation must still be counted after the runner spend');
+
+    // Cleanup so later tests see an empty ledger.
+    resetBudgetCache();
+    fs.rmSync(statePath, { force: true });
+    loadBudgetConfig(path.join(tmp, 'budget.yaml'));
+  });
 });

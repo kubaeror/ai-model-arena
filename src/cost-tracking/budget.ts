@@ -7,9 +7,10 @@ import { BudgetConfigSchema, type BudgetConfig, type BudgetState, type BudgetChe
 import { budgetPercent } from '../observability/metrics.js';
 
 let budgetConfig: BudgetConfig | null = null;
-let budgetState: BudgetState | null = null;
-// Serialize addSpend calls to prevent concurrent read-modify-write races
-let spendQueue: Promise<void> = Promise.resolve();
+// Async mutations are serialized within the process; sync mutations are atomic
+// on the event loop. Both paths take the cross-process lockfile.
+let mutationQueue: Promise<unknown> = Promise.resolve();
+let tmpCounter = 0;
 
 const DAY_KEY = () => new Date().toISOString().slice(0, 10);
 const MONTH_KEY = () => new Date().toISOString().slice(0, 7);
@@ -23,6 +24,13 @@ const LEDGER_RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 function safeLedgerModel(modelName: string): boolean {
   return !LEDGER_RESERVED_KEYS.has(modelName);
 }
+
+const LOCK_FILE = '.budget.lock';
+/** Give up on a lock only after the stale timeout has had a chance to break it. */
+const LOCK_ACQUIRE_TIMEOUT_MS = 20_000;
+/** Locks older than this belong to a crashed holder and can be broken. */
+const LOCK_STALE_MS = 15_000;
+const LOCK_RETRY_MS = 25;
 
 function getEmptyState(): BudgetState {
   return {
@@ -48,7 +56,9 @@ export function loadBudgetConfig(configPath: string, logger?: Logger): BudgetCon
 }
 
 function getStatePath(config: BudgetConfig, rootDir: string): string {
-  return path.join(rootDir, config.stateFile);
+  // Resolve through budgetStateRoot so every process and caller (CLI, runner,
+  // dashboard) points at the same ledger when OUTPUT_ROOT is set.
+  return path.join(budgetStateRoot(rootDir), config.stateFile);
 }
 
 /**
@@ -60,91 +70,174 @@ export function budgetStateRoot(baseRoot: string): string {
   return process.env.OUTPUT_ROOT ? outputRoot() : baseRoot;
 }
 
-function loadBudgetState(config: BudgetConfig, rootDir: string, logger?: Logger): BudgetState {
-  if (budgetState) return budgetState;
-  
-  const statePath = getStatePath(config, rootDir);
-  if (!fs.existsSync(statePath)) {
-    budgetState = getEmptyState();
-    return budgetState;
-  }
-  
-  try {
-    const content = fs.readFileSync(statePath, 'utf8');
-    budgetState = JSON.parse(content) as BudgetState;
-    hydrateReservations(budgetState);
-    return budgetState;
-  } catch (err) {
-    logger?.warn(`Failed to parse budget state, resetting`, { path: statePath });
-    budgetState = getEmptyState();
-    hydrateReservations(budgetState);
-    return budgetState;
-  }
-}
-
-function saveBudgetState(rootDir: string, logger?: Logger): void {
-  if (!budgetConfig || !budgetState) return;
-  
-  const statePath = getStatePath(budgetConfig, rootDir);
-  const dir = path.dirname(statePath);
+function ensureDir(dir: string): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  
-  // Atomic write: write to temp file, then rename (rename is atomic on POSIX)
-  const tmpPath = statePath + '.tmp.' + process.pid;
-  fs.writeFileSync(tmpPath, JSON.stringify(budgetState, null, 2));
+}
+
+/** Fresh read of the ledger file — never cached, so other processes' writes are seen. */
+function readBudgetStateFile(statePath: string, logger?: Logger): BudgetState {
+  if (!fs.existsSync(statePath)) return getEmptyState();
+
+  try {
+    return JSON.parse(fs.readFileSync(statePath, 'utf8')) as BudgetState;
+  } catch {
+    logger?.warn('Failed to parse budget state, resetting', { path: statePath });
+    return getEmptyState();
+  }
+}
+
+function writeBudgetStateFile(statePath: string, state: BudgetState, logger?: Logger): void {
+  ensureDir(path.dirname(statePath));
+  // Atomic write: temp file + rename (rename is atomic on POSIX).
+  const tmpPath = `${statePath}.tmp.${process.pid}.${tmpCounter++}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
   fs.renameSync(tmpPath, statePath);
   logger?.debug('Budget state saved', { path: statePath });
 }
 
-export function addSpend(modelName: string, usd: number, rootDir: string, logger?: Logger): Promise<void> {
-  // Serialize through a promise chain to prevent concurrent read-modify-write races
-  spendQueue = spendQueue.then(() => {
-    if (!budgetConfig) return;
-
-    if (!safeLedgerModel(modelName)) {
-      logger?.warn('Ignoring spend for unsafe model name', { modelName });
-      return;
-    }
-    
-    const state = loadBudgetState(budgetConfig, rootDir, logger);
-    const dayKey = DAY_KEY();
-    const monthKey = MONTH_KEY();
-    
-    state.global.daily[dayKey] = (state.global.daily[dayKey] ?? 0) + usd;
-    state.global.monthly[monthKey] = (state.global.monthly[monthKey] ?? 0) + usd;
-    
-    if (!state.models[modelName]) {
-      state.models[modelName] = { daily: {}, monthly: {} };
-    }
-    state.models[modelName].daily[dayKey] = (state.models[modelName].daily[dayKey] ?? 0) + usd;
-    state.models[modelName].monthly[monthKey] = (state.models[modelName].monthly[monthKey] ?? 0) + usd;
-    
-    saveBudgetState(rootDir, logger);
-  }, () => { /* noop — prior rejection doesn't block new adds */ });
-  return spendQueue;
+function budgetLockPath(rootDir: string): string {
+  // Same resolved root as the ledger, so different callers never lock
+  // different files for the same state.
+  return path.join(budgetStateRoot(rootDir), LOCK_FILE);
 }
 
-let pendingReservations = new Map<string, number>();
+/** Returns true when the lockfile was created. Breaks stale locks as a side effect. */
+function tryAcquireLock(rootDir: string, logger?: Logger): boolean {
+  const lockPath = budgetLockPath(rootDir);
+  ensureDir(path.dirname(lockPath));
+
+  try {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), { flag: 'wx' });
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
+
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf8');
+    let createdAt: number | undefined;
+    try {
+      createdAt = (JSON.parse(raw) as { createdAt?: number }).createdAt;
+    } catch {
+      // Unparsable lock content — fall back to the file mtime.
+    }
+    const age = Date.now() - (typeof createdAt === 'number' ? createdAt : fs.statSync(lockPath).mtimeMs);
+    if (age > LOCK_STALE_MS) {
+      // Rename before deleting so a lock another process just re-created is never removed.
+      const stalePath = `${lockPath}.stale.${process.pid}.${Date.now()}`;
+      try {
+        fs.renameSync(lockPath, stalePath);
+        fs.rmSync(stalePath, { force: true });
+      } catch {
+        // Another process broke the stale lock first.
+      }
+      logger?.warn('Broke stale budget lock', { path: lockPath, ageMs: age });
+    }
+  } catch {
+    // Lock disappeared between attempts; retry.
+  }
+  return false;
+}
+
+function releaseLock(rootDir: string): void {
+  try {
+    fs.rmSync(budgetLockPath(rootDir), { force: true });
+  } catch {
+    // Best effort: a failed unlink must not fail an already-written mutation.
+  }
+}
+
+const lockSleep = new Int32Array(new SharedArrayBuffer(4));
+
+/** Synchronous lock wait for the sync APIs, which cannot await. */
+function acquireLockSync(rootDir: string, logger?: Logger): () => void {
+  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
+  for (;;) {
+    if (tryAcquireLock(rootDir, logger)) return () => releaseLock(rootDir);
+    if (Date.now() >= deadline) throw new Error(`Timed out acquiring budget lock at ${budgetLockPath(rootDir)}`);
+    Atomics.wait(lockSleep, 0, 0, LOCK_RETRY_MS);
+  }
+}
+
+async function acquireLock(rootDir: string, logger?: Logger): Promise<() => void> {
+  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
+  for (;;) {
+    if (tryAcquireLock(rootDir, logger)) return () => releaseLock(rootDir);
+    if (Date.now() >= deadline) throw new Error(`Timed out acquiring budget lock at ${budgetLockPath(rootDir)}`);
+    await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+  }
+}
+
+function withBudgetLockSync<T>(rootDir: string, logger: Logger | undefined, fn: () => T): T {
+  const release = acquireLockSync(rootDir, logger);
+  try {
+    return fn();
+  } finally {
+    release();
+  }
+}
+
+async function withBudgetLock<T>(rootDir: string, logger: Logger | undefined, fn: () => T): Promise<T> {
+  const release = await acquireLock(rootDir, logger);
+  try {
+    return fn();
+  } finally {
+    release();
+  }
+}
 
 /**
- * Rebuild the in-memory reservation map from the persisted state file so a
- * fresh BudgetManager instance over the same state file still counts
- * reservations made by a previous instance. Stale reservations (different
- * day) are dropped.
+ * Read-modify-write the shared budget file under a cross-process lock.
+ * `fn` must be synchronous: the lock is held until it returns, and awaiting
+ * inside it would let a synchronous mutation deadlock on the same lock.
  */
-function hydrateReservations(state: BudgetState): void {
-  pendingReservations.clear();
-  const today = DAY_KEY();
-  for (const [modelName, entries] of Object.entries(state.reservations ?? {})) {
-    let total = 0;
-    for (const entry of entries) {
-      if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) continue;
-      if (entry.dailyKey === today) total += entry.amount;
-    }
-    if (total > 0) pendingReservations.set(`res:${modelName}:d`, total);
+export function mutateBudgetState<T>(
+  rootDir: string,
+  fn: (state: BudgetState) => T,
+  logger?: Logger,
+): Promise<T> {
+  const config = budgetConfig;
+  if (!config) return Promise.resolve(fn(getEmptyState()));
+
+  const statePath = getStatePath(config, rootDir);
+  const run = () => withBudgetLock(rootDir, logger, () => {
+    const state = readBudgetStateFile(statePath, logger);
+    const result = fn(state);
+    writeBudgetStateFile(statePath, state, logger);
+    return result;
+  });
+  const queued = mutationQueue.then(run, run);
+  mutationQueue = queued.then(() => undefined, () => undefined);
+  return queued;
+}
+
+function applySpend(state: BudgetState, modelName: string, usd: number): void {
+  const dayKey = DAY_KEY();
+  const monthKey = MONTH_KEY();
+
+  state.global.daily[dayKey] = (state.global.daily[dayKey] ?? 0) + usd;
+  state.global.monthly[monthKey] = (state.global.monthly[monthKey] ?? 0) + usd;
+
+  if (!state.models[modelName]) {
+    state.models[modelName] = { daily: {}, monthly: {} };
   }
+  state.models[modelName].daily[dayKey] = (state.models[modelName].daily[dayKey] ?? 0) + usd;
+  state.models[modelName].monthly[monthKey] = (state.models[modelName].monthly[monthKey] ?? 0) + usd;
+}
+
+export function addSpend(modelName: string, usd: number, rootDir: string, logger?: Logger): Promise<void> {
+  if (!budgetConfig) return Promise.resolve();
+
+  if (!safeLedgerModel(modelName)) {
+    logger?.warn('Ignoring spend for unsafe model name', { modelName });
+    return Promise.resolve();
+  }
+
+  return mutateBudgetState(rootDir, (state) => {
+    applySpend(state, modelName, usd);
+  }, logger);
 }
 
 function todayReservedTotal(state: BudgetState, modelName: string): number {
@@ -158,10 +251,41 @@ function todayReservedTotal(state: BudgetState, modelName: string): number {
   return total;
 }
 
+function removeReservationEntry(
+  state: BudgetState,
+  modelName: string,
+  estimatedCostUsd: number,
+  logger?: Logger,
+): boolean {
+  const entries = state.reservations?.[modelName];
+  if (!entries || entries.length === 0) return false;
+
+  const today = DAY_KEY();
+  // Match the persisted entry by amount so out-of-order releases of different
+  // amounts remove the right entry (reserve 2 then 5, release the 5 first).
+  const idx = entries.findIndex((entry) => entry.dailyKey === today && entry.amount === estimatedCostUsd);
+  if (idx >= 0) {
+    entries.splice(idx, 1);
+    return true;
+  }
+  if (entries.some((entry) => entry.dailyKey === today)) {
+    // A today entry exists but none matches: leave persisted entries untouched
+    // rather than deleting the wrong one; reserve/release amounts are expected
+    // to match.
+    logger?.warn('No persisted reservation entry matches released amount; leaving persisted reservations untouched', {
+      model: modelName,
+      estimatedCost: estimatedCostUsd,
+      today,
+      persistedEntries: entries.length,
+    });
+  }
+  return false;
+}
+
 /**
  * Reserve an estimated cost before dispatching a job.
  * Returns {ok: true} if the reservation is within budget limits, {ok: false} otherwise.
- * The reservation is tracked in memory and must be released via releaseReservation().
+ * The reservation is persisted and must be released via releaseReservation().
  */
 export function reserveBudget(
   modelName: string,
@@ -176,58 +300,58 @@ export function reserveBudget(
     return { ok: true };
   }
 
-  const state = loadBudgetState(budgetConfig, rootDir, logger);
-  const modelLimits = budgetConfig.models?.[modelName];
-  const globalLimits = budgetConfig.global;
-  const thresholds = budgetConfig.thresholds ?? { warn: 80, block: 100 };
+  const config = budgetConfig;
+  const statePath = getStatePath(config, rootDir);
 
-  const spentDaily = getSpendToday(state, modelName);
-  const spentMonthly = getSpendMonth(state, modelName);
-  const limitDaily = modelLimits?.daily ?? globalLimits?.daily;
-  const limitMonthly = modelLimits?.monthly ?? globalLimits?.monthly;
+  return withBudgetLockSync(rootDir, logger, () => {
+    const state = readBudgetStateFile(statePath, logger);
+    const modelLimits = config.models?.[modelName];
+    const globalLimits = config.global;
+    const thresholds = config.thresholds ?? { warn: 80, block: 100 };
 
-  // Include all pending reservations in the projected spend. Read from the
-  // persisted state file (not the in-memory mirror) so a process that did not
-  // make the reservations — e.g. the runner — still sees them.
-  const reservationKey = `res:${modelName}:d`;
-  const totalReserved = todayReservedTotal(state, modelName);
+    const spentDaily = getSpendToday(state, modelName);
+    const spentMonthly = getSpendMonth(state, modelName);
+    const limitDaily = modelLimits?.daily ?? globalLimits?.daily;
+    const limitMonthly = modelLimits?.monthly ?? globalLimits?.monthly;
 
-  if (limitDaily !== null && limitDaily !== undefined) {
-    const projectedDaily = spentDaily + totalReserved + estimatedCostUsd;
-    const percentDaily = (projectedDaily / limitDaily) * 100;
-    if (percentDaily > thresholds.block) {
-      return {
-        ok: false,
-        reason: `Budget reservation blocked for ${modelName}: projected daily spend $${projectedDaily.toFixed(2)} exceeds limit $${limitDaily} (${percentDaily.toFixed(0)}%)`,
-      };
+    const totalReserved = todayReservedTotal(state, modelName);
+
+    if (limitDaily !== null && limitDaily !== undefined) {
+      const projectedDaily = spentDaily + totalReserved + estimatedCostUsd;
+      const percentDaily = (projectedDaily / limitDaily) * 100;
+      if (percentDaily > thresholds.block) {
+        return {
+          ok: false,
+          reason: `Budget reservation blocked for ${modelName}: projected daily spend $${projectedDaily.toFixed(2)} exceeds limit $${limitDaily} (${percentDaily.toFixed(0)}%)`,
+        };
+      }
     }
-  }
-  if (limitMonthly !== null && limitMonthly !== undefined) {
-    const projectedMonthly = spentMonthly + totalReserved + estimatedCostUsd;
-    const percentMonthly = (projectedMonthly / limitMonthly) * 100;
-    if (percentMonthly > thresholds.block) {
-      return {
-        ok: false,
-        reason: `Budget reservation blocked for ${modelName}: projected monthly spend $${projectedMonthly.toFixed(2)} exceeds limit $${limitMonthly} (${percentMonthly.toFixed(0)}%)`,
-      };
+    if (limitMonthly !== null && limitMonthly !== undefined) {
+      const projectedMonthly = spentMonthly + totalReserved + estimatedCostUsd;
+      const percentMonthly = (projectedMonthly / limitMonthly) * 100;
+      if (percentMonthly > thresholds.block) {
+        return {
+          ok: false,
+          reason: `Budget reservation blocked for ${modelName}: projected monthly spend $${projectedMonthly.toFixed(2)} exceeds limit $${limitMonthly} (${percentMonthly.toFixed(0)}%)`,
+        };
+      }
     }
-  }
 
-  // Reserve the estimated cost
-  pendingReservations.set(reservationKey, totalReserved + estimatedCostUsd);
-  if (!state.reservations) state.reservations = {};
-  if (!state.reservations[modelName]) state.reservations[modelName] = [];
-  state.reservations[modelName].push({ amount: estimatedCostUsd, dailyKey: DAY_KEY(), expiresAt: Date.now() + RESERVATION_TTL_MS });
-  saveBudgetState(rootDir, logger);
-  logger?.debug('Budget reserved', {
-    model: modelName,
-    estimatedCost: estimatedCostUsd,
-    totalReserved: totalReserved + estimatedCostUsd,
-    dailySpent: spentDaily,
-    monthlySpent: spentMonthly,
+    if (!state.reservations) state.reservations = {};
+    if (!state.reservations[modelName]) state.reservations[modelName] = [];
+    state.reservations[modelName].push({ amount: estimatedCostUsd, dailyKey: DAY_KEY(), expiresAt: Date.now() + RESERVATION_TTL_MS });
+    writeBudgetStateFile(statePath, state, logger);
+
+    logger?.debug('Budget reserved', {
+      model: modelName,
+      estimatedCost: estimatedCostUsd,
+      totalReserved: totalReserved + estimatedCostUsd,
+      dailySpent: spentDaily,
+      monthlySpent: spentMonthly,
+    });
+
+    return { ok: true };
   });
-
-  return { ok: true };
 }
 
 /**
@@ -241,55 +365,24 @@ export function releaseReservation(
   rootDir: string,
   logger?: Logger,
 ): void {
-  const reservationKey = `res:${modelName}:d`;
-  const current = pendingReservations.get(reservationKey) ?? 0;
-  const released = Math.max(0, current - estimatedCostUsd);
-  if (released > 0) {
-    pendingReservations.set(reservationKey, released);
-  } else {
-    pendingReservations.delete(reservationKey);
-  }
+  if (!budgetConfig || !safeLedgerModel(modelName)) return;
 
-  if (budgetConfig && safeLedgerModel(modelName)) {
-    const state = loadBudgetState(budgetConfig, rootDir, logger);
-    const entries = state.reservations?.[modelName];
-    if (entries && entries.length > 0) {
-      const today = DAY_KEY();
-      // Match the persisted entry by amount so out-of-order releases of
-      // different amounts remove the right entry. Removing the FIRST today
-      // entry would untether the file from the in-memory total when releases
-      // arrive out of order (e.g. reserve 2 then 5, release the 5 first).
-      const idx = entries.findIndex((entry) => entry.dailyKey === today && entry.amount === estimatedCostUsd);
-      if (idx >= 0) {
-        entries.splice(idx, 1);
-        saveBudgetState(rootDir, logger);
-      } else if (entries.some((entry) => entry.dailyKey === today)) {
-        // A today entry exists but none matches the released amount. Safest
-        // option: leave persisted entries untouched — deleting the wrong one
-        // corrupts the persisted total, and reserve/release amounts are
-        // expected to match. The in-memory decrement above still applies.
-        logger?.warn('No persisted reservation entry matches released amount; leaving persisted reservations untouched', {
-          model: modelName,
-          estimatedCost: estimatedCostUsd,
-          today,
-          persistedEntries: entries.length,
-        });
-      }
-      // No today-matching entry at all: the reservation was never persisted
-      // (in-memory only) — nothing to remove, skip persistence entirely.
-    }
-  }
+  const config = budgetConfig;
+  const statePath = getStatePath(config, rootDir);
 
-  if (actualCostUsd > 0) {
-    // Fire-and-forget — addSpend is serialized
-    void addSpend(modelName, actualCostUsd, rootDir, logger);
-  }
+  withBudgetLockSync(rootDir, logger, () => {
+    const state = readBudgetStateFile(statePath, logger);
+    const removed = removeReservationEntry(state, modelName, estimatedCostUsd, logger);
+    if (actualCostUsd > 0) applySpend(state, modelName, actualCostUsd);
+    // Leave the file untouched when neither the reservation nor spend changed.
+    if (removed || actualCostUsd > 0) writeBudgetStateFile(statePath, state, logger);
 
-  logger?.debug('Budget reservation released', {
-    model: modelName,
-    estimatedCost: estimatedCostUsd,
-    actualCost: actualCostUsd,
-    remainingReserved: released,
+    logger?.debug('Budget reservation released', {
+      model: modelName,
+      estimatedCost: estimatedCostUsd,
+      actualCost: actualCostUsd,
+      remainingReserved: todayReservedTotal(state, modelName),
+    });
   });
 }
 
@@ -318,29 +411,30 @@ export function checkBudget(modelName: string, rootDir: string, force: boolean =
   if (!budgetConfig) {
     return { allowed: true, spentUsd: 0, limitUsd: null, percentUsed: 0 };
   }
-  
-  const state = loadBudgetState(budgetConfig, rootDir, logger);
-  
-  const modelLimits = budgetConfig.models?.[modelName];
-  const globalLimits = budgetConfig.global;
-  const thresholds = budgetConfig.thresholds ?? { warn: 80, block: 100 };
-  
+
+  const config = budgetConfig;
+  const state = readBudgetStateFile(getStatePath(config, rootDir), logger);
+
+  const modelLimits = config.models?.[modelName];
+  const globalLimits = config.global;
+  const thresholds = config.thresholds ?? { warn: 80, block: 100 };
+
   const spentDaily = getSpendToday(state, modelName) + extraSpendUsd;
   const spentMonthly = getSpendMonth(state, modelName) + extraSpendUsd;
-  
+
   const limitDaily = modelLimits?.daily ?? globalLimits?.daily;
   const limitMonthly = modelLimits?.monthly ?? globalLimits?.monthly;
-  
+
   let percentDaily = 0;
   let percentMonthly = 0;
-  
+
   if (limitDaily !== null && limitDaily !== undefined) {
     percentDaily = (spentDaily / limitDaily) * 100;
   }
   if (limitMonthly !== null && limitMonthly !== undefined) {
     percentMonthly = (spentMonthly / limitMonthly) * 100;
   }
-  
+
   const effectiveLimit = limitDaily ?? limitMonthly ?? null;
   const effectiveSpent = limitDaily !== null && limitDaily !== undefined ? spentDaily : spentMonthly;
   const effectivePercent = limitDaily !== null && limitDaily !== undefined ? percentDaily : percentMonthly;
@@ -350,7 +444,7 @@ export function checkBudget(modelName: string, rootDir: string, force: boolean =
   if (force) {
     return { allowed: true, spentUsd: effectiveSpent, limitUsd: effectiveLimit, percentUsed: effectivePercent };
   }
-  
+
   if (limitDaily !== null && limitDaily !== undefined && percentDaily >= thresholds.block) {
     return {
       allowed: false,
@@ -360,7 +454,7 @@ export function checkBudget(modelName: string, rootDir: string, force: boolean =
       percentUsed: percentDaily,
     };
   }
-  
+
   if (limitMonthly !== null && limitMonthly !== undefined && percentMonthly >= thresholds.block) {
     return {
       allowed: false,
@@ -370,7 +464,7 @@ export function checkBudget(modelName: string, rootDir: string, force: boolean =
       percentUsed: percentMonthly,
     };
   }
-  
+
   return { allowed: true, spentUsd: effectiveSpent, limitUsd: effectiveLimit, percentUsed: effectivePercent };
 }
 
@@ -384,29 +478,30 @@ export function getBudgetStatus(rootDir: string, logger?: Logger): {
       models: {},
     };
   }
-  
-  const state = loadBudgetState(budgetConfig, rootDir, logger);
-  
+
+  const config = budgetConfig;
+  const state = readBudgetStateFile(getStatePath(config, rootDir), logger);
+
   const result = {
     global: {
-      daily: { spent: getSpendToday(state), limit: budgetConfig.global?.daily ?? null },
-      monthly: { spent: getSpendMonth(state), limit: budgetConfig.global?.monthly ?? null },
+      daily: { spent: getSpendToday(state), limit: config.global?.daily ?? null },
+      monthly: { spent: getSpendMonth(state), limit: config.global?.monthly ?? null },
     },
     models: {} as Record<string, { daily: { spent: number; limit: number | null }; monthly: { spent: number; limit: number | null } }>,
   };
-  
+
   const allModels = new Set(Object.keys(state.models));
-  if (budgetConfig.models) {
-    for (const m of Object.keys(budgetConfig.models)) allModels.add(m);
+  if (config.models) {
+    for (const m of Object.keys(config.models)) allModels.add(m);
   }
-  
+
   for (const modelName of allModels) {
     result.models[modelName] = {
-      daily: { spent: getSpendToday(state, modelName), limit: budgetConfig.models?.[modelName]?.daily ?? null },
-      monthly: { spent: getSpendMonth(state, modelName), limit: budgetConfig.models?.[modelName]?.monthly ?? null },
+      daily: { spent: getSpendToday(state, modelName), limit: config.models?.[modelName]?.daily ?? null },
+      monthly: { spent: getSpendMonth(state, modelName), limit: config.models?.[modelName]?.monthly ?? null },
     };
   }
-  
+
   return result;
 }
 
@@ -420,12 +515,18 @@ export function recordRunReservations(
   logger?: Logger,
 ): void {
   if (!budgetConfig) return;
-  const state = loadBudgetState(budgetConfig, rootDir, logger);
-  state.runReservations = state.runReservations ?? {};
-  const entry: Record<string, number> = {};
-  for (const r of reservations) entry[r.model] = (entry[r.model] ?? 0) + r.estimated;
-  state.runReservations[runId] = entry;
-  saveBudgetState(rootDir, logger);
+
+  const config = budgetConfig;
+  const statePath = getStatePath(config, rootDir);
+
+  withBudgetLockSync(rootDir, logger, () => {
+    const state = readBudgetStateFile(statePath, logger);
+    state.runReservations = state.runReservations ?? {};
+    const entry: Record<string, number> = {};
+    for (const r of reservations) entry[r.model] = (entry[r.model] ?? 0) + r.estimated;
+    state.runReservations[runId] = entry;
+    writeBudgetStateFile(statePath, state, logger);
+  });
 }
 
 /** Release a run's reservations against actual costs, reading the reserved
@@ -436,21 +537,34 @@ export function releaseRunReservations(
   rootDir: string,
   logger?: Logger,
 ): void {
-  const state = budgetConfig ? loadBudgetState(budgetConfig, rootDir, logger) : null;
-  const reserved = state?.runReservations?.[runId] ?? {};
-  for (const entry of entries) {
-    releaseReservation(entry.model, reserved[entry.model] ?? 0, entry.result?.costUsd ?? 0, rootDir, logger);
-  }
-  if (state?.runReservations) {
-    delete state.runReservations[runId];
-    saveBudgetState(rootDir, logger);
-  }
+  if (!budgetConfig) return;
+
+  const config = budgetConfig;
+  const statePath = getStatePath(config, rootDir);
+
+  withBudgetLockSync(rootDir, logger, () => {
+    const state = readBudgetStateFile(statePath, logger);
+    const reserved = state.runReservations?.[runId] ?? {};
+    for (const entry of entries) {
+      if (!safeLedgerModel(entry.model)) continue;
+      const estimatedCostUsd = reserved[entry.model] ?? 0;
+      const actualCostUsd = entry.result?.costUsd ?? 0;
+      removeReservationEntry(state, entry.model, estimatedCostUsd, logger);
+      if (actualCostUsd > 0) applySpend(state, entry.model, actualCostUsd);
+      logger?.debug('Budget reservation released', {
+        model: entry.model,
+        estimatedCost: estimatedCostUsd,
+        actualCost: actualCostUsd,
+        remainingReserved: todayReservedTotal(state, entry.model),
+      });
+    }
+    if (state.runReservations) delete state.runReservations[runId];
+    writeBudgetStateFile(statePath, state, logger);
+  });
 }
 
 export function resetBudgetCache(): void {
   budgetConfig = null;
-  budgetState = null;
-  spendQueue = Promise.resolve();
-  pendingReservations.clear();
+  mutationQueue = Promise.resolve();
   clearConfigCache();
 }
