@@ -269,12 +269,12 @@ const spawnCmd = (): ReturnType<typeof exec> => {
 
 // ── search_code ──────────────────────────────────────────────────────────────
 
-// Regex matching is synchronous, so the wall-clock budget cannot interrupt a
-// single catastrophic match; refusing dangerous shapes up front is the bound.
-// The analysis is deliberately shallow: it tracks quantifiers and alternations
-// per group and only trusts alternation branches whose first characters are
-// provably disjoint. Anything it cannot prove is treated as ambiguous, so the
-// failure mode is a false rejection, never a hang.
+// Regex matching is synchronous, so the between-lines budget cannot interrupt a
+// single catastrophic match; this shallow syntactic analysis is a best-effort
+// bound, not a proof. It tracks quantifiers and alternations per group, trusts
+// only alternation branches whose first characters are provably disjoint, and
+// rejects large nullable/variable-length repeats. Anything it cannot prove is
+// treated as ambiguous, so the failure mode is a false rejection, never a hang.
 
 type CharRange = readonly [number, number];
 type CharSet = readonly CharRange[];
@@ -482,7 +482,7 @@ interface RegexGroupState {
   start: number;
   hasUnboundedQuantifier: boolean;
   hasAmbiguousAlternation: boolean;
-  hasBoundedRepeat: boolean;
+  hasVariableRepeat: boolean;
   hasAmbiguousSequence: boolean;
   first: CharSet | null;
   nullable: boolean;
@@ -500,7 +500,7 @@ function newGroupState(start: number): RegexGroupState {
     start,
     hasUnboundedQuantifier: false,
     hasAmbiguousAlternation: false,
-    hasBoundedRepeat: false,
+    hasVariableRepeat: false,
     hasAmbiguousSequence: false,
     first: null,
     nullable: true,
@@ -550,19 +550,27 @@ function quantifierEnd(pattern: string, quantifier: RegexQuantifier | null, fall
 
 /**
  * Find the first quantified group that can backtrack exponentially: a nested
- * unbounded quantifier (`(a+)+`), a bounded inner repeat under an unbounded
- * outer one (`(a{2,3})+`), an ambiguous nullable sequence (`(a?b?)+`), or an
- * ambiguous alternation, including one hidden behind wrapper groups
- * (`((a|aa))+`). The same shapes are rejected under bounded outer quantifiers
- * with max >= 2 (`(a|aa){35}`), which blow up multiplicatively. Alternations
- * whose branches start with provably disjoint characters after case folding
- * (`(foo|bar)+`) are permitted. A long run of nullable atoms followed by a
- * required atom (`a?a?…a?b`) is also rejected, since every required atom
- * leaves exponentially many ways to split the run. Anything the analysis
- * cannot prove stays ambiguous, so the failure mode is a false rejection.
- * Shapes the syntactic scanner cannot analyze (e.g. exotic backreference use)
- * remain best-effort; the between-lines budget in searchCode bounds them.
+ * unbounded quantifier (`(a+)+`), a variable-length inner repeat (`(a{2,3})+`,
+ * `(a{2,3}){35}`), a nullable body under a large bounded repeat (`(a?){35}`),
+ * an ambiguous nullable sequence (`(a?b?)+`), or an ambiguous alternation,
+ * including one hidden behind wrapper groups (`((a|aa))+`). Ambiguous
+ * alternations are rejected under any outer quantifier with max >= 2; nullable
+ * bodies and variable-length inner repeats only at max >= 8, so IPv4's
+ * `([0-9]{1,3}\.){3}` stays usable. Fixed-length inner repeats (`(a{2}){35}`)
+ * are permitted: they consume an exact number of characters per iteration.
+ * Alternations whose branches start with provably disjoint characters after
+ * case folding (`(foo|bar)+`) are permitted. A long run of nullable atoms
+ * followed by a required atom (`a?a?…a?b`) is also rejected, since every
+ * required atom leaves exponentially many ways to split the run. Anything the
+ * analysis cannot prove stays ambiguous, so the failure mode is a false
+ * rejection. Shapes the syntactic scanner cannot analyze (e.g. exotic
+ * backreference use) remain best-effort; the between-lines budget in searchCode
+ * bounds them.
  */
+
+/** Bounded outer repeats below this max run too few iterations to explode. */
+const BOUNDED_OUTER_REPEAT_MAX = 8;
+
 function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): RegexShapeFinding | null {
   const stack: RegexGroupState[] = [newGroupState(0)];
 
@@ -608,7 +616,10 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
   const noteQuantifier = (group: RegexGroupState, q: RegexQuantifier | null): void => {
     if (!q) return;
     if (q.max === null) group.hasUnboundedQuantifier = true;
-    else if (q.max >= 2) group.hasBoundedRepeat = true;
+    // Only a variable-length bounded repeat (`{1,3}`, `{2,3}`) makes the group
+    // ambiguous when it is repeated: a fixed `{2}` consumes an exact number of
+    // characters per iteration under any outer quantifier.
+    else if (q.max >= 2 && q.min !== q.max) group.hasVariableRepeat = true;
   };
 
   for (let i = 0; i < pattern.length; i++) {
@@ -667,8 +678,11 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
       }
 
       const q = quantifierAt(pattern, i + 1);
-      // A bounded outer quantifier with max >= 2 composes the same ambiguous
-      // inner shapes multiplicatively as an unbounded one.
+      // An unbounded outer quantifier composes any repeated inner shape
+      // exponentially. A bounded outer only does so at a large max: a nullable
+      // body or a variable-length inner repeat needs many iterations before the
+      // split count explodes, while small counts (IPv4's `(...){3}`) stay
+      // cheap. Fixed-length inner repeats (`(a{2}){35}`) are linear either way.
       if (q && (q.max === null || q.max >= 2)) {
         if (group.hasUnboundedQuantifier) {
           return { kind: 'nested-quantifier', construct: pattern.slice(group.start, q.end + 1) };
@@ -676,19 +690,24 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
         if (group.hasAmbiguousAlternation) {
           return { kind: 'ambiguous-alternation', construct: pattern.slice(group.start, q.end + 1) };
         }
-        if (group.hasBoundedRepeat) {
-          return { kind: 'nested-quantifier', construct: pattern.slice(group.start, q.end + 1) };
+        if (q.max === null || q.max >= BOUNDED_OUTER_REPEAT_MAX) {
+          if (group.hasVariableRepeat) {
+            return { kind: 'nested-quantifier', construct: pattern.slice(group.start, q.end + 1) };
+          }
+          if (q.max !== null && group.nullable) {
+            return { kind: 'ambiguous-repeat', construct: pattern.slice(group.start, q.end + 1) };
+          }
         }
         if (group.hasAmbiguousSequence) {
           return { kind: 'ambiguous-repeat', construct: pattern.slice(group.start, q.end + 1) };
         }
       }
 
-      if (q && q.max !== null && q.max >= 2) parent.hasBoundedRepeat = true;
+      if (q && q.max !== null && q.max >= 2 && q.min !== q.max) parent.hasVariableRepeat = true;
       if (q && q.max === null) parent.hasUnboundedQuantifier = true;
       else parent.hasUnboundedQuantifier ||= group.hasUnboundedQuantifier;
       parent.hasAmbiguousAlternation ||= group.hasAmbiguousAlternation;
-      parent.hasBoundedRepeat ||= group.hasBoundedRepeat;
+      parent.hasVariableRepeat ||= group.hasVariableRepeat;
       parent.hasAmbiguousSequence ||= group.hasAmbiguousSequence;
       const groupShape = applyAtom(parent, group.first, group.nullable || (q !== null && q.min === 0), group.start);
       if (groupShape) return groupShape;

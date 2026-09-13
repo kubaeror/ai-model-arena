@@ -495,7 +495,16 @@ describe('search_code regex shape guard', () => {
   });
   after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  const accepted = ['(foo|bar)+', '(a|b)+', '[ab]+', 'a+', '(ab)*', '([ab]|c)+', '((foo|bar))+', '(a?b)+', '(a?)+', '(a|b){35}', '(ab){2,3}'];
+  const accepted = [
+    '(foo|bar)+', '(a|b)+', '[ab]+', 'a+', '(ab)*', '([ab]|c)+', '((foo|bar))+', '(a?b)+', '(a?)+', '(a|b){35}', '(ab){2,3}',
+    // Fixed-length inner repeats under a bounded outer consume a fixed number
+    // of characters per iteration, so they stay linear.
+    '(a{2}){35}',
+    '(ab){1,3}',
+    // IPv4-style: a small outer count keeps the variable-length inner repeat safe.
+    '([0-9]{1,3}\\.){3}[0-9]{1,3}',
+    '(\\d{1,3}\\.){3}\\d{1,3}',
+  ];
   for (const query of accepted) {
     it(`accepts ${query}`, async () => {
       const r = await search({ query, regex: true }, shapeCtx);
@@ -548,7 +557,13 @@ describe('search_code regex shape guard', () => {
     // Ambiguity under a bounded outer quantifier blows up multiplicatively.
     '^(a|aa){35}b$',
     '(a|aa){2}',
+    '(a|aa){35}',
     '(a{2,3}){35}',
+    // A nullable body makes every repetition boundary ambiguous: each optional
+    // atom can consume the same character.
+    '^(a?){35}b$',
+    '^(a?|b){35}c$',
+    '^([a-z]?){30}b$',
     // A long root-level run of nullable atoms before a required atom leaves
     // exponentially many ways to split the input.
     '^a?a?a?a?a?a?a?a?b$',
