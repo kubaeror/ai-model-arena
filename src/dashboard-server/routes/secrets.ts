@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
+import { CoreV1Api, KubeConfig, setHeaderOptions } from '@kubernetes/client-node';
 import type { AuthedRequest } from '../auth.js';
 import { auditSafe } from '../../auth/rbac.js';
 import { secretStore, type SecretEntry } from '../../secrets/store.js';
@@ -9,6 +9,10 @@ import { asyncHandler } from '../helpers.js';
 
 let k8sApi: CoreV1Api | null = null;
 let k8sReady = false;
+
+// The generated k8s client prefers application/json-patch+json, but the
+// bodies below are merge patches (object diffs), not JSON Patch arrays.
+const MERGE_PATCH_OPTIONS = setHeaderOptions('Content-Type', 'application/merge-patch+json');
 
 function mask(v: string): string {
   if (v.length <= 4) return '****';
@@ -124,7 +128,7 @@ export function createSecretsRouter(): Router {
           name,
           namespace: ns,
           body: { stringData: Object.fromEntries([[envVar, value]]) },
-        });
+        }, MERGE_PATCH_OPTIONS);
       } catch (patchErr: unknown) {
         const e = patchErr as { response?: { statusCode?: number }; statusCode?: number };
         if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
@@ -167,7 +171,7 @@ export function createSecretsRouter(): Router {
           name,
           namespace: ns,
           body: { stringData: Object.fromEntries([[envVar, null]]) },
-        });
+        }, MERGE_PATCH_OPTIONS);
       } catch (err: unknown) {
         const e = err as { response?: { statusCode?: number }; statusCode?: number };
         if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
