@@ -125,3 +125,4 @@ spec:
         - name: provider-keys
           secret:
             secretName: provider-keys
+            optional: true

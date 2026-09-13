@@ -48,10 +48,14 @@ kubectl -n ai-arena create secret generic webhook-secret \
   --from-literal=key=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
 ```
 
-> Note: the dashboard refuses to encrypt/decrypt webhook secrets in
-> production (`NODE_ENV=production`) without `WEBHOOK_SECRET_KEY` mounted as
-> the `webhook-secret` secret above — create it or webhook create/delete will
-> fail in every containerized deployment.
+> Note: `WEBHOOK_SECRET_KEY` is marked `optional: true` so the pod can start
+> on a fresh cluster where the `webhook-secret` Secret does not exist yet.
+> Without it, the dashboard refuses to encrypt/decrypt webhook secrets in
+> production (`NODE_ENV=production`) — create the `webhook-secret` above or
+> webhook create/delete will fail in every containerized deployment.
+> Likewise, `METRICS_TOKEN` is `optional: true`: if `dashboard-auth` has no
+> `metrics-token` key, `/metrics` falls back to requiring an admin JWT and
+> the Prometheus bearer-token scrape for the dashboard job is disabled.
 
 ## Deploy via kustomize
 
@@ -94,11 +98,32 @@ kubectl apply -f k8s/argocd/ai-arena-app.yaml
 # CI commits the image SHA tag to the prod kustomization.yaml on each push.
 ```
 
+> **Required re-seal (metrics-token) and webhook-secret.** The committed
+> `dashboard-auth` SealedSecret does not contain a `metrics-token` key
+> (see the NOTE in `k8s/base/arena-secrets-sealed.yaml`). Its dashboard
+> `secretKeyRef` is `optional: true` purely so the pod can boot; metrics
+> scraping is unauthenticated/disabled until the secret is re-sealed:
+>
+> ```bash
+> kubectl create secret generic dashboard-auth -n ai-arena \
+>   --from-literal=password=... --from-literal=jwt-secret=... \
+>   --from-literal=metrics-token=$(openssl rand -hex 32) \
+>   --dry-run=client -o yaml | kubeseal --format yaml > sealed.yaml
+> # replace the dashboard-auth resource in k8s/base/arena-secrets-sealed.yaml
+> ```
+>
+> A `webhook-secret` (key: `key`) must also be provisioned (sealed or created
+> out-of-band). Its `secretKeyRef` is `optional: true` so the pod starts, but
+> without it webhook create/delete fails in production.
+
 **Provider API keys** (OpenAI, Anthropic, Google, etc.) are managed via the dashboard
 UI under Settings → API Keys, NOT via sealed secrets. See [Secrets Management](#secrets-management) for details.
 
 On first deploy, the `provider-keys` Secret won't exist until keys are set
-via the dashboard. Until then, providers requiring API keys will fail.
+via the dashboard. The `provider-keys` volume is marked `optional: true` in
+the dashboard and all runner Deployments, so pods boot on a fresh cluster
+(the dashboard itself would otherwise deadlock waiting for a Secret only it
+can create). Until a key is set, providers requiring API keys will fail.
 
 ## Secrets Management
 
