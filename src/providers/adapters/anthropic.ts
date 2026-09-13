@@ -109,11 +109,16 @@ export class AnthropicAdapter extends BaseAdapter implements ModelAdapter {
         toolCalls.push({ id: block.id ?? '', name: block.name ?? '', arguments: block.input ?? {} });
       }
     }
+    const cacheRead = json.usage.cache_read_input_tokens;
+    const cacheWrite = json.usage.cache_creation_input_tokens;
     const usage: TokenUsage = {
-      prompt: json.usage.input_tokens,
+      // Anthropic reports uncached input separately from cache read/write;
+      // `prompt` is the canonical total input so billing can subtract the
+      // cached subsets, matching OpenAI/Google semantics.
+      prompt: (json.usage.input_tokens ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0),
       completion: json.usage.output_tokens,
-      cacheReadTokens: json.usage.cache_read_input_tokens,
-      cacheWriteTokens: json.usage.cache_creation_input_tokens,
+      cacheReadTokens: cacheRead,
+      cacheWriteTokens: cacheWrite,
     };
     return { text, toolCalls, usage, stopReason: json.stop_reason, raw: json };
   }

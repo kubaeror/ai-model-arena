@@ -44,6 +44,8 @@ export interface AgentLoopResult {
   /** Per-tool success/fail breakdown. Keyed by tool name, values are {success, fail} counts. */
   toolSuccessRates: Record<string, { success: number; fail: number }>;
   tokenUsage: TokenUsage;
+  /** Usage of each completed model call, in send order (for per-call billing). */
+  usagePerCall: TokenUsage[];
   stopReason: string;
   errors: string[];
 }
@@ -150,7 +152,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     });
     endSpan(loopSpan);
     conv.flush();
-    return { turnsUsed: 0, maxTurns, totalToolCalls: 0, toolsCalled: [], toolSuccessRates: {}, tokenUsage: usage, stopReason, errors: [] };
+    return { turnsUsed: 0, maxTurns, totalToolCalls: 0, toolsCalled: [], toolSuccessRates: {}, tokenUsage: usage, usagePerCall: [], stopReason, errors: [] };
   }
 
   // Tracks the in-flight tool span so onToolEnd closes the exact span that
@@ -287,6 +289,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     toolsCalled: result.toolsCalled,
     toolSuccessRates: result.toolSuccessRates,
     tokenUsage: result.tokenUsage,
+    usagePerCall: result.usagePerCall,
     stopReason,
     errors: result.errors,
   };

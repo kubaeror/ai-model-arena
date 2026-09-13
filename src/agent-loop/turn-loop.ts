@@ -110,6 +110,8 @@ interface TurnLoopResult {
   toolsCalled: { name: string; count: number }[];
   toolSuccessRates: Record<string, { success: number; fail: number }>;
   tokenUsage: TokenUsage;
+  /** Usage of each completed model call, in send order (for per-call billing). */
+  usagePerCall: TokenUsage[];
   /** 'unknown' when the loop exhausted maxTurns — callers map that to 'max_turns'. */
   stopReason: string;
   errors: string[];
@@ -143,6 +145,7 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
   const events: TurnLoopEvents = opts.events ?? {};
 
   const usage: TokenUsage = {};
+  const usagePerCall: TokenUsage[] = [];
   const toolCounts = new Map<string, number>();
   const toolSuccessRates: Record<string, { success: number; fail: number }> = {};
   const errors: string[] = [];
@@ -183,6 +186,10 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
       usage.prompt = (usage.prompt ?? 0) + (response.usage.prompt ?? 0);
       usage.completion = (usage.completion ?? 0) + (response.usage.completion ?? 0);
       usage.total = (usage.total ?? 0) + (response.usage.total ?? 0);
+      usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + (response.usage.cacheReadTokens ?? 0);
+      usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + (response.usage.cacheWriteTokens ?? 0);
+      // Snapshot per call so callers can price each request at its own tier.
+      usagePerCall.push({ ...response.usage });
     }
 
     const wantsComplete = taskCompleteToolName != null
@@ -264,7 +271,7 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
 
   const toolsCalled = [...toolCounts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
 
-  return { turnsUsed, totalToolCalls, toolsCalled, toolSuccessRates, tokenUsage: usage, stopReason, errors };
+  return { turnsUsed, totalToolCalls, toolsCalled, toolSuccessRates, tokenUsage: usage, usagePerCall, stopReason, errors };
 }
 
 /** Normalize an 'unknown' stop reason when the turn budget was exhausted.

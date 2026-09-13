@@ -1,12 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initDb, closeDb } from '../../src/db/client.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { initDb, closeDb, getDb } from '../../src/db/client.js';
 import { createSessionStore } from '../../src/session/store.js';
 import { resumeFrom } from '../../src/runner/checkpoint.js';
 import { runAgentLoop } from '../../src/agent-loop/loop.js';
 import type { ModelAdapter } from '../../src/providers/adapters/base.js';
 import type { ChatMessage } from '../../src/types.js';
 import type { ConversationLogger } from '../../src/logger/conversation-logger.js';
+import { fetchSync } from '../../src/catalog/sync.js';
+import { InMemoryQueue } from '../../src/queue/in-memory.js';
+import type { Task } from '../../src/queue/types.js';
+import { startRunner } from '../../src/runner.js';
+import { upsertRun } from '../../src/db/runs.js';
+import { ProviderRegistry } from '../../src/providers/index.js';
+import type { CreateAdapterOpts } from '../../src/providers/registry.js';
 
 function stubLogger() {
   return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, child: () => stubLogger() } as any;
@@ -200,4 +210,163 @@ test('sumPriorRunSpend accumulates usage JSON across persisted model calls', asy
   // loop's max-per-call convention, so the seed data yields exactly 0.015.
   assert.equal(total, 0.015, 'prior spend should equal the max per-call cost');
   closeDb();
+});
+
+const RESUME_MODELS_DEV = {
+  openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
+    'gpt-4o': {
+      id: 'gpt-4o', name: 'GPT-4o',
+      attachment: true, reasoning: false, temperature: true, tool_call: true,
+      cost: { input: 2.5, output: 10, cache_read: 1.25, cache_write: 3.75 },
+      limit: { context: 128000, output: 16384 },
+    },
+  } },
+};
+
+const RESUME_MODEL_DIR = 'openai_gpt-4o';
+const RESUME_ORIG_ENV = { ...process.env };
+
+async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 10000, label = 'condition'): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await pred()) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+test('runner resume bills cache tokens per call and reports the absolute final turn', { timeout: 30000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-resume-cost-'));
+  const outputs = path.join(tmp, 'outputs');
+  const dbFile = path.join(tmp, 'test.db');
+  process.env.ARENA_DB_PATH = dbFile;
+  process.env.OUTPUT_ROOT = outputs;
+  process.env.RUNNER_METRICS_ENABLED = 'false';
+  process.env.DB_DRIVER = 'sqlite';
+  process.env.QUEUE_DRIVER = 'memory';
+  process.env.OTEL_ENABLED = 'false';
+  process.env.OPENAI_API_KEY = 'test-key-not-used';
+  initDb(dbFile);
+
+  const scenarioPath = path.join(tmp, 'smoke.yaml');
+  fs.writeFileSync(scenarioPath, [
+    'name: smoke',
+    'systemPrompt: You are a test agent.',
+    'task: Finish immediately.',
+  ].join('\n'));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => RESUME_MODELS_DEV,
+    text: async () => JSON.stringify(RESUME_MODELS_DEV),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  // Partially completed session: turn 1 persisted, so the runner resumes at turn 2.
+  const store = createSessionStore();
+  const sessionId = 'resume-cost-session';
+  const session = await store.createSession({ id: sessionId, model: 'GPT-4o' });
+  const now = new Date().toISOString();
+  await store.appendMessage(session.id, { id: 'r0', sessionId: session.id, turn: 0, role: 'system', content: 'You are a test agent.', toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: now });
+  await store.appendMessage(session.id, { id: 'r1', sessionId: session.id, turn: 0, role: 'user', content: 'Finish immediately.', toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: now });
+  await store.appendMessage(session.id, { id: 'r2', sessionId: session.id, turn: 1, role: 'assistant', content: 'partial', toolCalls: null, toolCallId: null, tokenInput: null, tokenOutput: null, createdAt: now });
+  await store.recordModelCall({
+    sessionId: session.id, turn: 1, provider: 'openai', model: 'GPT-4o',
+    requestHash: 'prior', responseText: 'partial',
+    usage: { prompt: 1000, completion: 100, total: 1100, cacheReadTokens: 400 }, latencyMs: 10,
+  });
+
+  const runId = 'run-resume-cost';
+  const modelRunDir = path.join(outputs, RESUME_MODEL_DIR, runId);
+  await upsertRun({
+    runId, scenario: 'smoke', models: ['GPT-4o'],
+    startedAt: new Date().toISOString(), finishedAt: null, status: 'running', source: 'cli',
+    perModel: [{
+      model: 'GPT-4o', runId, status: 'running',
+      outputDir: modelRunDir,
+      sandboxDir: path.join(modelRunDir, 'files'),
+      resultPath: path.join(modelRunDir, 'result.json'),
+      conversationPath: path.join(modelRunDir, 'conversation.json'),
+      reportPath: path.join(modelRunDir, 'report.md'),
+      logFile: path.join(modelRunDir, 'runner.log'),
+    }],
+    comparisonMdPath: null, comparisonJsonPath: null,
+  });
+
+  const fake: ModelAdapter & { calls: number } = {
+    calls: 0,
+    sendMessage: async () => {
+      fake.calls++;
+      return {
+        text: 'done',
+        toolCalls: [{ id: 'fake-tc-1', name: 'task_complete', arguments: { summary: 'done' } }],
+        usage: { prompt: 12, completion: 6, total: 18, cacheReadTokens: 4, cacheWriteTokens: 2 },
+        stopReason: 'tool_calls',
+      };
+    },
+    supportsReasoning: () => false,
+    supportsPromptCaching: () => false,
+  };
+  const origCreateAdapter = ProviderRegistry.prototype.createAdapter;
+  ProviderRegistry.prototype.createAdapter = function (_providerId: string, _modelId: string, _opts: CreateAdapterOpts): ModelAdapter {
+    return fake;
+  };
+
+  const queue = new InMemoryQueue();
+  const ac = new AbortController();
+  const runnerDone = startRunner({ queue, signal: ac.signal });
+
+  const task: Task = {
+    taskId: 'resume-cost-task',
+    sessionId,
+    provider: 'openai',
+    model: 'GPT-4o',
+    scenario: scenarioPath,
+    config: { modelRunId: runId, maxTurns: 5, scenarioSource: 'cli' },
+    enqueuedAt: new Date().toISOString(),
+    attempts: 0,
+  };
+
+  try {
+    await queue.enqueue(task);
+    await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
+    await waitFor(() => {
+      const row = getDb().prepare('SELECT status FROM run_models WHERE run_id = ? AND model = ?')
+        .get(runId, 'GPT-4o') as { status: string } | undefined;
+      return row?.status === 'completed';
+    }, 10000, 'run_models status completed');
+
+    const result = JSON.parse(fs.readFileSync(path.join(modelRunDir, 'result.json'), 'utf8')) as {
+      turnsUsed: number;
+      tokenUsage: { prompt?: number; completion?: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+      costUsd?: number;
+    };
+
+    // Problem C: turn-loop reports absolute turns, so the resumed run's final
+    // turn is 2 — not 2 + (initialTurn - 1) = 3.
+    assert.equal(result.turnsUsed, 2, 'resumed run must report the absolute final turn');
+
+    // Problem A: cache tokens survive the loop and are billed.
+    assert.equal(result.tokenUsage.cacheReadTokens, 4);
+    assert.equal(result.tokenUsage.cacheWriteTokens, 2);
+    const expected = (12 - 4 - 2) / 1e6 * 2.5 + 6 / 1e6 * 10 + 4 / 1e6 * 1.25 + 2 / 1e6 * 3.75;
+    assert.ok(
+      typeof result.costUsd === 'number' && Math.abs(result.costUsd - expected) < 1e-12,
+      `costUsd ${result.costUsd} should equal ${expected}`,
+    );
+    assert.equal(fake.calls, 1, 'fake adapter should be called exactly once');
+  } finally {
+    ac.abort();
+    await runnerDone;
+    ProviderRegistry.prototype.createAdapter = origCreateAdapter;
+    await queue.close();
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...RESUME_ORIG_ENV };
+  }
 });

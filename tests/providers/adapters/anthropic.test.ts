@@ -76,6 +76,9 @@ test('AnthropicAdapter.sendMessage extracts cache tokens', async () => {
   }) as Response) as typeof fetch;
   try {
     const result = await adapter.sendMessage([{ role: 'user', content: 'hi' }], []);
+    // Canonical convention: `prompt` is the total input token count; Anthropic
+    // reports uncached input + cache read + cache write as separate fields.
+    assert.equal(result.usage.prompt, 1950);
     assert.equal(result.usage.cacheReadTokens, 800);
     assert.equal(result.usage.cacheWriteTokens, 150);
   } finally {

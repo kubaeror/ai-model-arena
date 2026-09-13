@@ -25,7 +25,8 @@ import { runAgentLoopTraced } from './observability/instrument-loop.js';
 import { TOOL_DEFINITIONS, buildToolExecutors } from './tools/index.js';
 import { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
 import { resolveFallback, resolveMaxFallbackHops, type FallbackConfig } from './providers/fallback.js';
-import { loadBudgetConfig, checkBudget, computeCost, budgetStateRoot } from './cost-tracking/index.js';
+import { loadBudgetConfig, checkBudget, computeCost, computeTotalCost, budgetStateRoot } from './cost-tracking/index.js';
+import type { CostTokenUsage } from './cost-tracking/types.js';
 import { isKillSwitchActive, isRunCancelled, clearRunCancelled, dispatchBudgetExceeded } from './orchestrator/run-lifecycle.js';
 import { activeTasks, taskCounter, taskDuration, tasksClaimed, tasksFailed, startMetricsServer } from './observability/metrics.js';
 import type { ToolExecutionContext, TokenUsage, ChatMessage, Logger } from './types.js';
@@ -178,11 +179,14 @@ export async function sumPriorRunSpend(sessionId: string, modelName: string): Pr
   let total = 0;
   const priorCalls = await listModelCallsForSession(sessionId);
   for (const c of priorCalls) {
-    const usage = JSON.parse(c.usage ?? '{}') as { prompt?: number; completion?: number };
+    const usage = JSON.parse(c.usage ?? '{}') as {
+      prompt?: number; completion?: number; cacheReadTokens?: number; cacheWriteTokens?: number;
+    };
     const prior = await computeCost(modelName, {
       prompt: Number(usage.prompt ?? 0),
       completion: Number(usage.completion ?? 0),
-      cached: 0,
+      cached: Number(usage.cacheReadTokens ?? 0),
+      cacheWrite: Number(usage.cacheWriteTokens ?? 0),
     });
     total = Math.max(total, prior.total);
   }
@@ -553,8 +557,15 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         logger.warn('Failed to write running state', { error: String(e) });
       }
 
+      // Per-call spend tracking for the budget check. The turn hook receives
+      // cumulative usage, so each turn's cost is the delta from the previous
+      // cumulative snapshot; attemptRunCost resets on a fallback so a retried
+      // attempt is not counted twice on top of the pre-attempt seed.
+      const seededRunCost = prevRunCost;
       while (maxFallbackHops >= 0) {
         const breaker = CircuitBreaker.for(currentProvider, currentModel);
+        let attemptRunCost = 0;
+        let prevTurnUsage: TokenUsage = {};
         try {
           const traced = await breaker.exec(() => runAgentLoopTraced({
             adapter,
@@ -613,6 +624,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                     completion: usage.completion ?? 0,
                     total: usage.total ?? 0,
                     cacheReadTokens: usage.cacheReadTokens ?? 0,
+                    cacheWriteTokens: usage.cacheWriteTokens ?? 0,
                   },
                   latencyMs: durationMs ?? null,
                   ttftMs: durationMs ?? null,
@@ -622,13 +634,24 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               }
               // Track this run's spend so the per-turn budget check below can
               // trip on it (spend only reaches the ledger at finalize time).
+              // Price the current turn's token delta, not the cumulative total,
+              // so the over-200k tier is applied per request.
               try {
-                const cumulative = await computeCost(modelName, {
-                  prompt: usage.prompt ?? 0,
-                  completion: usage.completion ?? 0,
-                  cached: usage.cacheReadTokens ?? 0,
-                });
-                prevRunCost = Math.max(prevRunCost, cumulative.total);
+                const turnUsage: CostTokenUsage = {
+                  prompt: Math.max(0, (usage.prompt ?? 0) - (prevTurnUsage.prompt ?? 0)),
+                  completion: Math.max(0, (usage.completion ?? 0) - (prevTurnUsage.completion ?? 0)),
+                  cached: Math.max(0, (usage.cacheReadTokens ?? 0) - (prevTurnUsage.cacheReadTokens ?? 0)),
+                  cacheWrite: Math.max(0, (usage.cacheWriteTokens ?? 0) - (prevTurnUsage.cacheWriteTokens ?? 0)),
+                };
+                prevTurnUsage = {
+                  prompt: usage.prompt,
+                  completion: usage.completion,
+                  cacheReadTokens: usage.cacheReadTokens,
+                  cacheWriteTokens: usage.cacheWriteTokens,
+                };
+                const turnCost = await computeCost(modelName, turnUsage);
+                attemptRunCost += turnCost.total;
+                prevRunCost = Math.max(prevRunCost, seededRunCost + attemptRunCost);
               } catch (e) {
                 logger.warn('Failed to compute run spend (non-fatal)', { model: modelName, err: String(e) });
               }
@@ -678,11 +701,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         success = successOutcome ? successOutcome.passed : success;
       } catch { /* non-fatal */ }
 
-      const costBreakdown = await computeCost(modelName, {
-        prompt: result.tokenUsage.prompt ?? 0,
-        completion: result.tokenUsage.completion ?? 0,
-        cached: result.tokenUsage.cacheReadTokens ?? 0,
-      });
+      // Sum the per-call costs so each request is tiered on its own tokens;
+      // the aggregate fallback covers runs with no per-call usage (legacy).
+      const costBreakdown = await computeTotalCost(modelName, result.usagePerCall, result.tokenUsage);
 
       await sandboxGit.commitFinal(success ? 'Task completed successfully' : 'Task failed or incomplete');
       const diff = await sandboxGit.generateDiff();
@@ -693,7 +714,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
         model: modelName, scenario: scenarioName, runId: modelRunId,
         startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(),
         durationMs: finishedAt.getTime() - startedAt.getTime(),
-        turnsUsed: result.turnsUsed + (initialTurn - 1), maxTurns: result.maxTurns,
+        // turn-loop's turnsUsed is already the absolute turn number, including
+        // the resumed run's initialTurn offset.
+        turnsUsed: result.turnsUsed, maxTurns: result.maxTurns,
         totalToolCalls: result.totalToolCalls, toolsCalled: result.toolsCalled,
         tokenUsage: result.tokenUsage, stopReason: result.stopReason,
         errors: result.errors, success, costUsd: costBreakdown.total,

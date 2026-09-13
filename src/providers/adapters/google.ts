@@ -88,6 +88,9 @@ export class GoogleAdapter extends BaseAdapter implements ModelAdapter {
       .filter(p => p.functionCall)
       .map(p => ({ id: `google_${p.functionCall!.name}`, name: p.functionCall!.name, arguments: p.functionCall!.args ?? {} }));
     const usage: TokenUsage = {
+      // promptTokenCount includes cached content tokens
+      // (cachedContentTokenCount is a subset) — the canonical TokenUsage
+      // convention.
       prompt: json.usageMetadata?.promptTokenCount,
       completion: json.usageMetadata?.candidatesTokenCount,
       total: json.usageMetadata?.totalTokenCount,

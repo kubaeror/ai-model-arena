@@ -47,10 +47,18 @@ export interface BudgetState {
   lastReset: string;
 }
 
+/**
+ * Token usage for billing. `prompt` is the TOTAL input token count and
+ * `cached` / `cacheWrite` are subsets of it, so `computeCost` charges only the
+ * non-cached remainder at the input price (prevents double-billing cached
+ * input on providers whose prompt count already includes it).
+ */
 export interface CostTokenUsage {
   prompt: number;
   completion: number;
   cached?: number;
+  /** Prompt cache write (creation) tokens; billed at the cache_write price. */
+  cacheWrite?: number;
 }
 
 export interface CostBreakdown {

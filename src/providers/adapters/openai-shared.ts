@@ -58,6 +58,9 @@ export function parseOpenAIResponse(json: OpenAIResponse): ModelResponse {
     return { id: tc.id, name: tc.function.name, arguments: args };
   });
   const usage: TokenUsage = {
+    // prompt_tokens includes tokens served from the prompt cache
+    // (prompt_tokens_details.cached_tokens is a subset) — the canonical
+    // TokenUsage convention.
     prompt: json.usage?.prompt_tokens,
     completion: json.usage?.completion_tokens,
     total: json.usage?.total_tokens,

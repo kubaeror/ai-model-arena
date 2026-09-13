@@ -26,12 +26,19 @@ export interface ChatMessage {
 }
 
 export interface TokenUsage {
+  /**
+   * Input tokens. Canonical convention: TOTAL input including tokens served
+   * from cache — `cacheReadTokens`/`cacheWriteTokens` are subsets of this.
+   * OpenAI (`prompt_tokens`) and Google (`promptTokenCount`) report it that
+   * way natively; the Anthropic adapter sums `input_tokens` (uncached) +
+   * `cache_read_input_tokens` + `cache_creation_input_tokens`.
+   */
   prompt?: number;
   completion?: number;
   total?: number;
-  /** Prompt cache read tokens (Anthropic cache_read_input_tokens, OpenAI cached_tokens). */
+  /** Prompt cache read tokens, a subset of `prompt`. */
   cacheReadTokens?: number;
-  /** Prompt cache write tokens (Anthropic cache_creation_input_tokens). */
+  /** Prompt cache write (creation) tokens, a subset of `prompt`. */
   cacheWriteTokens?: number;
   /** Computed: cacheReadTokens / prompt. Populated by metrics layer, not adapters. */
   cacheHitRate?: number;

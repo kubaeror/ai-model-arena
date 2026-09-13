@@ -2,6 +2,7 @@ import { getDrizzleDb, getDriver } from '../db/index.js';
 import { pricing, models } from '../db/schema.js';
 import { eq, and, sql, desc } from 'drizzle-orm';
 import { type ModelPricing, type CostTokenUsage, type CostBreakdown } from './types.js';
+import type { TokenUsage } from '../types.js';
 
 interface PricingRow {
   input: number | null;
@@ -72,18 +73,31 @@ export async function computeCost(modelName: string, usage: CostTokenUsage): Pro
     return { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
   }
 
-  const totalTokens = (usage.prompt ?? 0) + (usage.completion ?? 0);
-  const isOver200k = totalTokens > 200_000;
+  const promptTokens = usage.prompt ?? 0;
+  const completionTokens = usage.completion ?? 0;
+  const cachedTokens = usage.cached ?? 0;
+  const cacheWriteTokens = usage.cacheWrite ?? 0;
+  // `prompt` counts every input token; cached tokens are billed at their own
+  // price, so only the remainder pays the input price. Clamped so a provider
+  // reporting cache tokens additively cannot drive the remainder negative.
+  const inputTokens = Math.max(0, promptTokens - cachedTokens - cacheWriteTokens);
+
+  // Tier selection is per request, not per run: callers must pass one call's
+  // usage (see computeTotalCost), or a run's calls would all pay the premium.
+  const isOver200k = promptTokens + completionTokens > 200_000;
   const tieredPricing = isOver200k ? await getTieredPricing(modelName) : null;
 
   const inputPrice = tieredPricing?.input ?? pricingData.input;
   const outputPrice = tieredPricing?.output ?? pricingData.output;
   const cachedPrice = tieredPricing?.cache_read ?? pricingData.cached;
+  // The catalog has no tiered cache-write price; fall back to the base write
+  // price, then to input pricing for providers that only bill input.
+  const cacheWritePrice = pricingData.cache_write && pricingData.cache_write > 0 ? pricingData.cache_write : inputPrice;
 
   // Catalog prices are USD per 1M tokens (models.dev convention).
-  const inputCost = ((usage.prompt ?? 0) / 1_000_000) * inputPrice;
-  const outputCost = ((usage.completion ?? 0) / 1_000_000) * outputPrice;
-  const cachedCost = ((usage.cached ?? 0) / 1_000_000) * cachedPrice;
+  const inputCost = (inputTokens / 1_000_000) * inputPrice;
+  const outputCost = (completionTokens / 1_000_000) * outputPrice;
+  const cachedCost = (cachedTokens / 1_000_000) * cachedPrice + (cacheWriteTokens / 1_000_000) * cacheWritePrice;
 
   return {
     inputCost,
@@ -91,6 +105,38 @@ export async function computeCost(modelName: string, usage: CostTokenUsage): Pro
     cachedCost,
     total: inputCost + outputCost + cachedCost,
   };
+}
+
+/** Map the loop's canonical TokenUsage onto the billing shape. */
+function toCostUsage(usage: TokenUsage): CostTokenUsage {
+  return {
+    prompt: usage.prompt ?? 0,
+    completion: usage.completion ?? 0,
+    cached: usage.cacheReadTokens ?? 0,
+    cacheWrite: usage.cacheWriteTokens ?? 0,
+  };
+}
+
+/**
+ * Total cost for a run: sum each model call's cost so the over-200k tier is
+ * applied per request. Falls back to the aggregate usage when no per-call list
+ * exists (e.g. resumed legacy runs that predate usagePerCall).
+ */
+export async function computeTotalCost(
+  modelName: string,
+  perCallUsage: TokenUsage[] | undefined,
+  aggregateUsage: TokenUsage,
+): Promise<CostBreakdown> {
+  const calls = perCallUsage && perCallUsage.length > 0 ? perCallUsage : [aggregateUsage];
+  const total: CostBreakdown = { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
+  for (const usage of calls) {
+    const cost = await computeCost(modelName, toCostUsage(usage));
+    total.inputCost += cost.inputCost;
+    total.outputCost += cost.outputCost;
+    total.cachedCost += cost.cachedCost;
+    total.total += cost.total;
+  }
+  return total;
 }
 
 async function getTieredPricing(modelId: string): Promise<{ input: number; output: number; cache_read: number | null } | null> {
