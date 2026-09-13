@@ -27,6 +27,18 @@ const columns: Column<AuditEntry>[] = [
 
 const PAGE = 50;
 
+/** Keep the first occurrence of each row id so overlapping offset pages never render duplicates. */
+function dedupeById(rows: AuditEntry[]): AuditEntry[] {
+  const seen = new Set<number>();
+  const out: AuditEntry[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+  }
+  return out;
+}
+
 export function Audit() {
   const [actor, setActor] = useState<string>('');
   const [action, setAction] = useState<string>('');
@@ -42,13 +54,14 @@ export function Audit() {
       offset: pageParam,
     }),
     initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages, lastPageParam) => {
-      const loaded = allPages.reduce((n, p) => n + p.entries.length, 0);
-      return loaded < lastPage.total ? lastPageParam + PAGE : undefined;
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.entries.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flatMap((p) => p.entries)).length;
+      return loaded < lastPage.total ? loaded : undefined;
     },
     refetchInterval: 15_000,
   });
-  const entries = data?.pages.flatMap((p) => p.entries) ?? [];
+  const entries = dedupeById(data?.pages.flatMap((p) => p.entries) ?? []);
 
   return (
     <PageShell title="Audit Log" description="Admin-only — every sensitive action, who did it, and what changed">

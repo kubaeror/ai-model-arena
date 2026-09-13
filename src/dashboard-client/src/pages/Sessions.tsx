@@ -34,6 +34,18 @@ const columns: Column<SessionRow>[] = [
 
 const PAGE = 50;
 
+/** Keep the first occurrence of each row id so overlapping offset pages never render duplicates. */
+function dedupeById(rows: SessionRow[]): SessionRow[] {
+  const seen = new Set<string>();
+  const out: SessionRow[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+  }
+  return out;
+}
+
 export function Sessions() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<string>('');
@@ -44,13 +56,14 @@ export function Sessions() {
     queryKey: ['sessions', status],
     queryFn: ({ pageParam }) => listSessions({ limit: PAGE, offset: pageParam, ...(status ? { status } : {}) }),
     initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages, lastPageParam) => {
-      const loaded = allPages.reduce((n, p) => n + p.sessions.length, 0);
-      return loaded < lastPage.total ? lastPageParam + PAGE : undefined;
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.sessions.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flatMap((p) => p.sessions)).length;
+      return loaded < lastPage.total ? loaded : undefined;
     },
     refetchInterval: 15_000,
   });
-  const sessions = data?.pages.flatMap((p) => p.sessions) ?? [];
+  const sessions = dedupeById(data?.pages.flatMap((p) => p.sessions) ?? []);
 
   return (
     <PageShell title="Sessions" description="Checkpointed agent sessions — one per run + model">

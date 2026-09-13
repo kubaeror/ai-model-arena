@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import { Suspense } from 'react';
@@ -43,13 +43,32 @@ vi.mock('../../src/lib/api', async () => {
 
 function renderWithProviders(ui: React.ReactElement, initialEntries?: string[]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={initialEntries}>
         <Suspense fallback={<div>Loading...</div>}>{ui}</Suspense>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { qc, ...result };
+}
+
+function listRow(id: string) {
+  return {
+    id,
+    prompt_id: null,
+    prompt_version: null,
+    model: 'gpt-4o',
+    status: 'active',
+    created_at: '2026-08-04T00:00:00.000Z',
+    updated_at: '2026-08-04T00:00:00.000Z',
+    message_count: 1,
+    call_count: 1,
+  };
+}
+
+function sessionsPage(from: number, count: number) {
+  return Array.from({ length: count }, (_, i) => listRow(`s${from + i}`));
 }
 
 describe('Sessions', () => {
@@ -62,35 +81,59 @@ describe('Sessions', () => {
   });
 
   it('appends the next page instead of replacing rows when Load more is clicked', async () => {
-    const row = (id: string) => ({
-      id,
-      prompt_id: null,
-      prompt_version: null,
-      model: 'gpt-4o',
-      status: 'active',
-      created_at: '2026-08-04T00:00:00.000Z',
-      updated_at: '2026-08-04T00:00:00.000Z',
-      message_count: 1,
-      call_count: 1,
-    });
     vi.mocked(listSessions).mockReset();
     vi.mocked(listSessions)
-      .mockResolvedValueOnce({ sessions: [row('sess-A')], total: 2 })
-      .mockResolvedValueOnce({ sessions: [row('sess-B')], total: 2 });
+      .mockResolvedValueOnce({ sessions: [listRow('sess-A')], total: 2 })
+      .mockResolvedValueOnce({ sessions: [listRow('sess-B')], total: 2 });
 
     renderWithProviders(<Sessions />);
     expect(await screen.findByText(/sess-A/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /load more/i }));
 
+    // Offset follows the loaded (deduped) row count, not the page index.
     await waitFor(() => {
-      expect(listSessions).toHaveBeenCalledWith({ limit: 50, offset: 50 });
+      expect(listSessions).toHaveBeenCalledWith({ limit: 50, offset: 1 });
     });
     expect(await screen.findByText(/sess-B/)).toBeInTheDocument();
     expect(screen.getByText(/sess-A/)).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
     });
+  });
+
+  it('dedupes rows and skips nothing when a refetch sees rows inserted at the top', async () => {
+    vi.mocked(listSessions).mockReset();
+    vi.mocked(listSessions)
+      // initial load tiles s1..s100 in two full pages
+      .mockResolvedValueOnce({ sessions: sessionsPage(1, 50), total: 101 })
+      .mockResolvedValueOnce({ sessions: sessionsPage(51, 50), total: 101 })
+      // refetch: n1 was inserted at the top before page 0 loaded
+      .mockResolvedValueOnce({ sessions: [listRow('n1'), ...sessionsPage(1, 49)], total: 102 })
+      // another insert between refetches shifts page 1 onto s49..s98 (overlaps page 0)
+      .mockResolvedValueOnce({ sessions: sessionsPage(49, 50), total: 103 })
+      // next page requested from the deduped loaded count (99), not page index * size (100)
+      .mockResolvedValueOnce({ sessions: sessionsPage(98, 4), total: 103 });
+
+    const { qc } = renderWithProviders(<Sessions />);
+    expect(await screen.findByText('s1…')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+    await waitFor(() => expect(listSessions).toHaveBeenCalledWith({ limit: 50, offset: 50 }));
+    expect(await screen.findByText('s100…')).toBeInTheDocument();
+
+    await act(async () => {
+      await qc.refetchQueries({ queryKey: ['sessions'] });
+    });
+    expect(await screen.findByText('n1…')).toBeInTheDocument();
+
+    // No row id renders twice and the shifted window does not drop s49/s50.
+    const renderedIds = screen.getAllByRole('row').slice(1).map((tr) => tr.querySelector('td')?.textContent);
+    const expectedIds = ['n1', ...Array.from({ length: 98 }, (_, i) => `s${i + 1}`)].map((id) => `${id}…`);
+    expect(renderedIds).toEqual(expectedIds);
+
+    fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+    await waitFor(() => expect(listSessions).toHaveBeenNthCalledWith(5, { limit: 50, offset: 99 }));
   });
 });
 
@@ -260,7 +303,7 @@ describe('Files', () => {
     fireEvent.click(screen.getByRole('button', { name: /load more/i }));
 
     await waitFor(() => {
-      expect(listFiles).toHaveBeenCalledWith({ limit: 50, offset: 50 });
+      expect(listFiles).toHaveBeenCalledWith({ limit: 50, offset: 1 });
     });
     expect(await screen.findByText('src/second.ts')).toBeInTheDocument();
     expect(screen.getByText('src/first.ts')).toBeInTheDocument();
@@ -298,7 +341,7 @@ describe('Audit', () => {
     fireEvent.click(screen.getByRole('button', { name: /load more/i }));
 
     await waitFor(() => {
-      expect(listAudit).toHaveBeenCalledWith({ actor: undefined, action: undefined, limit: 50, offset: 50 });
+      expect(listAudit).toHaveBeenCalledWith({ actor: undefined, action: undefined, limit: 50, offset: 1 });
     });
     expect(await screen.findByText('bob')).toBeInTheDocument();
     expect(screen.getByText('alice')).toBeInTheDocument();

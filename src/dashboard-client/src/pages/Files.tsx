@@ -29,6 +29,18 @@ const columns: Column<FileRow>[] = [
 
 const PAGE = 50;
 
+/** Keep the first occurrence of each row id so overlapping offset pages never render duplicates. */
+function dedupeById(rows: FileRow[]): FileRow[] {
+  const seen = new Set<number>();
+  const out: FileRow[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+  }
+  return out;
+}
+
 export function Files() {
   const navigate = useNavigate();
   const [model, setModel] = useState<string>('');
@@ -39,13 +51,14 @@ export function Files() {
     queryKey: ['files', model],
     queryFn: ({ pageParam }) => listFiles({ limit: PAGE, offset: pageParam, ...(model ? { model } : {}) }),
     initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages, lastPageParam) => {
-      const loaded = allPages.reduce((n, p) => n + p.files.length, 0);
-      return loaded < lastPage.total ? lastPageParam + PAGE : undefined;
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.files.length === 0) return undefined;
+      const loaded = dedupeById(allPages.flatMap((p) => p.files)).length;
+      return loaded < lastPage.total ? loaded : undefined;
     },
     refetchInterval: 15_000,
   });
-  const files = data?.pages.flatMap((p) => p.files) ?? [];
+  const files = dedupeById(data?.pages.flatMap((p) => p.files) ?? []);
 
   return (
     <PageShell title="Files" description="Artifacts produced by runs — from the artifact manifests">
