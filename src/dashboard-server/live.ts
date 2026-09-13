@@ -8,6 +8,9 @@ import {
   finalizeRunByRunId,
   shouldAttemptFinalize,
   prepareRunFinalization,
+  isStaleRunningRun,
+  failNonTerminalModels,
+  isRunCancelled,
   type RunIndexRecord,
 } from '../orchestrator/orchestrator.js';
 import { type AuthConfig } from './auth.js';
@@ -81,17 +84,38 @@ export async function readLogAppend(
 }
 
 /**
+ * Dead-runner reconciliation for a run still 'running' past RUN_STALE_AFTER_MS
+ * whose cancel signal is absent: the runner died without writing a terminal
+ * model row (e.g. its task dead-lettered), so the normal finalize gate would
+ * never admit it. Non-terminal rows are failed (runner died) and the run then
+ * finalizes through the normal gate. Fresh runs and runs with a live cancel
+ * signal are untouched. Returns true when the run was stale and reconciled.
+ */
+export async function reconcileStaleRunningRun(
+  run: Pick<RunIndexRecord, 'runId' | 'status' | 'startedAt'>,
+  logger: Logger,
+  now = Date.now(),
+): Promise<boolean> {
+  if (!isStaleRunningRun(run, now)) return false;
+  if (await isRunCancelled(run.runId)) return false;
+  await failNonTerminalModels(run.runId, logger);
+  return true;
+}
+
+/**
  * One watcher tick for a single run, gated by prepareRunFinalization: a stopped
  * run may finalize only when every per-model row is terminal (rows are the
  * per-model acks, so one runner clearing the cancel signal early must not
  * release the run) and the signal is absent or the grace window elapsed. Past
- * the grace window stale rows are force-stopped for dead-runner recovery.
- * Returns true only when this tick won the finalization claim.
+ * the grace window stale rows are force-stopped for dead-runner recovery, and
+ * a stale 'running' run has its dead runner's rows failed first. Returns true
+ * only when this tick won the finalization claim.
  */
 export async function attemptFinalizeCandidate(
-  run: Pick<RunIndexRecord, 'runId' | 'status' | 'finishedAt'>,
+  run: Pick<RunIndexRecord, 'runId' | 'status' | 'finishedAt' | 'startedAt'>,
   logger: Logger,
 ): Promise<boolean> {
+  await reconcileStaleRunningRun(run, logger);
   if (!(await prepareRunFinalization(run.runId))) return false;
   return finalizeRunByRunId(run.runId, logger);
 }

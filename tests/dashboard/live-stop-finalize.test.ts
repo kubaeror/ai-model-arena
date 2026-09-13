@@ -6,7 +6,7 @@ import path from 'node:path';
 import { initDb, closeDb, getDb } from '../../src/db/client.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
 import { transitionTaskState } from '../../src/db/query.js';
-import { attemptFinalizeCandidate } from '../../src/dashboard-server/live.js';
+import { attemptFinalizeCandidate, reconcileStaleRunningRun } from '../../src/dashboard-server/live.js';
 import { createLogger } from '../../src/logger/pino-logger.js';
 import { markRunCancelled, clearRunCancelled } from '../../src/orchestrator/run-signals.js';
 import { stopRun, prepareRunFinalization } from '../../src/orchestrator/run-lifecycle.js';
@@ -39,6 +39,7 @@ interface SeedOpts {
   runStatus?: 'running' | 'stopped';
   modelStatus?: string;
   finishedAt?: string | null;
+  startedAt?: string;
 }
 
 function modelEntry(runId: string, model: string, status: string): Record<string, unknown> {
@@ -59,7 +60,7 @@ async function seedModels(
 ): Promise<void> {
   await upsertRun({
     runId, scenario: 'basic', models: models.map((m) => m.model),
-    startedAt: new Date().toISOString(),
+    startedAt: opts.startedAt ?? new Date().toISOString(),
     finishedAt: opts.finishedAt !== undefined ? opts.finishedAt : new Date().toISOString(),
     status: opts.runStatus ?? 'stopped', source: 'dashboard',
     perModel: models.map((m) => modelEntry(runId, m.model, m.status) as never),
@@ -239,4 +240,124 @@ test('watcher force-stops a stale non-terminal row and finalizes a dead-runner s
   assert.equal(ledgerRows(runId).length, 1, 'exactly one ledger row');
   assert.equal(await attemptFinalizeCandidate((await getRunRecord(runId))!, logger), false);
   assert.equal(ledgerRows(runId).length, 1, 'no duplicate ledger row');
+});
+
+test('watcher reaps a stale running run whose runner died and finalizes exactly once', async () => {
+  const runId = 'stale-running-reap';
+  await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
+    runStatus: 'running',
+    finishedAt: null,
+    startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+  });
+  writeResultFile(runId, 0.06);
+
+  const stale = (await getRunRecord(runId))!;
+  assert.equal(
+    await reconcileStaleRunningRun(stale, logger),
+    true,
+    'a stale running run with no cancel signal is reconciled',
+  );
+  assert.equal(
+    (await getRunRecord(runId))?.perModel[0]?.status,
+    'failed',
+    'the dead runner model row must be marked failed, not stopped',
+  );
+  assert.equal((await getRunRecord(runId))?.status, 'running', 'reconciliation itself does not finalize');
+
+  assert.equal(
+    await attemptFinalizeCandidate((await getRunRecord(runId))!, logger),
+    true,
+    'the normal gated finalization proceeds after the rows are terminal',
+  );
+  assert.equal((await getRunRecord(runId))?.status, 'completed');
+  assert.equal(ledgerRows(runId).length, 1, 'exactly one ledger row');
+
+  assert.equal(
+    await attemptFinalizeCandidate((await getRunRecord(runId))!, logger),
+    false,
+    'a second tick loses the finalization claim',
+  );
+  assert.equal(ledgerRows(runId).length, 1, 'no duplicate ledger row');
+});
+
+test('watcher reaps a stale running run through attemptFinalizeCandidate alone', async () => {
+  const runId = 'stale-running-watcher-path';
+  await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
+    runStatus: 'running',
+    finishedAt: null,
+    startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+  });
+  writeResultFile(runId, 0.02);
+
+  assert.equal(
+    await attemptFinalizeCandidate((await getRunRecord(runId))!, logger),
+    true,
+    'the watcher tick itself must reap the stale run and finalize it',
+  );
+  assert.equal((await getRunRecord(runId))?.status, 'completed');
+  assert.equal(ledgerRows(runId).length, 1, 'exactly one ledger row');
+  assert.equal(
+    await attemptFinalizeCandidate((await getRunRecord(runId))!, logger),
+    false,
+    'a second tick loses the finalization claim',
+  );
+  assert.equal(ledgerRows(runId).length, 1, 'no duplicate ledger row');
+});
+
+test('a fresh running run is not reaped', async () => {
+  const runId = 'fresh-running';
+  await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
+    runStatus: 'running',
+    finishedAt: null,
+    startedAt: new Date().toISOString(),
+  });
+
+  assert.equal(
+    await attemptFinalizeCandidate((await getRunRecord(runId))!, logger),
+    false,
+    'a fresh running run with a non-terminal row is not finalizable',
+  );
+  assert.equal((await getRunRecord(runId))?.perModel[0]?.status, 'running', 'the fresh row is untouched');
+  assert.equal((await getRunRecord(runId))?.status, 'running', 'the fresh run stays running');
+  assert.equal(ledgerRows(runId).length, 0, 'no ledger row for a fresh run');
+});
+
+test('a stale running run with a live cancel signal is not reaped', async () => {
+  const runId = 'stale-running-cancelled';
+  await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
+    runStatus: 'running',
+    finishedAt: null,
+    startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+  });
+  await markRunCancelled(runId);
+
+  assert.equal(
+    await attemptFinalizeCandidate((await getRunRecord(runId))!, logger),
+    false,
+    'a live cancel signal keeps the run owned by its runner',
+  );
+  assert.equal((await getRunRecord(runId))?.perModel[0]?.status, 'running', 'the row is untouched');
+  assert.equal((await getRunRecord(runId))?.status, 'running', 'the run stays running');
+});
+
+test('RUN_STALE_AFTER_MS raises the reap threshold', async () => {
+  const runId = 'stale-threshold-override';
+  await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
+    runStatus: 'running',
+    finishedAt: null,
+    startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+  });
+  const prior = process.env.RUN_STALE_AFTER_MS;
+  process.env.RUN_STALE_AFTER_MS = String(8 * 60 * 60_000);
+  try {
+    assert.equal(
+      await reconcileStaleRunningRun((await getRunRecord(runId))!, logger),
+      false,
+      'a 7h run is fresh under an 8h threshold',
+    );
+    assert.equal((await getRunRecord(runId))?.perModel[0]?.status, 'running', 'the row is untouched');
+  } finally {
+    if (prior === undefined) delete process.env.RUN_STALE_AFTER_MS;
+    else process.env.RUN_STALE_AFTER_MS = prior;
+  }
 });

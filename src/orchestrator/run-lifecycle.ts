@@ -439,6 +439,52 @@ export async function forceStopNonTerminalModels(runId: string): Promise<void> {
 }
 
 /**
+ * How long a 'running' run is trusted before the dashboard watcher treats it
+ * as a dead runner. An exhausted-retry task can be dead-lettered while its
+ * run_models row stays non-terminal, leaving the run 'running' forever (the
+ * finalize gate only recovers stale rows for 'stopped' runs). Override with
+ * RUN_STALE_AFTER_MS (milliseconds).
+ */
+export const RUN_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+
+export function runStaleAfterMs(): number {
+  const raw = process.env.RUN_STALE_AFTER_MS;
+  if (raw !== undefined && raw !== '') {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return RUN_STALE_AFTER_MS;
+}
+
+/**
+ * True when a run is still 'running' long after it started: its runner died
+ * before writing a terminal model row. Runs in any other state, and runs with
+ * an unparsable start timestamp (no evidence of age), are never stale.
+ */
+export function isStaleRunningRun(run: { status: string; startedAt: string }, now = Date.now()): boolean {
+  if (run.status !== 'running') return false;
+  const started = Date.parse(run.startedAt);
+  return Number.isFinite(started) && now - started >= runStaleAfterMs();
+}
+
+/**
+ * Dead-runner recovery for a stale 'running' run: the runner is presumed dead
+ * past RUN_STALE_AFTER_MS, so force every non-terminal model row to 'failed'
+ * (the runner died) and log each. Once every row is terminal the normal
+ * finalize gate admits the run.
+ */
+export async function failNonTerminalModels(runId: string, logger: Logger): Promise<void> {
+  const db = getDrizzleDb();
+  const failed = await db.update(run_models)
+    .set({ status: 'failed' })
+    .where(and(eq(run_models.run_id, runId), notInArray(run_models.status, [...TERMINAL_STATUSES])))
+    .returning({ model: run_models.model });
+  for (const row of failed) {
+    logger.warn('Stale run: runner presumed dead, marking model row failed', { runId, model: row.model });
+  }
+}
+
+/**
  * Shared finalize gate for the watcher, CLI waiter, and runner self-finalize.
  * A stopped run may only finalize when every per-model row is terminal and the
  * cancel signal is absent (or the grace window elapsed): rows are the per-model
