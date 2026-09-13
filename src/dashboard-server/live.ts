@@ -68,13 +68,13 @@ export async function readLogAppend(
   filePath: string,
   offset: number,
 ): Promise<{ offset: number; lines: string[] }> {
-  const stat = await fsp.stat(filePath);
-  const clamped = offset < 0 ? 0 : offset;
-  const start = clamped > stat.size ? 0 : clamped;
-  if (stat.size <= start) return { offset: start, lines: [] };
-  const length = stat.size - start;
   const fd = await fsp.open(filePath, 'r');
   try {
+    const stat = await fd.stat();
+    const clamped = offset < 0 ? 0 : offset;
+    const start = clamped > stat.size ? 0 : clamped;
+    if (stat.size <= start) return { offset: start, lines: [] };
+    const length = stat.size - start;
     const buffer = Buffer.alloc(length);
     const { bytesRead } = await fd.read(buffer, 0, length, start);
     const lines = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/).filter(Boolean);
@@ -280,13 +280,16 @@ export class LiveHub {
     for (const m of rec.perModel) {
       const key = `${runId}:${m.model}`;
       try {
-        const stat = await fsp.stat(m.conversationPath).catch(() => null);
-        if (stat) {
-          const conv = JSON.parse(await fsp.readFile(m.conversationPath, 'utf8'));
+        const fd = await fsp.open(m.conversationPath, 'r');
+        try {
+          const stat = await fd.stat();
+          const conv = JSON.parse(await fd.readFile('utf8'));
           const count = conv.entries?.length ?? 0;
           this.convSeen.set(key, count);
           this.convMtime.set(key, stat.mtimeMs);
           this.send(ws, { type: 'conversation_snapshot', runId, model: m.model, conversation: conv });
+        } finally {
+          await fd.close();
         }
       } catch { /* ignore */ }
     }
@@ -299,18 +302,23 @@ export class LiveHub {
       for (const m of rec.perModel) {
         const key = `${runId}:${m.model}`;
         try {
-          const stat = await fsp.stat(m.conversationPath);
-          if (this.convMtime.get(key) !== stat.mtimeMs) {
-            this.convMtime.set(key, stat.mtimeMs);
-            const conv = JSON.parse(await fsp.readFile(m.conversationPath, 'utf8')) as { entries?: unknown[] };
-            const entries = conv.entries ?? [];
-            const seen = this.convSeen.get(key) ?? 0;
-            if (entries.length > seen) {
-              this.convSeen.set(key, entries.length);
-              for (const entry of entries.slice(seen)) {
-                this.broadcastToSubscribers(runId, { type: 'conversation_update', runId, model: m.model, entry });
+          const fd = await fsp.open(m.conversationPath, 'r');
+          try {
+            const stat = await fd.stat();
+            if (this.convMtime.get(key) !== stat.mtimeMs) {
+              this.convMtime.set(key, stat.mtimeMs);
+              const conv = JSON.parse(await fd.readFile('utf8')) as { entries?: unknown[] };
+              const entries = conv.entries ?? [];
+              const seen = this.convSeen.get(key) ?? 0;
+              if (entries.length > seen) {
+                this.convSeen.set(key, entries.length);
+                for (const entry of entries.slice(seen)) {
+                  this.broadcastToSubscribers(runId, { type: 'conversation_update', runId, model: m.model, entry });
+                }
               }
             }
+          } finally {
+            await fd.close();
           }
         } catch {
           // Conversation may not exist yet — fall through to the log tail.

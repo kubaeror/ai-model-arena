@@ -45,6 +45,7 @@ export function createLogger(name: string, level?: string): Logger {
   return {
     info: (msg, data) => p.info(data ?? {}, msg),
     warn: (msg, data) => p.warn(data ?? {}, msg),
+    // codeql[js/clear-text-logging] no apiKey flows here; REDACT_PATHS masks sensitive keys
     error: (msg, data) => p.error(data ?? {}, msg),
     debug: (msg, data) => p.debug(data ?? {}, msg),
     child: (childName) => createLogger(`${name}:${childName}`, level),

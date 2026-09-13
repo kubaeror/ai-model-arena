@@ -46,7 +46,7 @@ const CONTROL_MARKERS = [
 export function escapeControlMarkers(content: string): string {
   let escaped = content;
   for (const re of CONTROL_MARKERS) {
-    escaped = escaped.replace(re, (match) => match.replace('<', '<\\'));
+    escaped = escaped.replace(re, (match) => match.replaceAll('<', '<\\'));
   }
   return escaped;
 }

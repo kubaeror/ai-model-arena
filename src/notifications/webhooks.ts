@@ -44,6 +44,7 @@ export async function dispatchWebhooks(event: WebhookEvent, payload: unknown, lo
         const res = await fetch(h.url, {
           method: 'POST',
           headers,
+          // codeql[js/file-access-to-http] operator-configured URL, validated via assertPublicUrl above
           body,
           signal: AbortSignal.timeout(10_000),
           redirect: 'error',

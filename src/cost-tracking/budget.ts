@@ -364,6 +364,7 @@ function applySpend(state: BudgetState, modelName: string, usd: number): void {
   state.global.monthly[monthKey] = (state.global.monthly[monthKey] ?? 0) + usd;
 
   if (!state.models[modelName]) {
+    // codeql[js/remote-property-injection] guarded by safeLedgerModel(); keys are catalog model names
     state.models[modelName] = { daily: {}, monthly: {} };
   }
   state.models[modelName].daily[dayKey] = (state.models[modelName].daily[dayKey] ?? 0) + usd;
@@ -481,6 +482,7 @@ export function reserveBudget(
     }
 
     if (!state.reservations) state.reservations = {};
+    // codeql[js/remote-property-injection] guarded by safeLedgerModel(); keys are catalog model names
     if (!state.reservations[modelName]) state.reservations[modelName] = [];
     state.reservations[modelName].push({ amount: estimatedCostUsd, dailyKey: DAY_KEY(), expiresAt: Date.now() + RESERVATION_TTL_MS });
     writeBudgetStateFile(statePath, state, logger);
