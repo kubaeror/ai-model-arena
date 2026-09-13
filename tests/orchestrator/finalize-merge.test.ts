@@ -23,6 +23,7 @@ import {
   type PerModelSpec,
 } from '../../src/orchestrator/run-lifecycle.js';
 import { claimRunFinalization, buildPerModelEntries } from '../../src/orchestrator/finalize/aggregate.js';
+import { attemptFinalizeCandidate } from '../../src/dashboard-server/live.js';
 import { getRunRecord, updateRun, upsertRun } from '../../src/orchestrator/run-index.js';
 import { writeJudgeResult } from '../../src/evaluation/judge.js';
 
@@ -303,6 +304,43 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.strictEqual(ledger.length, 1, 'exactly one cost_ledger row for the stopped run');
 
     assert.strictEqual(await finalizeRunByRunId(runId, logger), false, 'second finalize loses the claim');
+  });
+
+  it('a reaped run with no result.json finalizes errored and notifies failure, not success', async () => {
+    const runId = 'run_reaped_no_result';
+    const alpha = makePerModel(runId, 'alpha', root, 't-reap');
+    fs.mkdirSync(alpha.outputDir, { recursive: true });
+    // No result.json: the runner died before writing one.
+    await upsertRun({
+      runId, scenario: 'basic', models: ['alpha'],
+      startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+      finishedAt: null, status: 'running', source: 'dashboard',
+      perModel: [{
+        model: 'alpha', runId, outputDir: alpha.outputDir, sandboxDir: alpha.sandboxDir,
+        resultPath: alpha.resultPath, conversationPath: alpha.conversationPath,
+        reportPath: alpha.reportPath, logFile: alpha.logFile, status: 'running',
+      } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    assert.strictEqual(
+      await attemptFinalizeCandidate((await getRunRecord(runId))!, logger),
+      true,
+      'the watcher tick reaps and finalizes the dead-runner run',
+    );
+
+    const rec = await getRunRecord(runId);
+    assert.notStrictEqual(rec?.perModel[0]?.status, 'completed', 'a model with no result.json must not be completed');
+    assert.strictEqual(rec?.status, 'errored', 'a reaped run without results must not finalize as completed');
+
+    await waitForRunNotifications(runId, 1);
+    const db = getDrizzleDb();
+    const rows = await db.select().from(notifications).all();
+    const statuses = rows
+      .filter((r: Record<string, unknown>) => String(r.payload_json ?? '').includes(runId))
+      .map((r: Record<string, unknown>) => (JSON.parse(String(r.payload_json)) as { status?: string }).status);
+    assert.ok(statuses.length > 0, 'the run dispatches a completion notification');
+    assert.ok(statuses.every((s: string | undefined) => s === 'failed'), `no success notification for a reaped run (got ${statuses.join(',')})`);
   });
 
   it('a throw after the claim leaves the run finalizing; a stale retry completes exactly once', async () => {

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { and, eq, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Logger } from '../../types.js';
 import { writeComparison, type ComparisonEntry } from '../../logger/comparison-logger.js';
 import { updateRun, type RunIndexRecord, type RunIndexModelEntry } from '../run-index.js';
@@ -48,8 +48,17 @@ export function aggregate(_root: string, input: AggregateInput): {
 export const FINALIZE_STALE_MS = 2 * 60 * 1000;
 
 /**
+ * Statuses a finalization claim may start from: an initial 'running' run, a
+ * user-stopped run awaiting aggregation, or a stale 'finalizing' claim being
+ * reclaimed. Every other terminal status ('completed', 'errored', 'failed',
+ * 'dead') is already settled and must never be re-finalized — a re-claim would
+ * rewrite a failed outcome to 'completed' and duplicate side effects.
+ */
+const FINALIZABLE_STATUSES = ['running', 'stopped', 'finalizing'] as const;
+
+/**
  * Atomically claim finalization of `runId`: one conditional UPDATE flips a
- * non-completed run to 'finalizing' and stamps `finished_at`. Exactly one
+ * finalizable run to 'finalizing' and stamps `finished_at`. Exactly one
  * concurrent finalizer (runner self-finalize vs dashboard watcher vs CLI)
  * observes a returned row; losers must skip aggregation, ledger writes, and
  * notifications.
@@ -63,9 +72,9 @@ export const FINALIZE_STALE_MS = 2 * 60 * 1000;
  * Returns the finalization attempt number the caller must attribute its ledger
  * writes to, or null when the claim was lost. A stale reclaim of an already
  * finalizing run continues the crashed finalizer's attempt, so a retry writes
- * the same ledger key and cannot duplicate rows; a claim from any other status
- * opens a new attempt (restartRun resets the run to 'running'), which
- * legitimately records its own ledger row.
+ * the same ledger key and cannot duplicate rows; a claim from any other
+ * finalizable status opens a new attempt (restartRun resets the run to
+ * 'running'), which legitimately records its own ledger row.
  */
 export async function claimRunFinalization(runId: string, staleMs = FINALIZE_STALE_MS): Promise<number | null> {
   const db = getDrizzleDb();
@@ -79,7 +88,7 @@ export async function claimRunFinalization(runId: string, staleMs = FINALIZE_STA
     })
     .where(and(
       eq(runs.run_id, runId),
-      ne(runs.status, 'completed'),
+      inArray(runs.status, [...FINALIZABLE_STATUSES]),
       or(
         ne(runs.status, 'finalizing'),
         isNull(runs.finished_at),
@@ -94,12 +103,17 @@ export async function claimRunFinalization(runId: string, staleMs = FINALIZE_STA
  * Flip a claimed run finalizing -> completed after every finalization side
  * effect landed. Conditional on the run still being 'finalizing': a restart
  * that reset the run mid-finalize is not clobbered, and `finished_at` keeps the
- * claim-time value.
+ * claim-time value. A reaped run with no successful model settles as 'errored'
+ * instead: its lifecycle is over but reporting 'completed' would read as
+ * success for a run whose runner died.
  */
-export async function completeRunFinalization(runId: string): Promise<boolean> {
+export async function completeRunFinalization(
+  runId: string,
+  status: 'completed' | 'errored' = 'completed',
+): Promise<boolean> {
   const db = getDrizzleDb();
   const completed = await db.update(runs)
-    .set({ status: 'completed' })
+    .set({ status })
     .where(and(eq(runs.run_id, runId), eq(runs.status, 'finalizing')))
     .returning({ run_id: runs.run_id });
   return completed.length > 0;

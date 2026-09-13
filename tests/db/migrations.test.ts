@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { initDb, closeDb } from '../../src/db/client.js';
 import { tables } from '../../src/db/schema-defs.js';
 
@@ -114,6 +117,57 @@ const HOT_QUERY_INDEXES: { name: string; columns: string[] }[] = [
   { name: 'idx_runs_status', columns: ['status'] },
   { name: 'idx_run_models_status', columns: ['status'] },
 ];
+
+test('0020 dedupes legacy cost_ledger duplicates before creating the unique index', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-db-dedupe-'));
+  const dbPath = path.join(tmp, 'test.db');
+  // A pre-0020 migration folder: dropping only the journal entry keeps every
+  // earlier migration byte-identical to the real folder.
+  const partialDir = path.join(tmp, 'drizzle-partial');
+  fs.cpSync(path.join(ROOT, 'drizzle'), partialDir, { recursive: true });
+  const journalPath = path.join(partialDir, 'meta', '_journal.json');
+  const journal = JSON.parse(fs.readFileSync(journalPath, 'utf-8')) as { entries: { tag: string }[] };
+  journal.entries = journal.entries.filter((e) => e.tag !== '0020_cute_shriek');
+  fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2));
+
+  const sqlite = new Database(dbPath);
+  try {
+    const db = drizzle(sqlite);
+    migrate(db, { migrationsFolder: partialDir });
+
+    // Legacy crash-retry window: two rows for the same (run_id, model) with no
+    // finalization_attempt column yet.
+    sqlite.prepare(
+      "INSERT INTO runs (run_id, scenario, models, started_at, status, source) VALUES ('r1', 's', '[\"a\"]', '2026-01-01T00:00:00.000Z', 'completed', 'cli')"
+    ).run();
+    const insert = sqlite.prepare(
+      "INSERT INTO cost_ledger (run_id, model, cost_usd, currency, recorded_at) VALUES ('r1', 'a', ?, 'USD', ?)"
+    );
+    insert.run(0.01, '2026-01-01T00:00:00.000Z');
+    insert.run(0.02, '2026-01-02T00:00:00.000Z');
+
+    migrate(db, { migrationsFolder: path.join(ROOT, 'drizzle') });
+
+    const rows = sqlite.prepare('SELECT id, cost_usd FROM cost_ledger WHERE run_id = ? ORDER BY id').all('r1') as
+      { id: number; cost_usd: number }[];
+    assert.equal(rows.length, 1, 'only the lowest-id duplicate survives the migration');
+    assert.ok(Math.abs(rows[0]!.cost_usd - 0.01) < 1e-9, 'the lowest id (first crash-retry write) is retained');
+
+    const index = sqlite.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name = 'uq_cost_ledger_run_model_attempt'"
+    ).get();
+    assert.ok(index, 'unique index exists after the dedupe');
+
+    assert.throws(
+      () => insert.run(0.03, '2026-01-03T00:00:00.000Z'),
+      /UNIQUE constraint failed/,
+      'the unique index now rejects a same-attempt duplicate',
+    );
+  } finally {
+    sqlite.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 test('migrated DB has the hot-query indexes', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-db-'));

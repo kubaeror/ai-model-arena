@@ -304,6 +304,30 @@ test('watcher reaps a stale running run through attemptFinalizeCandidate alone',
   assert.equal(ledgerRows(runId).length, 1, 'no duplicate ledger row');
 });
 
+test('a reaped run with no result.json finalizes as errored, never as success', async () => {
+  const runId = 'stale-running-no-result';
+  await seedModels(runId, [{ model: 'alpha', status: 'running' }], {
+    runStatus: 'running',
+    finishedAt: null,
+    startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+  });
+
+  assert.equal(
+    await attemptFinalizeCandidate((await getRunRecord(runId))!, logger),
+    true,
+    'the watcher reaps and finalizes the dead-runner run',
+  );
+
+  const rec = await getRunRecord(runId);
+  assert.notEqual(rec?.perModel[0]?.status, 'completed', 'a model with no result.json must not be marked completed');
+  assert.equal(rec?.status, 'errored', 'a dead runner run with no model result must not finalize as completed');
+  assert.equal(
+    await attemptFinalizeCandidate(rec!, logger),
+    false,
+    'an errored run must not be finalized a second time',
+  );
+});
+
 test('a fresh running run is not reaped', async () => {
   const runId = 'fresh-running';
   await seedModels(runId, [{ model: 'alpha', status: 'running' }], {

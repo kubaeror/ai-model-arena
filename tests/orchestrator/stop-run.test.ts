@@ -8,7 +8,7 @@ import { transitionTaskState, createSession } from '../../src/db/query.js';
 import { InMemoryQueue } from '../../src/queue/in-memory.js';
 import type { Task } from '../../src/queue/types.js';
 import { upsertRun, getRunRecord } from '../../src/db/runs.js';
-import { stopRun, restartRun, registerRun, isRunCancelled, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
+import { stopRun, restartRun, registerRun, isRunCancelled, isStaleRunningRun, type RunSpec } from '../../src/orchestrator/run-lifecycle.js';
 
 const ORIG_ENV = { ...process.env };
 
@@ -132,6 +132,40 @@ test('restartRun resets a finalizing run to running', async () => {
     assert.equal(rec?.status, 'running', 'restart must clear the finalizing claim');
     assert.equal(rec?.finishedAt, null, 'restart must clear finishedAt');
     assert.equal(rec?.perModel[0]?.status, 'running', 'restart must reset model rows');
+  } finally {
+    closeDb();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...ORIG_ENV };
+  }
+});
+
+test('restartRun refreshes started_at so an old run is not immediately reap-eligible', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-restart-stale-'));
+  process.env.ARENA_DB_PATH = path.join(tmp, 'test.db');
+  process.env.OUTPUT_ROOT = path.join(tmp, 'outputs');
+  process.env.DB_DRIVER = 'sqlite';
+  initDb(process.env.ARENA_DB_PATH);
+
+  try {
+    await upsertRun({
+      runId: 'restart-stale', scenario: 'smoke', models: ['gpt-4o'],
+      startedAt: new Date(Date.now() - 7 * 60 * 60_000).toISOString(),
+      finishedAt: null, status: 'running', source: 'dashboard',
+      perModel: [{ model: 'gpt-4o', runId: 'restart-stale', status: 'running' } as never],
+      comparisonMdPath: null, comparisonJsonPath: null,
+    });
+
+    const before = (await getRunRecord('restart-stale'))!;
+    assert.equal(isStaleRunningRun(before), true, 'a 7h-old running run is stale before restart');
+
+    await restartRun('restart-stale');
+
+    const rec = (await getRunRecord('restart-stale'))!;
+    assert.ok(
+      Date.now() - Date.parse(rec.startedAt) < 60_000,
+      'restart must stamp a fresh started_at, not the original start',
+    );
+    assert.equal(isStaleRunningRun(rec), false, 'a freshly restarted run must not be immediately reap-eligible');
   } finally {
     closeDb();
     fs.rmSync(tmp, { recursive: true, force: true });

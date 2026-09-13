@@ -115,9 +115,9 @@ export async function attemptFinalizeCandidate(
   run: Pick<RunIndexRecord, 'runId' | 'status' | 'finishedAt' | 'startedAt'>,
   logger: Logger,
 ): Promise<boolean> {
-  await reconcileStaleRunningRun(run, logger);
+  const reaped = await reconcileStaleRunningRun(run, logger);
   if (!(await prepareRunFinalization(run.runId))) return false;
-  return finalizeRunByRunId(run.runId, logger);
+  return finalizeRunByRunId(run.runId, logger, undefined, reaped);
 }
 
 /**

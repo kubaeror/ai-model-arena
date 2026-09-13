@@ -517,7 +517,7 @@ export async function prepareRunFinalization(runId: string): Promise<boolean> {
  * number it returned keys the ledger writes so a stale-retry of the same
  * attempt cannot duplicate rows.
  */
-async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, finalizationAttempt: number, judgeAdapter?: ModelAdapter): Promise<{ mdPath: string; jsonPath: string; completed: boolean }> {
+async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: string, jsonPath: string, logger: Logger, finalizationAttempt: number, judgeAdapter?: ModelAdapter, reaped = false): Promise<{ mdPath: string; jsonPath: string; completed: boolean }> {
   const rec = await getRunRecord(runId);
   if (!rec) throw new Error(`Run not found: ${runId}`);
   const root = projectRoot();
@@ -527,6 +527,11 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: s
   const perModel = await buildPerModelEntries(runId, rec, entries, logger, finalizationAttempt);
   await patchIndexAfterFinalize(runId, mdPath, jsonPath, perModel);
   const allSuccess = perModel.every((m) => m.status === 'completed' && m.success !== false);
+  // A reaped dead-runner run whose models all lack a result has no evidence of
+  // success: 'errored' keeps that visible instead of a misleading 'completed'.
+  // Any completed model keeps the normal lifecycle-complete status.
+  const anyCompleted = perModel.some((m) => m.status === 'completed');
+  const finalStatus = reaped && !anyCompleted ? 'errored' : 'completed';
   logger.info('Run finalized', { runId, md: mdPath, status: allSuccess ? 'success' : 'failed' });
 
   // Release budget reservations with actual costs, then run the post-finalize
@@ -559,7 +564,7 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: s
     }
   }
 
-  const completed = await completeRunFinalization(runId);
+  const completed = await completeRunFinalization(runId, finalStatus);
   if (!completed) {
     logger.warn('Run status left finalizing before completion transition; not marking completed', { runId });
   }
@@ -579,10 +584,11 @@ async function finalizeClaimedRun(
   logger: Logger,
   finalizationAttempt: number,
   judgeAdapter?: ModelAdapter,
+  reaped = false,
 ): Promise<{ entries: ComparisonEntry[]; mdPath: string; jsonPath: string; completed: boolean }> {
   try {
     const { entries, mdPath, jsonPath } = aggregate(projectRoot(), { runId, scenario, startedAt, models });
-    const core = await finalizeCore(runId, entries, mdPath, jsonPath, logger, finalizationAttempt, judgeAdapter);
+    const core = await finalizeCore(runId, entries, mdPath, jsonPath, logger, finalizationAttempt, judgeAdapter, reaped);
     return { entries, mdPath: core.mdPath, jsonPath: core.jsonPath, completed: core.completed };
   } catch (err) {
     logger.error('Run finalization failed — leaving run finalizing for retry', {
@@ -617,9 +623,12 @@ export async function finalizeRun(spec: RunSpec, logger: Logger, judgeAdapter?: 
 
 /** Finalize by runId (resolves paths from the index). Used by the dashboard
  *  watcher. Returns true only when this call won the atomic claim and the run
- *  actually reached 'completed'; false when the run is missing, another
- *  finalizer holds a fresh claim, or the run was reset mid-finalize. */
-export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter): Promise<boolean> {
+ *  actually reached a terminal status ('completed', or 'errored' for a reaped
+ *  run with no successful model); false when the run is missing, another
+ *  finalizer holds a fresh claim, or the run was reset mid-finalize. The
+ *  `reaped` flag is set by the stale-running reconciliation: it forces a
+ *  dead-runner run with no completed model to settle as 'errored'. */
+export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAdapter?: ModelAdapter, reaped = false): Promise<boolean> {
   const rec = await getRunRecord(runId);
   if (!rec) return false;
   const attempt = await claimRunFinalization(runId);
@@ -630,7 +639,7 @@ export async function finalizeRunByRunId(runId: string, logger: Logger, judgeAda
   const { completed } = await finalizeClaimedRun(
     runId, rec.scenario, rec.startedAt,
     rec.perModel.map((m) => ({ model: m.model, resultPath: m.resultPath })),
-    logger, attempt, judgeAdapter,
+    logger, attempt, judgeAdapter, reaped,
   );
   return completed;
 }
@@ -720,6 +729,9 @@ export async function restartRun(runId: string): Promise<void> {
   }
   await updateRun(runId, (r) => {
     r.status = 'running';
+    // Restarting restarts the stale-run clock: reusing the original start time
+    // would make the restarted run immediately reaper-eligible.
+    r.startedAt = new Date().toISOString();
     r.finishedAt = null;
     for (const m of r.perModel) { m.status = 'running'; m.success = undefined; }
   });
