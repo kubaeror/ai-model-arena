@@ -179,6 +179,12 @@ export interface OutboxTimerOptions {
   sender?: (channel: string, event: DispatchEvent) => Promise<NotificationResult>;
 }
 
+export interface OutboxTimer {
+  stop: () => void;
+  /** Resolves once the in-flight sweep settles (immediately when idle). */
+  whenIdle: () => Promise<void>;
+}
+
 /**
  * Dashboard boot path: load the channel config (so sendNotification can route
  * without "Channel not found") and start the periodic outbox sweep. Ticks are
@@ -189,7 +195,7 @@ export function startNotificationOutboxTimer(
   logger: Logger,
   configPath: string,
   opts: OutboxTimerOptions = {},
-): { stop: () => void } {
+): OutboxTimer {
   try {
     loadNotificationConfig(configPath, logger);
   } catch (err) {
@@ -200,19 +206,19 @@ export function startNotificationOutboxTimer(
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  let inFlight = false;
+  let inFlight: Promise<void> | null = null;
   const timer = setInterval(() => {
     if (inFlight) {
       logger.debug('Notification outbox sweep skipped: previous sweep still running');
       return;
     }
-    inFlight = true;
-    void deliverDueNotifications(logger, opts.sender)
+    inFlight = deliverDueNotifications(logger, opts.sender)
+      .then(() => undefined)
       .catch((e) => logger.warn('Notification outbox delivery failed', { error: String(e) }))
-      .finally(() => { inFlight = false; });
+      .finally(() => { inFlight = null; });
   }, opts.intervalMs ?? 30_000);
   timer.unref?.();
-  return { stop: () => clearInterval(timer) };
+  return { stop: () => clearInterval(timer), whenIdle: () => inFlight ?? Promise.resolve() };
 }
 
 /**

@@ -40,6 +40,19 @@ export function hasControlChars(value: string): boolean {
   return /[\r\n]/.test(value);
 }
 
+/**
+ * The generated k8s client throws ApiException with a numeric `code`; older
+ * shapes surface `response.statusCode`/`statusCode`. Normalize all of them so
+ * 404 (create fallback) and 403 (env-based fallback) branches work.
+ */
+function httpStatusCode(err: unknown): number | undefined {
+  const e = err as { code?: unknown; response?: { statusCode?: number }; statusCode?: number };
+  if (typeof e?.code === 'number') return e.code;
+  if (typeof e?.response?.statusCode === 'number') return e.response.statusCode;
+  if (typeof e?.statusCode === 'number') return e.statusCode;
+  return undefined;
+}
+
 function initK8s(): void {
   if (k8sReady) return;
   if (!isKubernetes()) return;
@@ -82,12 +95,12 @@ export function createSecretsRouter(): Router {
         res.json({ platform: 'kubernetes', secrets: decodeSecretData(data) });
         return;
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number }; statusCode?: number };
-        if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
+        const status = httpStatusCode(err);
+        if (status === 404) {
           res.json({ platform: 'kubernetes', secrets: [] });
           return;
         }
-        if (e?.response?.statusCode === 403) {
+        if (status === 403) {
           // Dashboard SA no longer has secret read access — use env-based fallback
           const entries = secretStore.list();
           res.json({ platform: 'kubernetes', secrets: entries, note: 'Secret listing uses env-based fallback (dashboard SA lacks read access)' });
@@ -130,8 +143,7 @@ export function createSecretsRouter(): Router {
           body: { stringData: Object.fromEntries([[envVar, value]]) },
         }, MERGE_PATCH_OPTIONS);
       } catch (patchErr: unknown) {
-        const e = patchErr as { response?: { statusCode?: number }; statusCode?: number };
-        if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
+        if (httpStatusCode(patchErr) === 404) {
           await k8sApi.createNamespacedSecret({
             namespace: ns,
             body: {
@@ -173,8 +185,7 @@ export function createSecretsRouter(): Router {
           body: { stringData: Object.fromEntries([[envVar, null]]) },
         }, MERGE_PATCH_OPTIONS);
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number }; statusCode?: number };
-        if (e?.response?.statusCode === 404 || e?.statusCode === 404) {
+        if (httpStatusCode(err) === 404) {
           res.json({ ok: true, envVar, message: 'Secret already removed' });
           return;
         }

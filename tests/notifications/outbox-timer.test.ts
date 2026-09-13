@@ -43,10 +43,6 @@ afterEach(async () => {
   await closeDb();
 });
 
-function flush(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
 test('starting the outbox timer loads channel config before the first sweep', async () => {
   initDb(':memory:');
   const originalFetch = globalThis.fetch;
@@ -78,10 +74,13 @@ test('overlapping outbox ticks are skipped while a sweep is in flight', async (t
   t.mock.timers.enable({ apis: ['setInterval'] });
 
   let sends = 0;
+  let markStarted!: () => void;
+  const sendStarted = new Promise<void>((r) => { markStarted = r; });
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   const sender = async () => {
     sends++;
+    markStarted();
     await gate;
     return { channel: 'slack', success: true, timestamp: new Date().toISOString() };
   };
@@ -90,19 +89,18 @@ test('overlapping outbox ticks are skipped while a sweep is in flight', async (t
   try {
     await persistNotification({ type: DispatchEventType.onRunCompleted, data: { runId: 'r1' } }, 'slack');
     t.mock.timers.tick(1_000);
-    await flush();
+    await sendStarted;
     assert.equal(sends, 1, 'first tick starts a sweep');
 
     t.mock.timers.tick(1_000);
-    await flush();
     assert.equal(sends, 1, 'tick during an in-flight sweep is skipped');
 
     release();
-    await flush();
+    await timer.whenIdle();
 
     await persistNotification({ type: DispatchEventType.onRunCompleted, data: { runId: 'r2' } }, 'slack');
     t.mock.timers.tick(1_000);
-    await flush();
+    await timer.whenIdle();
     assert.equal(sends, 2, 'a later tick sweeps again after the in-flight sweep finishes');
   } finally {
     timer.stop();

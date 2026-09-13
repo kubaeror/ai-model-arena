@@ -42,10 +42,6 @@ afterEach(async () => {
   await closeDb();
 });
 
-function flush(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
 test('malformed notifications config: boot warns and the outbox timer still sweeps', async (t: TestContext) => {
   initDb(':memory:');
   t.mock.timers.enable({ apis: ['setInterval'] });
@@ -63,7 +59,7 @@ test('malformed notifications config: boot warns and the outbox timer still swee
     );
 
     t.mock.timers.tick(1_000);
-    await flush();
+    await timer.whenIdle();
 
     const row = await getNotificationById(id);
     assert.equal(row?.status, 'pending', 'channel-less send failed gracefully and stayed retryable');

@@ -224,6 +224,59 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" \
   http://localhost:4000/api/ops/killswitch
 ```
 
+### Unique-Index Migration Pre-Flight (`run_models`, `user_roles`)
+
+The `db-migrate` initContainer runs on every dashboard, runner, and scheduler
+pod boot. SQLite `0019_modern_greymalkin` / Postgres `0012_supreme_rogue`
+create the unique indexes `uq_run_models_run_model (run_id, model)` and
+`uq_user_roles_user_role (user_id, role_id)`. If the target database already
+contains duplicates, index creation aborts, the migration transaction rolls
+back, and new pods crash-loop in `Init`. Check for duplicates before upgrading
+(same SQL on SQLite and Postgres):
+
+```sql
+SELECT run_id, model, COUNT(*) AS n FROM run_models GROUP BY run_id, model HAVING COUNT(*) > 1;
+SELECT user_id, role_id, COUNT(*) AS n FROM user_roles GROUP BY user_id, role_id HAVING COUNT(*) > 1;
+```
+
+If either returns rows, dedupe first. Both tables have no primary key, so the
+delete keeps the most recently written row:
+
+```sql
+-- SQLite
+DELETE FROM run_models WHERE rowid NOT IN (SELECT MAX(rowid) FROM run_models GROUP BY run_id, model);
+DELETE FROM user_roles WHERE rowid NOT IN (SELECT MAX(rowid) FROM user_roles GROUP BY user_id, role_id);
+
+-- Postgres
+DELETE FROM run_models a USING run_models b
+ WHERE a.ctid < b.ctid AND a.run_id = b.run_id AND a.model = b.model;
+DELETE FROM user_roles a USING user_roles b
+ WHERE a.ctid < b.ctid AND a.user_id = b.user_id AND a.role_id = b.role_id;
+```
+
+If duplicate `run_models` rows carry different `status`/`completed_at`/
+`result_path` values, inspect the duplicates and merge fields worth keeping
+before deleting. Then re-run the migration by restarting a workload (a failed
+migration is never journaled, so the initContainer retries) — e.g.
+`kubectl rollout restart deploy/dashboard -n ai-arena` — or run
+`npm run db:migrate` directly.
+
+**Rollback** — to drop the constraints and return to duplicate-tolerant writes
+(e.g. while reconciling a partial deploy), drop the index, dedupe, and re-apply:
+
+```sql
+-- SQLite
+DROP INDEX IF EXISTS uq_run_models_run_model;
+DROP INDEX IF EXISTS uq_user_roles_user_role;
+
+-- Postgres
+DROP INDEX IF EXISTS "uq_run_models_run_model";
+DROP INDEX IF EXISTS "uq_user_roles_user_role";
+```
+
+Then run the dedupe statements above and re-run `npm run db:migrate`; the
+`IF NOT EXISTS` index creation re-applies cleanly.
+
 ### Database Backup (PostgreSQL)
 
 ```bash
