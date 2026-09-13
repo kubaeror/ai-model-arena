@@ -363,12 +363,18 @@ function applySpend(state: BudgetState, modelName: string, usd: number): void {
   state.global.daily[dayKey] = (state.global.daily[dayKey] ?? 0) + usd;
   state.global.monthly[monthKey] = (state.global.monthly[monthKey] ?? 0) + usd;
 
-  if (!state.models[modelName]) {
-    // codeql[js/remote-property-injection] guarded by safeLedgerModel(); keys are catalog model names
-    state.models[modelName] = { daily: {}, monthly: {} };
+  let modelEntry = state.models[modelName];
+  if (!modelEntry) {
+    modelEntry = { daily: {}, monthly: {} };
+    Object.defineProperty(state.models, modelName, {
+      value: modelEntry,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
-  state.models[modelName].daily[dayKey] = (state.models[modelName].daily[dayKey] ?? 0) + usd;
-  state.models[modelName].monthly[monthKey] = (state.models[modelName].monthly[monthKey] ?? 0) + usd;
+  modelEntry.daily[dayKey] = (modelEntry.daily[dayKey] ?? 0) + usd;
+  modelEntry.monthly[monthKey] = (modelEntry.monthly[monthKey] ?? 0) + usd;
 }
 
 export function addSpend(modelName: string, usd: number, rootDir: string, logger?: Logger): Promise<void> {
@@ -482,9 +488,17 @@ export function reserveBudget(
     }
 
     if (!state.reservations) state.reservations = {};
-    // codeql[js/remote-property-injection] guarded by safeLedgerModel(); keys are catalog model names
-    if (!state.reservations[modelName]) state.reservations[modelName] = [];
-    state.reservations[modelName].push({ amount: estimatedCostUsd, dailyKey: DAY_KEY(), expiresAt: Date.now() + RESERVATION_TTL_MS });
+    let modelReservations = state.reservations[modelName];
+    if (!modelReservations) {
+      modelReservations = [];
+      Object.defineProperty(state.reservations, modelName, {
+        value: modelReservations,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    modelReservations.push({ amount: estimatedCostUsd, dailyKey: DAY_KEY(), expiresAt: Date.now() + RESERVATION_TTL_MS });
     writeBudgetStateFile(statePath, state, logger);
 
     logger?.debug('Budget reserved', {
