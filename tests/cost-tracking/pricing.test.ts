@@ -9,6 +9,7 @@ import { eq } from 'drizzle-orm';
 import { fetchSync } from '../../src/catalog/sync.js';
 import { getModelPricing, getPricing, computeCost, computeTotalCost, resetPricingCache } from '../../src/cost-tracking/pricing.js';
 import type { CostTokenUsage } from '../../src/cost-tracking/types.js';
+import type { TokenUsage } from '../../src/types.js';
 
 const MODELS_DEV = {
   openai: { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {
@@ -231,6 +232,26 @@ test('computeTotalCost falls back to the aggregate usage when no per-call list e
     const fallback = await computeTotalCost('openai/gpt-x', undefined, { prompt: 300_000, completion: 0 });
     const direct = await computeCost('openai/gpt-x', { prompt: 300_000, completion: 0 });
     assert.deepEqual(fallback, direct);
+  } finally { closeDb(); cleanup(); }
+});
+
+test('computeTotalCost prices each call with its own tagged model', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    // A fallback hop tags its calls with the serving model; each call must be
+    // billed at that model's price, not the primary's.
+    const perCall: TokenUsage[] = [
+      { prompt: 1_000_000, completion: 0, model: 'openai/gpt-4o' },
+      { prompt: 1_000_000, completion: 0, model: 'openai/gpt-nocache' },
+    ];
+    const summed = await computeTotalCost('openai/gpt-x', perCall, { prompt: 2_000_000, completion: 0 });
+    assert.ok(Math.abs(summed.inputCost - (2.5 + 2)) < 1e-9, `expected gpt-4o + gpt-nocache prices, got ${summed.inputCost}`);
+
+    // Untagged calls keep falling back to the run-level model name; a 1M-token
+    // call crosses the 200k tier, so gpt-x's over-200k input price (1.5) applies.
+    const untagged = await computeTotalCost('openai/gpt-x', [{ prompt: 1_000_000, completion: 0 }], {});
+    assert.ok(Math.abs(untagged.inputCost - 1.5) < 1e-9, `untagged calls must use the run model, got ${untagged.inputCost}`);
   } finally { closeDb(); cleanup(); }
 });
 

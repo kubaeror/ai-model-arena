@@ -37,6 +37,9 @@ export interface AgentLoopOptions {
   onBudgetCheck?: (turn: number, tokenUsage: TokenUsage) => Promise<boolean | string>;
   /** Model-send options forwarded to every adapter.sendMessage call (e.g. reasoning). */
   sendOpts?: SendOpts;
+  /** Serving model/provider stamped on each per-call usage entry for billing. */
+  billingModel?: string;
+  billingProvider?: string;
 }
 
 export interface AgentLoopResult {
@@ -173,6 +176,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     startTurn: opts.initialTurn ?? 1,
     taskCompleteToolName: TASK_COMPLETE_TOOL,
     sendOpts,
+    billingModel: opts.billingModel,
+    billingProvider: opts.billingProvider,
     hooks: {
       onTurnStart: async (turn, usage) => {
         if (onBudgetCheck) {

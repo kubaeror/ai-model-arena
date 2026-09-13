@@ -81,4 +81,32 @@ describe('todoRead + todoWrite', () => {
     const r = await todoRead({}, ctx);
     assert.ok(r.content.includes('Persisted task'));
   });
+
+  it('rejects a hardlinked .arena/todos.json and leaves the outside file unchanged', async () => {
+    const outside = path.join(tmp, 'outside-todos.json');
+    fs.writeFileSync(outside, 'outside-original');
+    fs.mkdirSync(path.join(sandbox, '.arena'), { recursive: true });
+    const link = path.join(sandbox, '.arena', 'todos.json');
+    fs.rmSync(link, { force: true });
+    fs.linkSync(outside, link);
+
+    const r = await todoWrite({
+      todos: [{ id: 'x', content: 'escape attempt', status: 'pending' as const, priority: 'high' as const }],
+    }, ctx);
+    assert.strictEqual(r.isError, true, `hardlink write must be rejected, got: ${r.content}`);
+    assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'outside-original');
+  });
+
+  it('rejects a symlinked .arena directory without writing outside the sandbox', async () => {
+    const outsideDir = path.join(tmp, 'outside-arena');
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const symlinkCtx: ToolExecutionContext = { ...ctx, sandboxDir: fs.mkdtempSync(path.join(tmp, 'todo-symlink-sb-')) };
+    fs.symlinkSync(outsideDir, path.join(symlinkCtx.sandboxDir, '.arena'), 'dir');
+
+    const r = await todoWrite({
+      todos: [{ id: 'y', content: 'symlink attempt', status: 'pending' as const, priority: 'high' as const }],
+    }, symlinkCtx);
+    assert.strictEqual(r.isError, true, `symlinked .arena must be rejected, got: ${r.content}`);
+    assert.ok(!fs.existsSync(path.join(outsideDir, 'todos.json')), 'outside dir must not receive todos.json');
+  });
 });

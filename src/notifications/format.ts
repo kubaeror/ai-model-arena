@@ -1,6 +1,7 @@
 import type { Logger } from '../types.js';
 import type { DispatchEvent, NotificationResult } from './types.js';
 import { postWithRetry } from './retry.js';
+import { assertPublicUrl } from '../providers/url-validator.js';
 
 /**
  * Shared extraction of the event fields both channels render.
@@ -86,6 +87,9 @@ export async function sendWebhook(
   const channelLabel = channel.charAt(0).toUpperCase() + channel.slice(1);
 
   try {
+    // Operator-configured channel URLs go through the same SSRF gate as
+    // user-registered webhooks: no private/metadata targets, no redirects.
+    await assertPublicUrl(webhookUrl);
     const response = await postWithRetry(webhookUrl, JSON.stringify(payload), {}, logger);
 
     if (!response.ok) {

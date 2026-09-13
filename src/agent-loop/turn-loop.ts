@@ -93,6 +93,9 @@ interface TurnLoopOptions {
   taskCompleteToolName?: string;
   /** Model-send options forwarded to every adapter.sendMessage call. */
   sendOpts?: SendOpts;
+  /** Serving model/provider stamped on each per-call usage entry for billing. */
+  billingModel?: string;
+  billingProvider?: string;
   /** First turn number; defaults to 1. */
   startTurn?: number;
   /** Tool-result truncation cap in chars; defaults to 60_000. */
@@ -197,8 +200,13 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
       usage.total = (usage.total ?? 0) + (response.usage.total ?? 0);
       usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + (response.usage.cacheReadTokens ?? 0);
       usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + (response.usage.cacheWriteTokens ?? 0);
-      // Snapshot per call so callers can price each request at its own tier.
-      usagePerCall.push({ ...response.usage });
+      // Snapshot per call so callers can price each request at its own tier —
+      // and, after a fallback hop, at its own model's rates.
+      usagePerCall.push({
+        ...response.usage,
+        ...(opts.billingModel ? { model: opts.billingModel } : {}),
+        ...(opts.billingProvider ? { provider: opts.billingProvider } : {}),
+      });
     }
 
     const wantsComplete = taskCompleteToolName != null

@@ -66,3 +66,32 @@ test('runAgentLoop accumulates cache read/write tokens and exposes per-call usag
   assert.equal(result.usagePerCall[1]?.cacheReadTokens, 900);
   assert.equal(result.usagePerCall[1]?.cacheWriteTokens, 0);
 });
+
+test('runAgentLoop tags each per-call usage with the serving model for billing', async () => {
+  const adapter = stubAdapter([
+    {
+      text: 'done',
+      toolCalls: [],
+      usage: { prompt: 100, completion: 5, total: 105 },
+      stopReason: 'no_tool_calls',
+    },
+  ]);
+
+  const result = await runAgentLoop({
+    adapter,
+    tools: [],
+    executors: {},
+    systemPrompt: 's',
+    task: 't',
+    maxTurns: 3,
+    toolCtx: stubToolCtx(),
+    conv: stubConv(),
+    logger: stubLogger(),
+    billingModel: 'anthropic/claude-sonnet-4',
+    billingProvider: 'anthropic',
+  });
+
+  assert.equal(result.usagePerCall.length, 1);
+  assert.equal(result.usagePerCall[0]?.model, 'anthropic/claude-sonnet-4');
+  assert.equal(result.usagePerCall[0]?.provider, 'anthropic');
+});

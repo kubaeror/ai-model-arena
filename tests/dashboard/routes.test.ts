@@ -163,6 +163,28 @@ test('POST /api/models rejects provider URLs targeting blocked addresses', async
   assert.equal(publicRes.status, 201);
 });
 
+test('POST /api/models and /api/providers reject env_var names that are not env identifiers', async (t) => {
+  const h = await boot(t);
+
+  const invalid = ['../../etc/passwd', 'lower_case', 'MY.KEY', '1BAD', 'MY KEY'];
+  for (const envVar of invalid) {
+    const modelRes = await postJson(h.base, h.adminToken, '/api/models', { name: 'Env Model', envVar });
+    assert.equal(modelRes.status, 400, `POST /api/models must reject envVar "${envVar}"`);
+
+    const providerRes = await postJson(h.base, h.adminToken, '/api/providers', {
+      id: 'env-provider', name: 'Env Provider', authScheme: 'bearer', adapter: 'openai-compat', envVar,
+    });
+    assert.equal(providerRes.status, 400, `POST /api/providers must reject envVar "${envVar}"`);
+  }
+
+  const modelOk = await postJson(h.base, h.adminToken, '/api/models', { name: 'Env Model', envVar: 'MY_API_KEY' });
+  assert.equal(modelOk.status, 201, 'valid env var names must still be accepted');
+  const providerOk = await postJson(h.base, h.adminToken, '/api/providers', {
+    id: 'env-provider', name: 'Env Provider', authScheme: 'bearer', adapter: 'openai-compat', envVar: 'MY_API_KEY_2',
+  });
+  assert.equal(providerOk.status, 201, 'valid env var names must still be accepted');
+});
+
 test('POST /api/scenarios then GET /api/scenarios/:name round-trips a scenario YAML', async (t) => {
   const h = await boot(t);
 

@@ -1174,8 +1174,14 @@ test('ARENA_MAX_FALLBACK_HOPS=3 falls back through the chain when the primary ci
       .get('run-fb3', 'GPT-4o') as { status: string } | undefined;
     assert.equal(row?.status, 'completed', 'run should complete via the fallback provider');
     const resultPath = path.join(outputs, MODEL_DIR, 'run-fb3', 'result.json');
-    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean };
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as { success: boolean; costUsd: number };
     assert.equal(result.success, true);
+    // claude-sonnet-4 (fallback) is input 3 / output 15: 12*3/1e6 + 6*15/1e6
+    // = 0.000126. Billing at the primary gpt-4o rates (2.5/10) would be 0.00009.
+    assert.ok(
+      Math.abs(result.costUsd - 0.000126) < 1e-12,
+      `fallback calls must be billed at the serving model's rates, got ${result.costUsd}`,
+    );
   } finally {
     ac.abort();
     await runnerDone;

@@ -16,8 +16,10 @@ afterEach(() => {
 
 test('postWithRetry passes a live abort signal to every fetch attempt', async () => {
   const signals: Array<AbortSignal | undefined> = [];
+  const redirects: Array<RequestInit['redirect']> = [];
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
     signals.push(init?.signal ?? undefined);
+    redirects.push(init?.redirect);
     return new Response('boom', { status: 500 });
   }) as typeof fetch;
 
@@ -30,4 +32,7 @@ test('postWithRetry passes a live abort signal to every fetch attempt', async ()
     assert.equal(signal.aborted, false, 'the signal must be live when the attempt starts');
   }
   assert.equal(new Set(signals).size, 3, 'each attempt must get a fresh signal, not a spent one');
+  for (const redirect of redirects) {
+    assert.equal(redirect, 'error', 'redirects must not be followed (SSRF gate bypass)');
+  }
 });

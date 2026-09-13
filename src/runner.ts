@@ -546,6 +546,9 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
 
       let currentProvider = resolved.providerId;
       let currentModel = resolved.apiModelId;
+      // Canonical id used to price calls made by the serving model: the
+      // primary's until a fallback hop switches it to the hop's own row.
+      let currentBillingModel = resolved.canonicalId;
       const apiKey = descriptor?.envVar ? secretStore.get(descriptor.envVar) : undefined;
       const executors = buildToolExecutors();
       let adapter = registry.createAdapter(currentProvider, currentModel, { apiKey, logger: logger.child('adapter') });
@@ -622,6 +625,8 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             initialTurn,
             provider: currentProvider,
             model: currentModel,
+            billingModel: currentBillingModel,
+            billingProvider: currentProvider,
             temperature: sendOpts.temperature,
             maxTokens: sendOpts.maxTokens,
             sendOpts,
@@ -687,7 +692,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
                   cacheReadTokens: usage.cacheReadTokens,
                   cacheWriteTokens: usage.cacheWriteTokens,
                 };
-                const turnCost = await computeCost(modelName, turnUsage);
+                const turnCost = await computeCost(currentBillingModel, turnUsage);
                 attemptRunCost += turnCost.total;
                 prevRunCost = Math.max(prevRunCost, seededRunCost + attemptRunCost);
               } catch (e) {
@@ -735,6 +740,7 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
               // (a lower output cap or a reasoning-only model would 400).
               const hopResolved = await resolveModelForRun(currentModel, currentProvider);
               sendOpts = buildSendOpts(hopResolved);
+              currentBillingModel = hopResolved?.canonicalId ?? currentModel;
               // The subagent shares the live adapter; keep its inherited
               // options in sync with the hop as well.
               if (toolCtx.subagent) toolCtx.subagent.sendOpts = sendOpts;

@@ -491,6 +491,8 @@ interface RegexGroupState {
   branchFirsts: (CharSet | null)[];
   branchNullables: boolean[];
   sawAlternation: boolean;
+  nullableRun: number;
+  nullableRunStart: number;
 }
 
 function newGroupState(start: number): RegexGroupState {
@@ -507,6 +509,8 @@ function newGroupState(start: number): RegexGroupState {
     branchFirsts: [],
     branchNullables: [],
     sawAlternation: false,
+    nullableRun: 0,
+    nullableRunStart: start,
   };
 }
 
@@ -549,10 +553,15 @@ function quantifierEnd(pattern: string, quantifier: RegexQuantifier | null, fall
  * unbounded quantifier (`(a+)+`), a bounded inner repeat under an unbounded
  * outer one (`(a{2,3})+`), an ambiguous nullable sequence (`(a?b?)+`), or an
  * ambiguous alternation, including one hidden behind wrapper groups
- * (`((a|aa))+`). Alternations whose branches start with provably disjoint
- * characters after case folding (`(foo|bar)+`) are permitted. Anything the
- * analysis cannot prove stays ambiguous, so the failure mode is a false
- * rejection, never a hang.
+ * (`((a|aa))+`). The same shapes are rejected under bounded outer quantifiers
+ * with max >= 2 (`(a|aa){35}`), which blow up multiplicatively. Alternations
+ * whose branches start with provably disjoint characters after case folding
+ * (`(foo|bar)+`) are permitted. A long run of nullable atoms followed by a
+ * required atom (`a?a?…a?b`) is also rejected, since every required atom
+ * leaves exponentially many ways to split the run. Anything the analysis
+ * cannot prove stays ambiguous, so the failure mode is a false rejection.
+ * Shapes the syntactic scanner cannot analyze (e.g. exotic backreference use)
+ * remain best-effort; the between-lines budget in searchCode bounds them.
  */
 function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): RegexShapeFinding | null {
   const stack: RegexGroupState[] = [newGroupState(0)];
@@ -564,7 +573,21 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
   // match empty; that is what makes `(a?b|b)+` collide on `b`. A nullable prefix
   // followed by a nullable or overlapping atom (`(a?b?)+`, `(a?a)+`) also
   // leaves the repeat boundary ambiguous.
-  const applyAtom = (group: RegexGroupState, first: CharSet | null, nullable: boolean): void => {
+  const applyAtom = (group: RegexGroupState, first: CharSet | null, nullable: boolean, at: number): RegexShapeFinding | null => {
+    if (nullable) {
+      if (group.nullableRun === 0) group.nullableRunStart = at;
+      group.nullableRun++;
+    } else {
+      // Eight or more optional atoms before a mandatory one is the `a?…a?b`
+      // shape: matching a mandatory atom requires splitting an ambiguous run.
+      if (group.nullableRun >= 8) {
+        return {
+          kind: 'ambiguous-repeat',
+          construct: pattern.slice(group.nullableRunStart, at + 1),
+        };
+      }
+      group.nullableRun = 0;
+    }
     if (group.branchFirst === undefined) {
       group.branchFirst = first;
     } else if (group.branchNullable) {
@@ -579,6 +602,7 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
       group.branchFirst = unionCharSets(group.branchFirst, first);
     }
     group.branchNullable = group.branchNullable && nullable;
+    return null;
   };
 
   const noteQuantifier = (group: RegexGroupState, q: RegexQuantifier | null): void => {
@@ -595,7 +619,8 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
       const esc = parseEscapeSet(pattern, i);
       const q = quantifierAt(pattern, esc.end + 1);
       noteQuantifier(current, q);
-      applyAtom(current, fold(esc.set), q !== null && q.min === 0);
+      const escShape = applyAtom(current, fold(esc.set), q !== null && q.min === 0, i);
+      if (escShape) return escShape;
       i = quantifierEnd(pattern, q, esc.end);
       continue;
     }
@@ -603,7 +628,8 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
       const cls = parseCharClass(pattern, i);
       const q = quantifierAt(pattern, cls.end + 1);
       noteQuantifier(current, q);
-      applyAtom(current, fold(cls.set), q !== null && q.min === 0);
+      const clsShape = applyAtom(current, fold(cls.set), q !== null && q.min === 0, i);
+      if (clsShape) return clsShape;
       i = quantifierEnd(pattern, q, cls.end);
       continue;
     }
@@ -641,7 +667,9 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
       }
 
       const q = quantifierAt(pattern, i + 1);
-      if (q && q.max === null) {
+      // A bounded outer quantifier with max >= 2 composes the same ambiguous
+      // inner shapes multiplicatively as an unbounded one.
+      if (q && (q.max === null || q.max >= 2)) {
         if (group.hasUnboundedQuantifier) {
           return { kind: 'nested-quantifier', construct: pattern.slice(group.start, q.end + 1) };
         }
@@ -662,7 +690,8 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
       parent.hasAmbiguousAlternation ||= group.hasAmbiguousAlternation;
       parent.hasBoundedRepeat ||= group.hasBoundedRepeat;
       parent.hasAmbiguousSequence ||= group.hasAmbiguousSequence;
-      applyAtom(parent, group.first, group.nullable || (q !== null && q.min === 0));
+      const groupShape = applyAtom(parent, group.first, group.nullable || (q !== null && q.min === 0), group.start);
+      if (groupShape) return groupShape;
       i = quantifierEnd(pattern, q, i);
       continue;
     }
@@ -686,9 +715,11 @@ function findCatastrophicRegexShape(pattern: string, caseSensitive: boolean): Re
     noteQuantifier(current, q);
     if (ch === '.' || ch === '^' || ch === '$') {
       // Wildcards and anchors cannot prove a disjoint first character.
-      applyAtom(current, null, ch === '^' || ch === '$' || (q !== null && q.min === 0));
+      const charShape = applyAtom(current, null, ch === '^' || ch === '$' || (q !== null && q.min === 0), i);
+      if (charShape) return charShape;
     } else {
-      applyAtom(current, fold(singleCharSet(ch!.charCodeAt(0))), q !== null && q.min === 0);
+      const charShape = applyAtom(current, fold(singleCharSet(ch!.charCodeAt(0))), q !== null && q.min === 0, i);
+      if (charShape) return charShape;
     }
     i = quantifierEnd(pattern, q, i);
   }

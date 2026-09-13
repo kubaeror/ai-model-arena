@@ -18,6 +18,7 @@ export async function postWithRetry(url: string, body: string, headers: Record<s
         headers: { 'Content-Type': 'application/json', ...headers },
         body,
         signal: AbortSignal.timeout(10_000),
+        redirect: 'error',
       });
       if (res.ok || res.status < 500) return res;
       lastRes = res;

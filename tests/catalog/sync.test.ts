@@ -278,6 +278,39 @@ test('fetchSync persists provider api URL as api_base and drops unsafe URLs', as
   }
 });
 
+test('fetchSync drops provider env names that are not valid env identifiers', async () => {
+  const cleanup = freshDb();
+  const origFetch = globalThis.fetch;
+  const model = (id: string) => ({
+    id, name: id, attachment: false, reasoning: false, temperature: true, tool_call: true,
+    cost: { input: 1, output: 2 }, limit: { context: 128000, output: 4096 },
+  });
+  const payload = {
+    good: { id: 'good', name: 'Good', env: ['GOOD_API_KEY'], models: { 'good-1': model('good-1') } },
+    traverse: { id: 'traverse', name: 'Traverse', env: ['../../etc/passwd'], models: { 'traverse-1': model('traverse-1') } },
+    missing: { id: 'missing', name: 'Missing', env: [], models: { 'missing-1': model('missing-1') } },
+  };
+  globalThis.fetch = (async () => ({
+    status: 200, ok: true,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response)) as typeof fetch;
+  try {
+    const result = await fetchSync('models.dev', { apiUrl: 'https://models.dev/api.json', force: true });
+    assert.equal(result.ok, true);
+    const rows = getDb().prepare('SELECT id, env_var FROM providers ORDER BY id').all() as Array<{ id: string; env_var: string | null }>;
+    assert.deepEqual(rows, [
+      { id: 'good', env_var: 'GOOD_API_KEY' },
+      { id: 'missing', env_var: null },
+      { id: 'traverse', env_var: null },
+    ]);
+  } finally {
+    globalThis.fetch = origFetch;
+    closeDb();
+    cleanup();
+  }
+});
+
 test('fetchSync batches catalog upserts into a single transaction', async () => {
   const cleanup = freshDb();
   const origFetch = globalThis.fetch;

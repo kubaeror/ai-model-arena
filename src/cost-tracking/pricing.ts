@@ -125,8 +125,10 @@ function toCostUsage(usage: TokenUsage): CostTokenUsage {
 
 /**
  * Total cost for a run: sum each model call's cost so the over-200k tier is
- * applied per request. Falls back to the aggregate usage when no per-call list
- * exists (e.g. resumed legacy runs that predate usagePerCall).
+ * applied per request. Each call is priced with its own `model` tag when
+ * present (fallback hops bill at the serving model), falling back to
+ * `modelName` for untagged calls. Falls back to the aggregate usage when no
+ * per-call list exists (e.g. resumed legacy runs that predate usagePerCall).
  */
 export async function computeTotalCost(
   modelName: string,
@@ -136,7 +138,7 @@ export async function computeTotalCost(
   const calls = perCallUsage && perCallUsage.length > 0 ? perCallUsage : [aggregateUsage];
   const total: CostBreakdown = { inputCost: 0, outputCost: 0, cachedCost: 0, total: 0 };
   for (const usage of calls) {
-    const cost = await computeCost(modelName, toCostUsage(usage));
+    const cost = await computeCost(usage.model ?? modelName, toCostUsage(usage));
     total.inputCost += cost.inputCost;
     total.outputCost += cost.outputCost;
     total.cachedCost += cost.cachedCost;

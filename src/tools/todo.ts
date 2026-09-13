@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod/v4';
 import { validateArgs } from './util.js';
+import { safeResolve, assertSafeWriteTarget } from '../sandbox/sandbox.js';
 import type { ToolExecutor } from '../types.js';
 
 interface TodoItem {
@@ -24,14 +25,42 @@ const TodoWriteArgs = z.object({
 
 const TodoReadArgs = z.object({}).strict();
 
+/**
+ * Resolve the todos file inside `sandboxDir/.arena`. A pre-existing symlinked
+ * `.arena` (or a hardlinked todos.json) would let a write mutate a file outside
+ * the sandbox, so both are rejected before any write.
+ */
 function todosPath(sandboxDir: string): string {
   const arenaDir = path.join(sandboxDir, '.arena');
-  fs.mkdirSync(arenaDir, { recursive: true });
-  return path.join(arenaDir, 'todos.json');
+  try {
+    const st = fs.lstatSync(arenaDir);
+    if (st.isSymbolicLink()) {
+      throw new Error('Refusing to use a symlinked .arena directory.');
+    }
+    if (!st.isDirectory()) {
+      throw new Error('Refusing to use a non-directory .arena path.');
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      fs.mkdirSync(arenaDir, { recursive: true });
+    } else {
+      throw err;
+    }
+  }
+  const abs = safeResolve(sandboxDir, '.arena/todos.json');
+  assertSafeWriteTarget(abs);
+  return abs;
 }
 
 function readTodos(dir: string): TodoItem[] {
-  const fp = todosPath(dir);
+  let fp: string;
+  try {
+    fp = todosPath(dir);
+  } catch {
+    // Unsafe path (symlinked .arena, hardlinked file, …): report no todos
+    // rather than reading through the link.
+    return [];
+  }
   if (!fs.existsSync(fp)) return [];
   try {
     const raw = fs.readFileSync(fp, 'utf8');
@@ -92,7 +121,11 @@ export const todoWrite: ToolExecutor = async (args, ctx) => {
   if (!v.ok) return { content: v.error, isError: true };
   const { todos } = v.data;
 
-  writeTodos(ctx.sandboxDir, todos);
+  try {
+    writeTodos(ctx.sandboxDir, todos);
+  } catch (e) {
+    return { content: `Error: ${(e as Error).message}`, isError: true };
+  }
 
   const counts = {
     pending: todos.filter(t => t.status === 'pending').length,

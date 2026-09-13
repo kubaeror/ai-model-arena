@@ -149,6 +149,7 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
 
   const bust = `?bust=${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const { createModelsRouter } = await import(`../../src/dashboard-server/routes/models.js${bust}`);
+  const { createProvidersRouter } = await import(`../../src/dashboard-server/routes/providers.js${bust}`);
   const { createScenariosRouter } = await import(`../../src/dashboard-server/routes/scenarios.js${bust}`);
   const { createRunsRouter } = await import(`../../src/dashboard-server/routes/runs.js${bust}`);
   const { createSecretsRouter } = await import(`../../src/dashboard-server/routes/secrets.js${bust}`);
@@ -161,6 +162,7 @@ export async function boot(t: TestContext, options: BootOptions = {}): Promise<A
   const { registerQueueRoutes } = await import(`../../src/dashboard-server/routes/queues.js${bust}`);
 
   app.use('/api/models', requireAuth(auth), requireRole('viewer'), createModelsRouter());
+  app.use('/api/providers', requireAuth(auth), requireRole('admin'), createProvidersRouter());
   app.use('/api/scenarios', requireAuth(auth), requireRole('viewer'), createScenariosRouter());
   app.use('/api/runs', requireAuth(auth), requireRole('viewer'), createRunsRouter());
   app.use('/api/secrets', requireAuth(auth), requireRole('admin'), createSecretsRouter());

@@ -495,7 +495,7 @@ describe('search_code regex shape guard', () => {
   });
   after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  const accepted = ['(foo|bar)+', '(a|b)+', '[ab]+', 'a+', '(ab)*', '([ab]|c)+', '((foo|bar))+', '(a?b)+', '(a?)+'];
+  const accepted = ['(foo|bar)+', '(a|b)+', '[ab]+', 'a+', '(ab)*', '([ab]|c)+', '((foo|bar))+', '(a?b)+', '(a?)+', '(a|b){35}', '(ab){2,3}'];
   for (const query of accepted) {
     it(`accepts ${query}`, async () => {
       const r = await search({ query, regex: true }, shapeCtx);
@@ -544,8 +544,32 @@ describe('search_code regex shape guard', () => {
     });
   }
 
+  const rejectedShapes = [
+    // Ambiguity under a bounded outer quantifier blows up multiplicatively.
+    '^(a|aa){35}b$',
+    '(a|aa){2}',
+    '(a{2,3}){35}',
+    // A long root-level run of nullable atoms before a required atom leaves
+    // exponentially many ways to split the input.
+    '^a?a?a?a?a?a?a?a?b$',
+    `^${'a?'.repeat(30)}b$`,
+  ];
+  for (const query of rejectedShapes) {
+    it(`rejects ${query}`, async () => {
+      const r = await search({ query, regex: true }, shapeCtx);
+      assert.strictEqual(r.isError, true, `expected ${query} to be rejected, got: ${r.content}`);
+      assert.match(r.content, /catastrophic|backtracking/i);
+    });
+  }
+
   it('accepts case-variant branches when case-sensitive', async () => {
     const r = await search({ query: '(a|A)+', regex: true, caseSensitive: true }, shapeCtx);
     assert.strictEqual(r.isError, false, `expected case-sensitive \`(a|A)+\` to be accepted, got: ${r.content}`);
+  });
+
+  it('rejects a regex longer than the 500-character cap with an actionable error', async () => {
+    const r = await search({ query: `^${'a'.repeat(501)}$`, regex: true }, shapeCtx);
+    assert.strictEqual(r.isError, true, `over-long regex must be rejected, got: ${r.content}`);
+    assert.match(r.content, /too long|500/);
   });
 });

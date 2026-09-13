@@ -62,22 +62,6 @@ async function stopServer(server: http.Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-function startFailingServer(): Promise<{ server: http.Server; port: number; hits: () => number }> {
-  let count = 0;
-  const server = http.createServer((_req, res) => {
-    count++;
-    res.writeHead(500, { 'content-type': 'text/plain' });
-    res.end('boom');
-  });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      assert.ok(address && typeof address === 'object');
-      resolve({ server, port: address.port, hits: () => count });
-    });
-  });
-}
-
 const PUBLIC_DNS = [{ address: '93.184.216.34', family: 4 }];
 
 function stubDns(addresses: Array<{ address: string; family: number }>): () => void {
@@ -94,7 +78,7 @@ interface CapturedFetch {
   redirect?: RequestInit['redirect'];
 }
 
-function stubFetch(status = 200): { restore: () => void; calls: CapturedFetch[] } {
+function stubFetch(status = 200, body = '{"ok":true}'): { restore: () => void; calls: CapturedFetch[] } {
   const original = globalThis.fetch;
   const calls: CapturedFetch[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -109,7 +93,7 @@ function stubFetch(status = 200): { restore: () => void; calls: CapturedFetch[] 
       body: typeof init?.body === 'string' ? init.body : '',
       redirect: init?.redirect,
     });
-    return new Response('{"ok":true}', { status, headers: { 'content-type': 'application/json' } });
+    return new Response(body, { status, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
   return { restore: () => { globalThis.fetch = original; }, calls };
 }
@@ -235,31 +219,69 @@ test('dispatchWebhooks with no registered webhooks makes no HTTP call', async ()
 });
 
 test('sendSlackNotification retries a 500 response twice before failing', async () => {
-  const { server, port, hits } = await startFailingServer();
-  activeServer = server;
+  const restoreDns = stubDns(PUBLIC_DNS);
+  const fetchStub = stubFetch(500, 'boom');
+  try {
+    const result = await sendSlackNotification('http://hooks.example.test/hooks/slack', {
+      type: DispatchEventType.onRunCompleted,
+      data: { runId: 'run-retry', scenario: 's', models: ['gpt-4o'], status: 'success' },
+    });
 
-  const result = await sendSlackNotification(`http://127.0.0.1:${port}/hooks/slack`, {
-    type: DispatchEventType.onRunCompleted,
-    data: { runId: 'run-retry', scenario: 's', models: ['gpt-4o'], status: 'success' },
-  });
-
-  assert.equal(hits(), 3, 'initial attempt + 2 retries');
-  assert.equal(result.success, false);
-  assert.match(result.error ?? '', /boom/);
+    assert.equal(fetchStub.calls.length, 3, 'initial attempt + 2 retries');
+    assert.equal(result.success, false);
+    assert.match(result.error ?? '', /boom/);
+  } finally {
+    fetchStub.restore();
+    restoreDns();
+  }
 });
 
 test('sendDiscordNotification retries a 500 response twice before failing', async () => {
-  const { server, port, hits } = await startFailingServer();
-  activeServer = server;
+  const restoreDns = stubDns(PUBLIC_DNS);
+  const fetchStub = stubFetch(500, 'boom');
+  try {
+    const result = await sendDiscordNotification('http://hooks.example.test/hooks/discord', {
+      type: DispatchEventType.onRunCompleted,
+      data: { runId: 'run-retry', scenario: 's', models: ['gpt-4o'], status: 'success' },
+    });
 
-  const result = await sendDiscordNotification(`http://127.0.0.1:${port}/hooks/discord`, {
-    type: DispatchEventType.onRunCompleted,
-    data: { runId: 'run-retry', scenario: 's', models: ['gpt-4o'], status: 'success' },
-  });
+    assert.equal(fetchStub.calls.length, 3, 'initial attempt + 2 retries');
+    assert.equal(result.success, false);
+    assert.match(result.error ?? '', /boom/);
+  } finally {
+    fetchStub.restore();
+    restoreDns();
+  }
+});
 
-  assert.equal(hits(), 3, 'initial attempt + 2 retries');
-  assert.equal(result.success, false);
-  assert.match(result.error ?? '', /boom/);
+test('channel senders refuse private literal targets without fetching', async () => {
+  const fetchStub = stubFetch();
+  try {
+    const result = await sendSlackNotification('http://127.0.0.1:9999/hooks/slack', {
+      type: DispatchEventType.onRunCompleted,
+      data: { runId: 'run-ssrf', scenario: 's', models: ['gpt-4o'], status: 'success' },
+    });
+    assert.equal(result.success, false);
+    assert.equal(fetchStub.calls.length, 0, 'private literal target must not be fetched');
+  } finally {
+    fetchStub.restore();
+  }
+});
+
+test('channel senders refuse hostnames that resolve to private addresses', async () => {
+  const restoreDns = stubDns([{ address: '10.0.0.7', family: 4 }]);
+  const fetchStub = stubFetch();
+  try {
+    const result = await sendDiscordNotification('http://internal.example.test/hooks/discord', {
+      type: DispatchEventType.onRunCompleted,
+      data: { runId: 'run-ssrf', scenario: 's', models: ['gpt-4o'], status: 'success' },
+    });
+    assert.equal(result.success, false);
+    assert.equal(fetchStub.calls.length, 0, 'private-resolving host must not be fetched');
+  } finally {
+    fetchStub.restore();
+    restoreDns();
+  }
 });
 
 test('budget_exceeded reaches registered webhooks via startRun reserve-time path', async () => {

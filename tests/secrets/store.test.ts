@@ -77,10 +77,10 @@ test('regex-special keys (MY.KEY, MY$KEY) round-trip and stay single-line', () =
   trackEnvVar('MY$KEY');
   store.set('MY.KEY', 'dot');
   store.set('MY.KEY', 'dot2');
-  assert.equal(store.get('MY.KEY'), 'dot2');
+  assert.equal(process.env['MY.KEY'], 'dot2', 'set must update process.env for the writer');
   store.set('MY$KEY', 'dollar');
   store.set('MY$KEY', 'dollar2');
-  assert.equal(store.get('MY$KEY'), 'dollar2');
+  assert.equal(process.env['MY$KEY'], 'dollar2');
   const content = readEnv(envFile);
   assert.equal(countLines(content, 'MY\\.KEY'), 1, `got: ${content}`);
   assert.equal(countLines(content, 'MY\\$KEY'), 1, `got: ${content}`);
@@ -97,7 +97,7 @@ test('a regex-special key must not clobber another key\'s .env line', () => {
   store.set('MY.KEY', 'dot');
   store.set('MYAKEY', 'a');
   store.set('MY.KEY', 'dot2');
-  assert.equal(store.get('MY.KEY'), 'dot2');
+  assert.equal(process.env['MY.KEY'], 'dot2');
   assert.equal(store.get('MYAKEY'), 'a');
   const content = readEnv(envFile);
   assert.ok(content.includes('MYAKEY="a"'), `got: ${content}`);
@@ -151,6 +151,36 @@ test('set/delete throw in k8s mode', () => {
   const store = new SecretStore({ platform: 'kubernetes', secretsDir: '/tmp/does-not-exist' });
   assert.rejects(store.set('K', 'v'), /requires k8s API/);
   assert.rejects(store.delete('K'), /requires k8s API/);
+});
+
+test('get() refuses path traversal outside the k8s secrets dir', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-secrets-traversal-'));
+  const secretsDir = path.join(root, 'secrets');
+  fs.mkdirSync(secretsDir, { recursive: true });
+  fs.writeFileSync(path.join(root, 'serviceaccount-token'), 'top-secret-token');
+  const store = new SecretStore({ platform: 'kubernetes', secretsDir });
+  try {
+    assert.equal(store.get('../serviceaccount-token'), undefined, 'parent traversal must not read outside the mount');
+    assert.equal(store.get('../../etc/passwd'), undefined, 'deep traversal must not read host files');
+    assert.equal(store.get('lower-case'), undefined, 'invalid env names must return undefined');
+    assert.equal(store.get('MY.KEY'), undefined, 'path separators/dots are not valid env names');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('get() refuses names that are not valid env var identifiers in bare-metal mode', () => {
+  const { dir, store } = makeTempEnv();
+  process.env['LOWER_case'] = 'x';
+  process.env['MY.DOT'] = 'y';
+  try {
+    assert.equal(store.get('LOWER_case'), undefined);
+    assert.equal(store.get('MY.DOT'), undefined);
+  } finally {
+    delete process.env['LOWER_case'];
+    delete process.env['MY.DOT'];
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test.after(() => {

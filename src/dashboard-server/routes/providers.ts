@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { listCustomProviders, upsertCustomProvider, deleteCustomProvider } from '../../providers/custom.js';
 import { BUILTIN_PROVIDERS } from '../../providers/index.js';
 import { validateProviderUrl } from '../../providers/url-validator.js';
+import { isValidSecretEnvVar } from '../../secrets/store.js';
 import { probeProvider } from '../../providers/capability-probe.js';
 import { auditSafe } from '../../auth/rbac.js';
 import type { AuthedRequest } from '../auth.js';
@@ -17,7 +18,9 @@ const CustomProviderInputSchema = z.object({
     return v.ok;
   }, { message: 'URL targets a blocked address or uses an unsupported scheme/port' }).optional(),
   authScheme: z.enum(['bearer', 'x-api-key', 'none']),
-  envVar: z.string().optional(),
+  envVar: z.string().refine(isValidSecretEnvVar, {
+    message: 'envVar must be an uppercase env var name like MY_API_KEY',
+  }).optional(),
   headerName: z.string().optional(),
   adapter: z.enum(['openai-compat', 'anthropic', 'google', 'bedrock']),
 });
