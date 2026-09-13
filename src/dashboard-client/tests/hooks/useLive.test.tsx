@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { LiveProvider, useRunLive } from '../../src/hooks/useLive.js';
 
@@ -124,6 +124,6 @@ describe('useLive resubscribe', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2100);
     });
-    expect(MockWebSocket.instances.length).toBe(1, 'no reconnect after provider disposal');
+    expect(MockWebSocket.instances.length, 'no reconnect after provider disposal').toBe(1);
   });
 });

@@ -29,7 +29,7 @@ const { apiGetMock, apiPostMock, defaultGetImpl } = vi.hoisted(() => {
 });
 
 vi.mock('../../src/lib/api', async () => {
-  const actual = await vi.importActual('../../src/lib/api');
+  const actual = await vi.importActual<typeof import('../../src/lib/api')>('../../src/lib/api');
   return { ...actual, api: { ...actual.api, get: apiGetMock, post: apiPostMock } };
 });
 

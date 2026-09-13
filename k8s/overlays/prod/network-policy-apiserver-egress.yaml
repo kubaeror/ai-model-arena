@@ -1,0 +1,39 @@
+---
+# OPT-IN NetworkPolicy: dashboard -> Kubernetes API (port 443).
+#
+# NOT referenced by k8s/overlays/prod/kustomization.yaml by default. Include it
+# only when the cluster CNI enforces NetworkPolicy (Calico/Cilium). The base
+# `deny-all-ingress` policy defaults egress to DNS-only, so without this
+# allowance the dashboard cannot reach the kube-apiserver and these fail:
+#   - Settings -> API Keys: create/patch the `provider-keys` Secret
+#   - Runner scaling: get/patch runner Deployments and keda.sh ScaledObjects
+#
+# To include it, add the file to `resources:` in
+# k8s/overlays/prod/kustomization.yaml, or apply it directly:
+#   kubectl apply -f k8s/overlays/prod/network-policy-apiserver-egress.yaml
+#
+# The CIDR below is the kubeadm/minikube default Service range (the in-cluster
+# `kubernetes` Service ClusterIP lives at 10.96.0.1). Managed clusters expose a
+# different apiserver endpoint (EKS/GKE/AKS private or public VIP) and on some
+# CNIs ClusterIP traffic is DNAT'd before policy evaluation — verify with
+# `kubectl get svc kubernetes -n default` and adjust the cidr, or replace the
+# ipBlock with the control-plane/node CIDR returned by
+# `kubectl get endpoints kubernetes -n default`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dashboard-to-apiserver
+  namespace: ai-arena
+spec:
+  podSelector:
+    matchLabels:
+      app: dashboard
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.96.0.0/12
+      ports:
+        - port: 443
+          protocol: TCP

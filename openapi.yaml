@@ -408,7 +408,6 @@ paths:
         - $ref: '#/components/parameters/StrId'
       responses:
         '200': { description: Retry triggered }
-        '400': { description: id is required }
 
   # ── Providers ──────────────────────────────────────────────────────────────
   /api/providers:

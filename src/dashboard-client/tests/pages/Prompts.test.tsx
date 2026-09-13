@@ -6,8 +6,6 @@ import { Suspense } from 'react';
 import { Prompts } from '../../src/pages/Prompts';
 
 const {
-  prompts,
-  versions,
   listPromptsMock,
   createPromptMock,
   updatePromptMock,

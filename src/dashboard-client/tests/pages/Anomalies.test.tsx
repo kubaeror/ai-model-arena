@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { Suspense } from 'react';
 import { Anomalies } from '../../src/pages/Anomalies';
 
-const { anomalies, listAnomaliesMock, resolveAnomalyMock } = vi.hoisted(() => {
+const { listAnomaliesMock, resolveAnomalyMock } = vi.hoisted(() => {
   const anomalies = [
     { id: 1, severity: 'high', type: 'latency', model: 'gpt-4o', run_id: 'run-123', description: 'P95 latency spiked above threshold', detected_at: '2026-01-01T00:00:00.000Z', resolved: false },
     { id: 2, severity: 'low', type: 'loop', model: 'claude-3.7', run_id: 'run-456', description: 'Repeated tool calls detected', detected_at: '2026-01-01T01:00:00.000Z', resolved: true, resolved_as: 'false_positive' },

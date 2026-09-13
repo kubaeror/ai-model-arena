@@ -81,9 +81,13 @@ kubectl -n observability create secret generic metrics-token \
 > dashboard additionally needs egress to the kube-apiserver to manage
 > `provider-keys` (`create`/`patch` Secret) and scale runners (`patch`
 > Deployment / `keda.sh` ScaledObject); add an apiserver egress allowance or
-> those actions fail. minikube's default kindnet does not enforce
-> NetworkPolicy, so dev clusters are unaffected.
-
+> those actions fail. An opt-in manifest is provided at
+> `k8s/overlays/prod/network-policy-apiserver-egress.yaml` (not referenced by
+> `kustomization.yaml`). Include it when your CNI enforces policy — add it to
+> the prod overlay's `resources:` or `kubectl apply -f` it directly — and
+> adjust its CIDR to your cluster's apiserver endpoint. minikube's default
+> kindnet does not enforce NetworkPolicy, so dev clusters are unaffected.
+>
 > Note: `WEBHOOK_SECRET_KEY` is marked `optional: true` so the pod can start
 > on a fresh cluster where the `webhook-secret` Secret does not exist yet.
 > Without it, the dashboard refuses to encrypt/decrypt webhook secrets in

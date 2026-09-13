@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "lint": "eslint src",
     "test": "NODE_ENV=development vitest run",
     "test:watch": "NODE_ENV=development vitest"

@@ -54,7 +54,7 @@ describe('Schedules', () => {
     const checkboxes = await screen.findAllByRole('checkbox');
     expect(checkboxes).toHaveLength(2);
 
-    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[0]!);
     await waitFor(() => {
       expect(updateScheduleMock).toHaveBeenCalledWith('s1', { enabled: false });
     });
@@ -66,7 +66,7 @@ describe('Schedules', () => {
     const checkboxes = await screen.findAllByRole('checkbox');
     expect(checkboxes).toHaveLength(2);
 
-    fireEvent.click(checkboxes[0]);
+    fireEvent.click(checkboxes[0]!);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('toggle exploded');
   });

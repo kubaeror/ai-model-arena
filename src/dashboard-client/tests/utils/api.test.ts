@@ -113,7 +113,7 @@ describe('updateSchedule', () => {
       headers: new Headers({ 'content-type': 'application/json' }),
       json: async () => body,
     });
-    let captured: { url: string; init: RequestInit } | undefined;
+    let captured: { url: string; init?: RequestInit } | undefined;
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       captured = { url, init };
       return okJson({ id: 's1', scenario: 'x', models: [], cron: '* * * * *', enabled: false, state: null });

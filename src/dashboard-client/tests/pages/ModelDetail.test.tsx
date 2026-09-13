@@ -7,7 +7,7 @@ import { ModelDetail } from '../../src/pages/ModelDetail';
 
 vi.mock('echarts-for-react', () => ({ default: () => <div data-testid="echarts-mock" /> }));
 
-const { modelDetail, apiFetchMock } = vi.hoisted(() => {
+const { apiFetchMock } = vi.hoisted(() => {
   const modelDetail = {
     model: {
       id: 'gpt-4o',

@@ -232,7 +232,19 @@ create the unique indexes `uq_run_models_run_model (run_id, model)` and
 `uq_user_roles_user_role (user_id, role_id)`. If the target database already
 contains duplicates, index creation aborts, the migration transaction rolls
 back, and new pods crash-loop in `Init`. Check for duplicates before upgrading
-(same SQL on SQLite and Postgres):
+with the preflight script (opens the DB directly, without applying migrations;
+exits non-zero when duplicates are found and prints the dedupe SQL):
+
+```bash
+# SQLite (reads ARENA_DB_PATH, default <OUTPUT_ROOT>/arena.db)
+npx tsx scripts/db/preflight-unique-indexes.ts
+
+# Postgres
+DB_DRIVER=postgres DATABASE_URL=postgres://user:pass@host:5432/arena \
+  npx tsx scripts/db/preflight-unique-indexes.ts
+```
+
+The equivalent manual queries (same SQL on SQLite and Postgres):
 
 ```sql
 SELECT run_id, model, COUNT(*) AS n FROM run_models GROUP BY run_id, model HAVING COUNT(*) > 1;
@@ -276,6 +288,15 @@ DROP INDEX IF EXISTS "uq_user_roles_user_role";
 
 Then run the dedupe statements above and re-run `npm run db:migrate`; the
 `IF NOT EXISTS` index creation re-applies cleanly.
+
+### Rotating the Dashboard Password (`dashboot.err` history)
+
+The repository history once contained a tracked `dashboot.err` scratch file with
+a generated `DASHBOARD_PASSWORD`. The file is untracked now, but untracking does
+not purge history. If that generated password was ever used in any environment,
+rotate it now: set a new `DASHBOARD_PASSWORD` secret, restart the dashboard
+workload, and invalidate existing sessions (restart also clears in-memory
+tokens). Treat any credential that was ever committed as compromised.
 
 ### Database Backup (PostgreSQL)
 

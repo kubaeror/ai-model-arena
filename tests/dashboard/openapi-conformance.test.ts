@@ -11,10 +11,10 @@
  *     entries with descriptions, and no other ws entries may exist.
  *
  * The mounted-router list below mirrors src/dashboard-server/server.ts
- * (mounts at lines 261-346, direct routes at 126-321, docs at 349, WS at
- * 372-382). Per-router paths are extracted from the real router factories so
- * route drift inside a router is caught automatically; only the mount
- * prefixes are mirrored.
+ * (JWT mounts at lines 259-303, API-key v1 mounts at 324-346, direct routes
+ * at 138-321, docs at 349, WS at 372-382). Per-router paths are extracted
+ * from the real router factories so route drift inside a router is caught
+ * automatically; only the mount prefixes are mirrored.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,7 +56,7 @@ import { registerQueueRoutes } from '../../src/dashboard-server/routes/queues.js
 
 const SPEC_PATH = fileURLToPath(new URL('../../openapi.yaml', import.meta.url));
 
-/** Mirror of server.ts:261-285 — JWT-authenticated /api/* router mounts. */
+/** Mirror of server.ts:259-303 — JWT-authenticated /api/* router mounts. */
 const JWT_MOUNTS: Array<[string, () => Router]> = [
   ['/api/models', createModelsRouter],
   ['/api/scenarios', createScenariosRouter],
@@ -85,7 +85,7 @@ const JWT_MOUNTS: Array<[string, () => Router]> = [
   ['/api/regression', createRegressionRouter],
 ];
 
-/** Mirror of server.ts:325-346 — API-key-authenticated /api/v1/* mounts. */
+/** Mirror of server.ts:324-346 — API-key-authenticated /api/v1/* mounts. */
 const V1_MOUNTS: Array<[string, () => Router]> = [
   ['/api/v1/models', createModelsRouter],
   ['/api/v1/scenarios', createScenariosRouter],
