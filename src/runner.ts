@@ -599,12 +599,16 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
       // These must ride in sendOpts (not only as span attributes) so every
       // adapter — and the subagent — receives them. Null capability fields
       // mean "omit": unsupported temperature on reasoning-only models
-      // (o-series) and max_tokens with no known output limit both 400.
+      // (o-series). A reasoning-only model keeps its output cap but the cap
+      // must be sent as max_completion_tokens (max_tokens 400s).
       const reasoningOpt = toSendOptsReasoning(scenario.reasoning);
       const buildSendOpts = (m: ResolvedModel | null): SendOpts => {
         const opts: SendOpts = {};
         if (m?.temperature != null) opts.temperature = m.temperature;
-        if (m?.maxTokens != null && !m.reasoningOnly) opts.maxTokens = m.maxTokens;
+        if (m?.maxTokens != null) {
+          opts.maxTokens = m.maxTokens;
+          if (m.reasoningOnly) opts.maxTokensField = 'max_completion_tokens';
+        }
         if (reasoningOpt) opts.reasoning = reasoningOpt;
         return opts;
       };
@@ -668,7 +672,6 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
             provider: currentProvider,
             model: currentModel,
             billingModel: currentBillingModel,
-            billingProvider: currentProvider,
             temperature: sendOpts.temperature,
             maxTokens: sendOpts.maxTokens,
             sendOpts,

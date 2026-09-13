@@ -88,10 +88,8 @@ test('runAgentLoop tags each per-call usage with the serving model for billing',
     conv: stubConv(),
     logger: stubLogger(),
     billingModel: 'anthropic/claude-sonnet-4',
-    billingProvider: 'anthropic',
   });
 
   assert.equal(result.usagePerCall.length, 1);
   assert.equal(result.usagePerCall[0]?.model, 'anthropic/claude-sonnet-4');
-  assert.equal(result.usagePerCall[0]?.provider, 'anthropic');
 });

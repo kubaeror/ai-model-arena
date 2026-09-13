@@ -39,6 +39,7 @@ function wrapAdapter(
     const effectiveOpts: SendOpts = {
       ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
+      ...(opts?.maxTokensField ? { maxTokensField: opts.maxTokensField } : {}),
       ...(opts?.reasoning ? { reasoning: opts.reasoning } : {}),
     };
     const attributes: Record<string, unknown> = {

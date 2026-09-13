@@ -98,6 +98,7 @@ test('retryNotification resets a failed row to pending (clears backoff gate)', a
   await retryNotification(id);
   row = await getNotificationById(id);
   assert.equal(row?.status, 'pending');
+  assert.equal(row?.attempts, 0, 'retry restarts the attempt budget');
   assert.equal(row?.nextAttemptAt, null, 'retry clears the backoff gate');
   assert.equal(row?.lastError, null);
 
@@ -107,6 +108,45 @@ test('retryNotification resets a failed row to pending (clears backoff gate)', a
     timestamp: new Date().toISOString(),
   }));
   assert.equal(r.delivered, 1, 'retried row is immediately due again');
+  assert.equal((await getNotificationById(id))?.status, 'delivered');
+});
+
+test('retryNotification revives a dead row with a fresh attempt budget', async () => {
+  initDb(':memory:');
+  const db = getDrizzleDb();
+  const id = await persistNotification(
+    { type: DispatchEventType.onRunCompleted, data: { runId: 'dead-retry' } },
+    'slack',
+  );
+  const failing = async () => ({
+    channel: 'slack',
+    success: false,
+    error: 'poison',
+    timestamp: new Date().toISOString(),
+  });
+
+  for (let i = 0; i < MAX_DELIVERY_ATTEMPTS; i++) {
+    // Clear only the backoff gate — retryNotification would reset attempts.
+    await db.update(notifications).set({ next_attempt_at: null }).where(eq(notifications.id, id));
+    await deliverDueNotifications(undefined, failing);
+  }
+  let row = await getNotificationById(id);
+  assert.equal(row?.status, 'dead');
+  assert.equal(row?.attempts, MAX_DELIVERY_ATTEMPTS);
+
+  await retryNotification(id);
+  row = await getNotificationById(id);
+  assert.equal(row?.status, 'pending');
+  assert.equal(row?.attempts, 0, 'a revived row must not re-die on its next failure');
+  assert.equal(row?.lastError, null);
+  assert.equal(row?.nextAttemptAt, null, 'revived rows are immediately due');
+
+  const r = await deliverDueNotifications(undefined, async () => ({
+    channel: 'slack',
+    success: true,
+    timestamp: new Date().toISOString(),
+  }));
+  assert.equal(r.delivered, 1, 'a retried dead row is delivered by the next sweep');
   assert.equal((await getNotificationById(id))?.status, 'delivered');
 });
 
@@ -372,8 +412,11 @@ test('a row that exhausts max attempts is dead-lettered and stops retrying', asy
     timestamp: new Date().toISOString(),
   });
 
+  const db = getDrizzleDb();
   for (let i = 0; i < MAX_DELIVERY_ATTEMPTS; i++) {
-    await retryNotification(id); // clear the backoff gate so each sweep sees the row
+    // Clear only the backoff gate so each sweep sees the row; retryNotification
+    // would also reset attempts and the row would never reach the dead cap.
+    await db.update(notifications).set({ next_attempt_at: null }).where(eq(notifications.id, id));
     const r = await deliverDueNotifications(undefined, sender);
     assert.equal(r.failed, 1, `attempt ${i + 1} fails`);
   }

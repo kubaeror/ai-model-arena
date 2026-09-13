@@ -110,24 +110,34 @@ export function resolveSeedDir(sandboxRoot: string, starterFiles: string): strin
 }
 
 /**
- * Reject writes to an existing inode that has multiple hardlinks. `safeResolve`
- * only resolves symlinks, so a hardlink inside the sandbox to an outside inode
- * looks like a regular file; truncating it would mutate the outside file.
- * O_NOFOLLOW also refuses a symlink final component. Brand-new files are exempt
- * (nothing is shared yet).
+ * Reject writes to an existing inode that is not a regular single-link file.
+ * `safeResolve` only resolves symlinks, so a hardlink inside the sandbox to an
+ * outside inode looks like a regular file; truncating it would mutate the
+ * outside file. O_NOFOLLOW also refuses a symlink final component. O_NONBLOCK
+ * keeps a model-created FIFO from blocking the event loop on open: a FIFO with
+ * no reader fails fast with ENXIO, and one with a reader is caught by the
+ * fstat non-regular check. Brand-new files are exempt (nothing is shared yet).
  */
 export function assertSafeWriteTarget(absPath: string): void {
-  const flags = fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW || 0);
+  const flags = fs.constants.O_WRONLY
+    | (fs.constants.O_NOFOLLOW || 0)
+    | (fs.constants.O_NONBLOCK || 0);
   let fd: number;
   try {
     fd = fs.openSync(absPath, flags);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if ((err as NodeJS.ErrnoException).code === 'ENXIO') {
+      throw new Error('Refusing to write to a FIFO with no reader.');
+    }
     throw err;
   }
   try {
     const stat = fs.fstatSync(fd);
-    if (stat.isFile() && stat.nlink > 1) {
+    if (!stat.isFile()) {
+      throw new Error('Refusing to write to a non-regular file (FIFO, device, or socket).');
+    }
+    if (stat.nlink > 1) {
       throw new Error('Refusing to write to a hardlinked file (multiple links to the same inode).');
     }
   } finally {

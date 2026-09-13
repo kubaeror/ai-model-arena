@@ -93,9 +93,8 @@ interface TurnLoopOptions {
   taskCompleteToolName?: string;
   /** Model-send options forwarded to every adapter.sendMessage call. */
   sendOpts?: SendOpts;
-  /** Serving model/provider stamped on each per-call usage entry for billing. */
+  /** Serving model stamped on each per-call usage entry for billing. */
   billingModel?: string;
-  billingProvider?: string;
   /** First turn number; defaults to 1. */
   startTurn?: number;
   /** Tool-result truncation cap in chars; defaults to 60_000. */
@@ -205,7 +204,6 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
       usagePerCall.push({
         ...response.usage,
         ...(opts.billingModel ? { model: opts.billingModel } : {}),
-        ...(opts.billingProvider ? { provider: opts.billingProvider } : {}),
       });
     }
 

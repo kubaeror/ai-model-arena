@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { safeResolve, isWithin, assertSafeWriteTarget } from '../../src/sandbox/sandbox.js';
 
 test('rejects .. traversal', () => {
@@ -120,6 +121,55 @@ test('assertSafeWriteTarget rejects an existing hardlinked file', () => {
     fs.linkSync(original, alias);
     assert.throws(() => assertSafeWriteTarget(alias), /hardlink/i);
     assert.throws(() => assertSafeWriteTarget(original), /hardlink/i);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// ── FIFO / special-file write containment ────────────────────────────────
+// A model can create a FIFO inside the sandbox. Opening it O_WRONLY blocks
+// the event loop until a reader appears, so the guard must open non-blocking
+// (ENXIO when there is no reader) and reject non-regular inodes via fstat.
+
+const SANDBOX_MODULE_URL = new URL('../../src/sandbox/sandbox.ts', import.meta.url).href;
+
+/** Run assertSafeWriteTarget on `absPath` in a child process so a blocking
+ *  open cannot hang the test runner; a blocked child is killed by the timeout. */
+function runWriteTargetInChild(absPath: string) {
+  const code = `import(${JSON.stringify(SANDBOX_MODULE_URL)}).then((m) => {
+    try { m.assertSafeWriteTarget(process.argv[1]); console.log('OPENED_OK'); process.exit(1); }
+    catch (err) { console.log('REJECTED:' + err.message); process.exit(0); }
+  });`;
+  return spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code, absPath], {
+    cwd: process.cwd(), encoding: 'utf8', timeout: 5000,
+  });
+}
+
+test('assertSafeWriteTarget rejects a reader-less FIFO without blocking', { skip: process.platform === 'win32' }, () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-fifo-noreader-'));
+  const fifo = path.join(base, 'pipe');
+  try {
+    execFileSync('mkfifo', [fifo]);
+    const result = runWriteTargetInChild(fifo);
+    assert.equal(result.error, undefined, `guard must not block waiting for a FIFO reader: ${(result.error as NodeJS.ErrnoException | undefined)?.code ?? ''}`);
+    assert.equal(result.status, 0, `guard must reject the FIFO, got status ${result.status}`);
+    assert.match(result.stdout, /REJECTED/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('assertSafeWriteTarget rejects a FIFO even when a reader is present', { skip: process.platform === 'win32' }, () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-fifo-reader-'));
+  const fifo = path.join(base, 'pipe');
+  try {
+    execFileSync('mkfifo', [fifo]);
+    const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    try {
+      assert.throws(() => assertSafeWriteTarget(fifo), /non-regular|FIFO/i);
+    } finally {
+      fs.closeSync(readerFd);
+    }
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

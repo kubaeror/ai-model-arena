@@ -45,12 +45,11 @@ export interface TokenUsage {
   /** Computed: cacheReadTokens / prompt. Populated by metrics layer, not adapters. */
   cacheHitRate?: number;
   /**
-   * Serving model/provider for this call. Only populated on per-call usage
-   * entries (usagePerCall) so a fallback hop can be billed at its own rates;
-   * absent on aggregate totals and legacy entries.
+   * Serving model for this call. Only populated on per-call usage entries
+   * (usagePerCall) so a fallback hop can be billed at its own rates; absent on
+   * aggregate totals and legacy entries.
    */
   model?: string;
-  provider?: string;
 }
 
 /** Normalised response from any model adapter. */

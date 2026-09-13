@@ -65,6 +65,40 @@ test('BedrockAdapter merges every system message and forwards inference options'
   }
 });
 
+test('BedrockAdapter maps prompt-cache usage into the canonical token shape', async () => {
+  process.env.AWS_BEDROCK_REGION = 'us-east-1';
+  const adapter = new BedrockAdapter(bedrockDescriptor, 'anthropic.claude-3-sonnet-20240229-v1:0', { logger: stubLogger() });
+
+  const fakeClient = {
+    send: async () => ({
+      output: { message: { role: 'assistant', content: [{ text: 'cached' }] } },
+      // Converse reports UNcached input separately: total input =
+      // inputTokens + cacheReadInputTokens + cacheWriteInputTokens.
+      usage: {
+        inputTokens: 46, outputTokens: 17, totalTokens: 1474,
+        cacheReadInputTokens: 1000, cacheWriteInputTokens: 411,
+      },
+      stopReason: 'end_turn',
+    }),
+  };
+
+  const probe = adapter as unknown as { getClient(): Promise<unknown>; client: unknown; clientCreatedAt: number };
+  await probe.getClient();
+  probe.client = fakeClient;
+  probe.clientCreatedAt = Date.now();
+
+  try {
+    const result = await adapter.sendMessage([{ role: 'user', content: 'hello' }], []);
+    assert.equal(result.usage.prompt, 1457, 'prompt is the total input including cached tokens');
+    assert.equal(result.usage.completion, 17);
+    assert.equal(result.usage.total, 1474);
+    assert.equal(result.usage.cacheReadTokens, 1000);
+    assert.equal(result.usage.cacheWriteTokens, 411);
+  } finally {
+    delete process.env.AWS_BEDROCK_REGION;
+  }
+});
+
 test('BedrockAdapter throws in gateway mode without key', () => {
   process.env.AWS_BEDROCK_GATEWAY_URL = 'https://gateway.example.com';
   delete process.env.AWS_BEDROCK_GATEWAY_KEY;

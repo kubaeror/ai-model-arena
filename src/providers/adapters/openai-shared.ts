@@ -40,7 +40,11 @@ export function buildOpenAIBody(
     body.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
   }
   if (opts?.temperature !== undefined) body.temperature = opts.temperature;
-  if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+  if (opts?.maxTokens !== undefined) {
+    // o-series reasoning models reject max_tokens; they require the
+    // max_completion_tokens field instead (signalled by the caller).
+    body[opts.maxTokensField ?? 'max_tokens'] = opts.maxTokens;
+  }
   if (opts?.reasoning?.type === 'effort') body.reasoning_effort = String(opts.reasoning.value ?? 'medium');
   return body;
 }

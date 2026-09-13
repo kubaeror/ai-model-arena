@@ -1816,10 +1816,11 @@ test('reasoning-only models do not receive unsupported temperature or max_tokens
     await waitFor(async () => (await queue.size()) === 0, 10000, 'task acked');
     assert.equal(fake.calls, 1, 'reasoning-only task should execute exactly one turn');
     assert.ok(fake.lastOpts, 'adapter must receive send options');
-    // o3 rejects temperature and max_tokens (it needs max_completion_tokens):
-    // both must be omitted rather than inherited from defaults.
+    // o3 rejects temperature and max_tokens; the catalog output cap must be
+    // mapped to max_completion_tokens.
     assert.ok(!('temperature' in fake.lastOpts), 'reasoning-only model must not receive temperature');
-    assert.ok(!('maxTokens' in fake.lastOpts), 'reasoning-only model must not receive max tokens');
+    assert.equal(fake.lastOpts.maxTokens, 100000, 'reasoning-only model keeps its catalog output cap');
+    assert.equal(fake.lastOpts.maxTokensField, 'max_completion_tokens', 'reasoning-only cap uses the OpenAI field name');
   } finally {
     ac.abort();
     await runnerDone;

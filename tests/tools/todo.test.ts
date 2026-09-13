@@ -109,4 +109,36 @@ describe('todoRead + todoWrite', () => {
     assert.strictEqual(r.isError, true, `symlinked .arena must be rejected, got: ${r.content}`);
     assert.ok(!fs.existsSync(path.join(outsideDir, 'todos.json')), 'outside dir must not receive todos.json');
   });
+
+  it('todoRead reads a read-only todos.json without an O_WRONLY open', async () => {
+    const roCtx: ToolExecutionContext = { ...ctx, sandboxDir: fs.mkdtempSync(path.join(tmp, 'todo-readonly-')) };
+    fs.mkdirSync(path.join(roCtx.sandboxDir, '.arena'), { recursive: true });
+    const fp = path.join(roCtx.sandboxDir, '.arena', 'todos.json');
+    fs.writeFileSync(fp, JSON.stringify([
+      { id: 'ro', content: 'Read-only task', status: 'pending', priority: 'high' },
+    ]));
+    fs.chmodSync(fp, 0o444);
+
+    try {
+      const r = await todoRead({}, roCtx);
+      assert.strictEqual(r.isError, false);
+      assert.ok(r.content.includes('Read-only task'), `read-only todos must be read, got: ${r.content}`);
+    } finally {
+      fs.chmodSync(fp, 0o644);
+    }
+  });
+
+  it('todoRead still rejects a symlinked .arena directory', async () => {
+    const outsideDir = path.join(tmp, 'outside-arena-read');
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, 'todos.json'), JSON.stringify([
+      { id: 'leak', content: 'Outside secret', status: 'pending', priority: 'high' },
+    ]));
+    const symlinkCtx: ToolExecutionContext = { ...ctx, sandboxDir: fs.mkdtempSync(path.join(tmp, 'todo-symlink-read-sb-')) };
+    fs.symlinkSync(outsideDir, path.join(symlinkCtx.sandboxDir, '.arena'), 'dir');
+
+    const r = await todoRead({}, symlinkCtx);
+    assert.ok(!r.content.includes('Outside secret'), 'a symlinked .arena must not leak outside todos');
+    assert.ok(r.content.includes('(no tasks)'));
+  });
 });

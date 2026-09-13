@@ -5,6 +5,12 @@ export interface SendOpts {
   reasoning?: { type: 'effort' | 'toggle' | 'budget_tokens'; value?: string | number };
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Wire field carrying `maxTokens` on OpenAI-compatible bodies. Reasoning-only
+   * models (o-series) reject `max_tokens` and require `max_completion_tokens`;
+   * every other adapter ignores this signal and uses `maxTokens` directly.
+   */
+  maxTokensField?: 'max_tokens' | 'max_completion_tokens';
 }
 
 export interface ModelAdapter {

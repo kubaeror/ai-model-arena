@@ -282,11 +282,14 @@ export async function getNotificationById(id: string): Promise<OutboxRow | null>
   return row ? toRow(row as unknown as Record<string, unknown>) : null;
 }
 
-/** Reset a row so the delivery loop picks it up on its next tick. */
+/** Reset a row so the delivery loop picks it up on its next tick, restarting
+ *  the attempt budget: reviving a dead row without clearing `attempts` would
+ *  make the very next failure dead-letter it again. */
 export async function retryNotification(id: string): Promise<void> {
   const db = getDrizzleDb();
   await db.update(notifications).set({
     status: 'pending',
+    attempts: 0,
     next_attempt_at: null,
     last_error: null,
   }).where(eq(notifications.id, id));

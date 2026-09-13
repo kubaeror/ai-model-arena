@@ -182,13 +182,21 @@ export class BedrockAdapter extends BaseAdapter implements ModelAdapter {
         }
       }
 
+      const cacheRead = usage?.cacheReadInputTokens;
+      const cacheWrite = usage?.cacheWriteInputTokens;
       return {
         text,
         toolCalls,
         usage: {
-          prompt: usage?.inputTokens,
+          // Converse reports UNcached input separately from cache read/write
+          // (AWS: total input = inputTokens + cacheReadInputTokens +
+          // cacheWriteInputTokens), so `prompt` is summed to the canonical
+          // total input like the Anthropic adapter.
+          prompt: (usage?.inputTokens ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0),
           completion: usage?.outputTokens,
           total: usage?.totalTokens,
+          cacheReadTokens: cacheRead,
+          cacheWriteTokens: cacheWrite,
         },
         stopReason: response.stopReason,
         raw: response,
