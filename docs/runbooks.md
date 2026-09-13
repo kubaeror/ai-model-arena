@@ -295,8 +295,14 @@ The repository history once contained a tracked `dashboot.err` scratch file with
 a generated `DASHBOARD_PASSWORD`. The file is untracked now, but untracking does
 not purge history. If that generated password was ever used in any environment,
 rotate it now: set a new `DASHBOARD_PASSWORD` secret, restart the dashboard
-workload, and invalidate existing sessions (restart also clears in-memory
-tokens). Treat any credential that was ever committed as compromised.
+workload, and treat any credential that was ever committed as compromised.
+Rotating the password alone does not invalidate tokens already issued: sessions
+are stateless JWTs signed with `DASHBOARD_JWT_SECRET` (12h default TTL) and stay
+valid until they expire. After rotating the password, also rotate
+`DASHBOARD_JWT_SECRET` (or explicitly revoke the outstanding tokens) so tokens
+minted before the rotation can no longer be used. Restarting the dashboard
+clears the in-memory revocation blacklist (Redis-backed revocations survive when
+`DASHBOARD_REDIS_URL` is set); it does not invalidate issued tokens.
 
 ### Database Backup (PostgreSQL)
 

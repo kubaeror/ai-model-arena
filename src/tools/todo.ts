@@ -80,8 +80,16 @@ function readTodos(dir: string): TodoItem[] {
   }
   let raw: string;
   try {
-    const fd = fs.openSync(fp, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    // Read-path mirror of assertSafeWriteTarget: O_NONBLOCK keeps a model-made
+    // FIFO from blocking the open, and fstat rejects non-regular or hardlinked
+    // inodes so a link inside .arena cannot read an outside file.
+    const fd = fs.openSync(
+      fp,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0),
+    );
     try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.nlink > 1) return [];
       raw = fs.readFileSync(fd, 'utf8');
     } finally {
       fs.closeSync(fd);

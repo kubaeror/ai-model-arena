@@ -115,7 +115,7 @@ export async function listAnomalies(q: AnomalyQuery = {}): Promise<AnomalyRecord
   }
   const rows = await db.select().from(anomalies)
     .where(conditions.length ? and(...conditions) : undefined)
-    .orderBy(desc(anomalies.detected_at))
+    .orderBy(desc(anomalies.detected_at), desc(anomalies.id))
     .limit(q.limit ?? 100)
     .offset(q.offset ?? 0);
   return rows.map((r: DbAnomaly) => rowToRecord(r));

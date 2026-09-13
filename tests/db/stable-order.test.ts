@@ -5,7 +5,7 @@ import {
   paginate, insertFile, createSession, createMessage, listMessagesBySession,
   listSessionsWithCounts, listModelCallsForSession, insertAnomaly, listAnomalies,
 } from '../../src/db/query.js';
-import { files, model_calls } from '../../src/db/schema.js';
+import { files, model_calls, anomalies } from '../../src/db/schema.js';
 
 const fileColumns = {
   id: files.id,
@@ -69,6 +69,24 @@ test('listAnomalies with an empty runIds set matches nothing', async () => {
   await insertAnomaly({ run_id: 'r1', model: 'gpt-4o', type: 'loop', severity: 'low', description: 'x' });
   assert.equal((await listAnomalies({})).length, 1);
   assert.deepEqual(await listAnomalies({ runIds: [] }), []);
+});
+
+test('listAnomalies breaks detected_at ties by id across offset pages', async () => {
+  initDb(':memory:');
+  const db = getDrizzleDb();
+  const ids: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const row = await insertAnomaly({
+      run_id: `r-${i}`, model: 'gpt-4o', type: 'loop', severity: 'low', description: `a-${i}`,
+    });
+    ids.push(row.id);
+  }
+  await db.update(anomalies).set({ detected_at: AT });
+  const expected = [...ids].sort((a, b) => b - a);
+
+  const p1 = await listAnomalies({ model: 'gpt-4o', limit: 2, offset: 0 });
+  const p2 = await listAnomalies({ model: 'gpt-4o', limit: 2, offset: 2 });
+  assert.deepEqual([...p1, ...p2].map((a) => a.id), expected);
 });
 
 test('listMessagesBySession breaks turn/created_at ties by id across offset pages', async () => {

@@ -19,7 +19,9 @@ export function chunkedIn(
   size: number = CHUNKED_IN_SIZE,
 ): SQL {
   if (ids.length === 0) return sql`1 = 0`;
-  const chunkSize = size > 0 ? Math.floor(size) : CHUNKED_IN_SIZE;
+  // Math.floor(0.5) === 0 would stall `i += chunkSize`; clamp to at least one
+  // id per chunk. Non-positive sizes keep defaulting to the safe cap.
+  const chunkSize = size > 0 ? Math.max(1, Math.floor(size)) : CHUNKED_IN_SIZE;
   const clauses: SQL[] = [];
   for (let i = 0; i < ids.length; i += chunkSize) {
     clauses.push(inArray(column, ids.slice(i, i + chunkSize)));

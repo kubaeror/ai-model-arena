@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { initDb, closeDb, getDrizzleDb } from '../../src/db/index.js';
 import { chunkedIn } from '../../src/db/query/chunked.js';
 import { files } from '../../src/db/schema.js';
@@ -51,4 +52,20 @@ test('chunkedIn returns every matching row across chunk boundaries', async () =>
   const rows = await db.select().from(files).where(chunkedIn(files.id, ids, 3)) as Array<{ id: string }>;
   assert.deepEqual(rows.map((r) => r.id).sort(), [...ids].sort());
   await closeDb();
+});
+
+test('chunkedIn clamps a fractional size instead of looping forever', () => {
+  // A fractional size floors to 0 and the `i += chunkSize` loop never
+  // advances; run in a child so the hang is killed by the timeout instead of
+  // stalling the test runner.
+  const code = `Promise.all([
+    import(${JSON.stringify(new URL('../../src/db/query/chunked.ts', import.meta.url).href)}),
+    import(${JSON.stringify(new URL('../../src/db/schema.ts', import.meta.url).href)}),
+  ]).then(([m, s]) => { m.chunkedIn(s.files.id, ['a', 'b', 'c'], 0.5); console.log('OK'); });`;
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
+    cwd: process.cwd(), encoding: 'utf8', timeout: 15000,
+  });
+  assert.equal(result.error, undefined, `chunkedIn must not hang: ${(result.error as NodeJS.ErrnoException | undefined)?.code ?? ''}`);
+  assert.equal(result.status, 0, `expected status 0: ${result.stderr}`);
+  assert.match(result.stdout, /OK/);
 });

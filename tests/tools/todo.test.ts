@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { todoRead, todoWrite } from '../../src/tools/todo.js';
 import type { ToolExecutionContext } from '../../src/types.js';
 
@@ -17,6 +18,21 @@ const ctx: ToolExecutionContext = {
   shellTimeoutMs: 30000,
   maxShellOutputBytes: 524288,
 };
+
+const TODO_MODULE_URL = new URL('../../src/tools/todo.ts', import.meta.url).href;
+
+/** Run todoRead on `sandboxDir` in a child process so a blocking open cannot
+ *  hang the test runner; a blocked child is killed by the timeout. */
+function runTodoReadInChild(sandboxDir: string) {
+  const code = `import(${JSON.stringify(TODO_MODULE_URL)}).then(async (m) => {
+    const logger = { info() {}, warn() {}, error() {}, debug() {}, child() { return this; } };
+    const r = await m.todoRead({}, { sandboxDir: process.argv[1], logger, shellTimeoutMs: 1000, maxShellOutputBytes: 1024 });
+    console.log('CONTENT:' + JSON.stringify(r.content));
+  });`;
+  return spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code, sandboxDir], {
+    cwd: process.cwd(), encoding: 'utf8', timeout: 15000,
+  });
+}
 
 describe('todoRead + todoWrite', () => {
   before(() => fs.mkdirSync(sandbox, { recursive: true }));
@@ -140,5 +156,33 @@ describe('todoRead + todoWrite', () => {
     const r = await todoRead({}, symlinkCtx);
     assert.ok(!r.content.includes('Outside secret'), 'a symlinked .arena must not leak outside todos');
     assert.ok(r.content.includes('(no tasks)'));
+  });
+
+  it('todoRead rejects a hardlinked todos.json without leaking outside content', async () => {
+    const outside = path.join(tmp, 'outside-read-todos.json');
+    const secret = JSON.stringify([
+      { id: 'leak', content: 'OUTSIDE-SECRET', status: 'pending', priority: 'high' },
+    ]);
+    fs.writeFileSync(outside, secret);
+    const readCtx: ToolExecutionContext = { ...ctx, sandboxDir: fs.mkdtempSync(path.join(tmp, 'todo-hardlink-read-')) };
+    fs.mkdirSync(path.join(readCtx.sandboxDir, '.arena'), { recursive: true });
+    fs.linkSync(outside, path.join(readCtx.sandboxDir, '.arena', 'todos.json'));
+
+    const r = await todoRead({}, readCtx);
+    assert.strictEqual(r.isError, false);
+    assert.ok(!r.content.includes('OUTSIDE-SECRET'), `hardlinked todos must not leak, got: ${r.content}`);
+    assert.ok(r.content.includes('(no tasks)'));
+    assert.strictEqual(fs.readFileSync(outside, 'utf8'), secret, 'outside file must be unchanged');
+  });
+
+  it('todoRead rejects a FIFO todos.json without blocking', { skip: process.platform === 'win32' }, () => {
+    const fifoCtx: ToolExecutionContext = { ...ctx, sandboxDir: fs.mkdtempSync(path.join(tmp, 'todo-fifo-')) };
+    fs.mkdirSync(path.join(fifoCtx.sandboxDir, '.arena'), { recursive: true });
+    execFileSync('mkfifo', [path.join(fifoCtx.sandboxDir, '.arena', 'todos.json')]);
+
+    const result = runTodoReadInChild(fifoCtx.sandboxDir);
+    assert.equal(result.error, undefined, `todoRead must not block on a FIFO: ${(result.error as NodeJS.ErrnoException | undefined)?.code ?? ''}`);
+    assert.equal(result.status, 0, `expected status 0, got ${result.status}: ${result.stderr}`);
+    assert.match(result.stdout, /CONTENT:.*\(no tasks\)/);
   });
 });

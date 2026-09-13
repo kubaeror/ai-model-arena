@@ -166,6 +166,7 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix src/dashboard-client
       - run: npm --prefix src/dashboard-client run typecheck
+      - run: npm --prefix src/dashboard-client run typecheck:tests
       - run: npm --prefix src/dashboard-client run test
 
   e2e:
