@@ -18,7 +18,12 @@ interface Over200kRow {
   cache_write: number | null;
 }
 
-const pricingCache = new Map<string, PricingRow>();
+/** Base row plus the pricing.model_id it was resolved to (the canonical id). */
+interface ResolvedPricingRow extends PricingRow {
+  resolvedModelId: string;
+}
+
+const pricingCache = new Map<string, ResolvedPricingRow>();
 
 /** Cache key includes the DB identity so tests and DB swaps never serve stale cross-DB entries. */
 function cacheKey(modelId: string): string {
@@ -26,7 +31,7 @@ function cacheKey(modelId: string): string {
 }
 
 /** Look up per-model pricing from the SQLite catalog. Returns null if not found. */
-export async function getModelPricing(modelId: string): Promise<PricingRow | null> {
+export async function getModelPricing(modelId: string): Promise<ResolvedPricingRow | null> {
   try {
     const key = cacheKey(modelId);
     const cached = pricingCache.get(key);
@@ -39,22 +44,24 @@ export async function getModelPricing(modelId: string): Promise<PricingRow | nul
   }
 }
 
-async function queryModelPricing(modelId: string): Promise<PricingRow | null> {
+async function queryModelPricing(modelId: string): Promise<ResolvedPricingRow | null> {
   const db = getDrizzleDb();
   const rows = await db.select({
     input: pricing.input, output: pricing.output,
     cache_read: pricing.cache_read, cache_write: pricing.cache_write,
   }).from(pricing).where(and(eq(pricing.model_id, modelId), sql`${pricing.tier_size} = 0`)).limit(1) as PricingRow[];
   let direct = rows[0] ?? null;
-  if (direct && (direct.input != null || direct.output != null)) return direct;
+  if (direct && (direct.input != null || direct.output != null)) return { ...direct, resolvedModelId: modelId };
   // Fall back: treat `modelId` as a friendly name and resolve via the catalog.
   const modelRows = await db.select({ id: models.id }).from(models).where(sql`${models.name} = ${modelId} OR ${models.id} = ${modelId}`).limit(1);
   if (!modelRows.length) return null;
+  const canonicalId = modelRows[0].id;
   const fallback = await db.select({
     input: pricing.input, output: pricing.output,
     cache_read: pricing.cache_read, cache_write: pricing.cache_write,
-  }).from(pricing).where(and(eq(pricing.model_id, modelRows[0].id), sql`${pricing.tier_size} = 0`)).limit(1) as PricingRow[];
-  return fallback[0] ?? null;
+  }).from(pricing).where(and(eq(pricing.model_id, canonicalId), sql`${pricing.tier_size} = 0`)).limit(1) as PricingRow[];
+  const row = fallback[0];
+  return row ? { ...row, resolvedModelId: canonicalId } : null;
 }
 
 export async function getPricing(modelName: string): Promise<ModelPricing | undefined> {
@@ -81,8 +88,9 @@ export async function computeCost(modelName: string, usage: CostTokenUsage): Pro
 
   // Tier selection is per request, not per run: callers must pass one call's
   // usage (see computeTotalCost), or a run's calls would all pay the premium.
+  // Price the canonical id so a display-name lookup reaches the same tier rows.
   const isOver200k = promptTokens + completionTokens > 200_000;
-  const tieredPricing = isOver200k ? await getTieredPricing(modelName) : null;
+  const tieredPricing = isOver200k ? await getTieredPricing(row.resolvedModelId) : null;
 
   const inputPrice = tieredPricing?.input ?? row.input ?? 0;
   const outputPrice = tieredPricing?.output ?? row.output ?? 0;

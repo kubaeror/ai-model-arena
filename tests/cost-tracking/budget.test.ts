@@ -12,6 +12,8 @@ import {
   resetBudgetCache,
   budgetStateRoot,
   mutateBudgetState,
+  tryAcquireLock,
+  releaseLock,
 } from '../../src/cost-tracking/budget.js';
 
 const CONFIG = `
@@ -427,6 +429,35 @@ test('interleaved async spend and sync reserve/release keep every update', async
     assert.equal(persisted.models['gpt-4o'].daily[dayKey], 2);
     assert.equal(persisted.models.claude.daily[dayKey], 3);
     assert.equal(persisted.reservations?.['gpt-4o']?.length ?? 0, 0, 'released reservation is gone');
+  } finally {
+    resetBudgetCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('an old holder release never deletes a lock a new holder acquired after a stale break', () => {
+  resetBudgetCache();
+  const { tmp, rootDir, configPath } = setup();
+  const lockPath = path.join(rootDir, LOCK_FILE);
+  try {
+    loadBudgetConfig(configPath);
+    // The stalled old holder's lock: stale timestamp, so a new holder may break it.
+    const oldToken = 'old-holder-token';
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: 4242, createdAt: Date.now() - 10 * 60 * 1000, token: oldToken,
+    }));
+
+    const newToken = tryAcquireLock(rootDir) ?? tryAcquireLock(rootDir);
+    assert.ok(newToken, 'the new holder breaks the stale lock and acquires');
+
+    // The old holder resumes after the stale break; its release must not unlink
+    // the new holder's lock (owner token mismatch).
+    releaseLock(rootDir, oldToken);
+    assert.equal(fs.existsSync(lockPath), true, 'old holder release must not delete the new lock');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token, newToken, 'new holder still owns the lock');
+
+    releaseLock(rootDir, newToken);
+    assert.equal(fs.existsSync(lockPath), false, 'the owner release removes its own lock');
   } finally {
     resetBudgetCache();
     fs.rmSync(tmp, { recursive: true, force: true });

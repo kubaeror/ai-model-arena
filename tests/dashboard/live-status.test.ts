@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { selectLiveRuns } from '../../src/dashboard-server/live.js';
-import { shouldAttemptFinalize } from '../../src/orchestrator/orchestrator.js';
+import { shouldAttemptFinalize, isStopAwaitingRunner, STOP_FINALIZE_GRACE_MS } from '../../src/orchestrator/orchestrator.js';
 import { FINALIZE_STALE_MS } from '../../src/orchestrator/finalize/aggregate.js';
 import type { RunIndexRecord } from '../../src/orchestrator/run-index.js';
 
@@ -39,4 +39,16 @@ test('the watcher retries only stale finalizing runs', () => {
   assert.equal(shouldAttemptFinalize({ status: 'stopped', finishedAt: null }, now), true);
   assert.equal(shouldAttemptFinalize({ status: 'completed', finishedAt: null }, now), false);
   assert.equal(shouldAttemptFinalize({ status: 'finalizing', finishedAt: null }, now), true, 'a missing claim timestamp is recoverable');
+});
+
+test('a stopped run with a live cancel signal is held until the grace elapses', () => {
+  const now = Date.parse('2026-01-01T00:30:00.000Z');
+  const recent = { status: 'stopped', finishedAt: new Date(now - 60_000).toISOString() };
+  const stale = { status: 'stopped', finishedAt: new Date(now - STOP_FINALIZE_GRACE_MS - 1).toISOString() };
+
+  assert.equal(isStopAwaitingRunner(recent, true, now), true, 'a fresh signal means the runner still owns the run');
+  assert.equal(isStopAwaitingRunner(stale, true, now), false, 'a signal past the grace means the runner died');
+  assert.equal(isStopAwaitingRunner(recent, false, now), false, 'a cleared signal releases the run');
+  assert.equal(isStopAwaitingRunner({ status: 'running', finishedAt: recent.finishedAt }, true, now), false, 'only stopped runs are held');
+  assert.equal(isStopAwaitingRunner({ status: 'stopped', finishedAt: null }, true, now), false, 'no stop timestamp means no live owner to await');
 });

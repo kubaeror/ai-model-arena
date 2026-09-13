@@ -127,23 +127,40 @@ export class ConversationLogger {
     return this.file.entries;
   }
 
-  /** Persist pending appends immediately, cancelling any debounce timer. */
+  /**
+   * Persist pending appends immediately, cancelling any debounce timer. A write
+   * failure is logged and swallowed: entries stay in memory, so the next flush
+   * (or the next append's timer) retries the whole file. Throwing here would
+   * surface a transient FS error as an uncaught exception in the runner loop.
+   */
   flush(): void {
     if (this.writeTimer !== null) {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    this.writeFile();
+    this.writeSafely();
   }
 
   private scheduleWrite(): void {
     if (this.disableFile || this.writeTimer !== null) return;
     this.writeTimer = setTimeout(() => {
       this.writeTimer = null;
-      this.writeFile();
+      this.writeSafely();
     }, WRITE_DEBOUNCE_MS);
     // Do not keep the process alive just to write a best-effort transcript.
     this.writeTimer.unref?.();
+  }
+
+  private writeSafely(): void {
+    try {
+      this.writeFile();
+    } catch (err) {
+      const detail = err instanceof Error ? { message: err.message } : { error: String(err) };
+      logger.error('conversation-logger: transcript write failed; entries retained for retry', {
+        path: this.filePath,
+        ...detail,
+      });
+    }
   }
 
   private writeFile(): void {

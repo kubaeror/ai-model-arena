@@ -70,7 +70,7 @@ test('flush writes atomically and leaves no temp files behind', () => {
   ]);
 });
 
-test('a failed flush cleans up its temp file', () => {
+test('a failed flush does not throw, cleans up its temp file, and retries on the next flush', () => {
   const filePath = tmpConvPath();
   const dir = path.dirname(filePath);
   const conv = new ConversationLogger(filePath, META);
@@ -78,10 +78,32 @@ test('a failed flush cleans up its temp file', () => {
   conv.append({ type: 'info', content: 'x', timestamp: '2026-01-01T00:00:06.000Z' });
   // A directory at the destination makes renameSync fail after the temp write.
   fs.mkdirSync(filePath);
-  assert.throws(() => conv.flush());
+  assert.doesNotThrow(() => conv.flush(), 'a transient transcript write failure must not crash the caller');
 
   const leftoverTemps = fs.readdirSync(dir).filter((name) => name.includes('.tmp-'));
   assert.deepEqual(leftoverTemps, [], 'failed flush must not leave a temp file behind');
+
+  fs.rmdirSync(filePath);
+  conv.flush();
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.deepEqual(parsed.entries, [
+    { type: 'info', content: 'x', timestamp: '2026-01-01T00:00:06.000Z' },
+  ], 'the retained entries are persisted by the next flush');
+});
+
+test('a failing debounce write never throws and a later flush retries', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const filePath = tmpConvPath();
+  const conv = new ConversationLogger(filePath, META);
+
+  conv.append({ type: 'info', content: 'debounced', timestamp: '2026-01-01T00:00:07.000Z' });
+  fs.mkdirSync(filePath);
+  assert.doesNotThrow(() => t.mock.timers.tick(1000), 'the debounce timer must swallow write failures');
+
+  fs.rmdirSync(filePath);
+  conv.flush();
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.deepEqual(parsed.entries.map((e: { content?: string }) => e.content), ['debounced']);
 });
 
 test('flushing mid-run keeps earlier entries and appends later ones', () => {

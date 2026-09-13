@@ -839,6 +839,14 @@ export async function startRunner(opts: RunnerOptions = {}): Promise<void> {
           { error: manifestErr instanceof Error ? manifestErr.message : String(manifestErr) });
       }
 
+      // Runner ownership acknowledgement for the dashboard watcher: it holds a
+      // stopped run while the cancel signal is set, so clear the signal only
+      // now — after the terminal 'stopped' row and result.json/report.md/
+      // manifest are durable — never mid-teardown.
+      if (runStopped) {
+        await clearRunCancelled(modelRunId);
+      }
+
       taskCounter.inc({ model: modelName, scenario: scenarioName, status: finalStatus });
       taskDuration.observe({ model: modelName, scenario: scenarioName }, (finishedAt.getTime() - startedAt.getTime()) / 1000);
       taskCounted = true;

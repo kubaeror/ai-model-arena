@@ -384,6 +384,32 @@ export function shouldAttemptFinalize(
 }
 
 /**
+ * How long a stopped run whose cancel signal is still set is trusted to be
+ * owned by a live runner. The runner clears its cancel signal only after the
+ * terminal 'stopped' row and its artifacts are durable, so a signal still set
+ * after this window means the runner died without acknowledging and recovery
+ * may finalize.
+ */
+export const STOP_FINALIZE_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * True while a stopped run must not be finalized because its runner still owns
+ * it. The cancel signal is the runner's acknowledgement channel: stopRun marks
+ * the run and model rows terminal immediately, so without this gate the watcher
+ * would finalize mid-turn (errored models, lost actual spend, stale artifacts).
+ * A missing/unparsable stop timestamp means there is no live owner to wait for.
+ */
+export function isStopAwaitingRunner(
+  run: { status: string; finishedAt: string | null },
+  cancelSignalActive: boolean,
+  now = Date.now(),
+): boolean {
+  if (run.status !== 'stopped' || !cancelSignalActive) return false;
+  const stoppedAt = run.finishedAt ? Date.parse(run.finishedAt) : NaN;
+  return Number.isFinite(stoppedAt) && now - stoppedAt < STOP_FINALIZE_GRACE_MS;
+}
+
+/**
  * Single finalize core shared by the CLI (spec) and dashboard watcher (runId) paths.
  * Aggregates results, patches the index, releases budget, records spend/ledger,
  * runs anomaly analysis + stats writeback, persists judge scores, dispatches the
@@ -406,14 +432,33 @@ async function finalizeCore(runId: string, entries: ComparisonEntry[], mdPath: s
   const allSuccess = perModel.every((m) => m.status === 'completed' && m.success !== false);
   logger.info('Run finalized', { runId, md: mdPath, status: allSuccess ? 'success' : 'failed' });
 
-  // Release budget reservations with actual costs, then best-effort
-  // post-finalize jobs: anomaly analysis, stats writeback, judge scoring,
-  // and completion notifications. All non-blocking, never fatal.
+  // Release budget reservations with actual costs, then run the post-finalize
+  // jobs (anomaly analysis, stats writeback, judge scoring, completion
+  // notification/webhooks) to completion before leaving 'finalizing'. A crash
+  // between the release and completion otherwise loses all of them silently.
+  // allSettled means one rejected job can never block the others or the
+  // completion transition; the job functions already log their own failures.
+  //
+  // Residual (accepted) window: a crash after the ledger write/budget release
+  // but before completeRunFinalization leaves the run reclaimable by the stale
+  // retry, which re-runs these effects. Finalization is at-least-once — a
+  // retry may duplicate a cost_ledger row and re-apply spend. The atomic claim
+  // still guarantees only one finalizer runs at a time.
   releaseRunReservations(runId, entries, budgetRoot, logger);
-  void runAnomalyAnalysis(runId, logger);
-  void writebackRuntimeStats(runId, root, logger);
-  void runJudgeScoringPass(root, runId, rec, logger, judgeAdapter);
-  void notifyRunCompleted(root, runId, rec, allSuccess, logger);
+  const sideEffects = await Promise.allSettled([
+    runAnomalyAnalysis(runId, logger),
+    writebackRuntimeStats(runId, root, logger),
+    runJudgeScoringPass(root, runId, rec, logger, judgeAdapter),
+    notifyRunCompleted(root, runId, rec, allSuccess, logger),
+  ]);
+  for (const result of sideEffects) {
+    if (result.status === 'rejected') {
+      logger.warn('Finalize side effect failed (non-fatal)', {
+        runId,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    }
+  }
 
   const completed = await completeRunFinalization(runId);
   if (!completed) {
@@ -515,7 +560,10 @@ export function clearRunCancelled(runId: string): Promise<void> { return clearRu
  *  A single conditional UPDATE gates the transition: 'completed' is terminal
  *  and 'finalizing' holds the finalization claim, so neither may be regressed
  *  to 'stopped' (which would let the watcher finalize again — duplicate ledger
- *  rows/notifications). When the UPDATE matches no row nothing is written. */
+ *  rows/notifications). When the UPDATE matches no row nothing is written.
+ *  Every non-terminal model row — including a task claimed but not yet running
+ *  — is terminalized, so a stop during the claimed window cannot wedge the run
+ *  on isRunCompleteByRunId. */
 export async function stopRun(runId: string): Promise<void> {
   const db = getDrizzleDb();
   const stopped = await db.update(runs)
@@ -530,7 +578,7 @@ export async function stopRun(runId: string): Promise<void> {
   await markRunCancelledSignal(runId);
   await db.update(run_models)
     .set({ status: 'stopped' })
-    .where(and(eq(run_models.run_id, runId), inArray(run_models.status, ['running', 'unknown'])));
+    .where(and(eq(run_models.run_id, runId), inArray(run_models.status, ['running', 'unknown', 'claimed'])));
 }
 
 /** Restart a run by re-enqueuing tasks. */

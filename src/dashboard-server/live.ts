@@ -8,11 +8,14 @@ import {
   isRunCompleteByRunId,
   finalizeRunByRunId,
   shouldAttemptFinalize,
+  isRunCancelled,
+  isStopAwaitingRunner,
   type RunIndexRecord,
 } from '../orchestrator/orchestrator.js';
 import { type AuthConfig } from './auth.js';
 import { verifyWsRequest } from './ws-auth.js';
 import { createLogger } from '../logger/pino-logger.js';
+import type { Logger } from '../types.js';
 import { isOwnerAllowed } from '../auth/rbac.js';
 
 /** Ownership gate for WS subscriptions: admins pass; otherwise the actor
@@ -77,6 +80,24 @@ export async function readLogAppend(
   } finally {
     await fd.close();
   }
+}
+
+/**
+ * One watcher tick for a single run. A stopped run whose cancel signal is
+ * still set is owned by its runner: stopRun marks the run and model rows
+ * terminal immediately, so without this gate the watcher would finalize
+ * mid-turn (errored models, lost actual spend, stale artifacts). The runner
+ * clears the signal after writing result.json/report.md and the terminal row;
+ * a signal still set past STOP_FINALIZE_GRACE_MS means the runner died.
+ * Returns true only when this tick won the finalization claim.
+ */
+export async function attemptFinalizeCandidate(
+  run: Pick<RunIndexRecord, 'runId' | 'status' | 'finishedAt'>,
+  logger: Logger,
+): Promise<boolean> {
+  if (isStopAwaitingRunner(run, await isRunCancelled(run.runId))) return false;
+  if (!(await isRunCompleteByRunId(run.runId))) return false;
+  return finalizeRunByRunId(run.runId, logger);
 }
 
 /**
@@ -292,8 +313,10 @@ export class LiveHub {
   private async finalizeRuns(): Promise<void> {
     // 'stopped' runs are included: stopRun marks their per-model rows
     // terminal, and a stopped run whose runner died would otherwise never
-    // finalize (no aggregation, no reservation release). Stale 'finalizing'
-    // runs are also included so a crash after the claim (aggregation/ledger/
+    // finalize (no aggregation, no reservation release). A stopped run whose
+    // cancel signal is still live is skipped — the runner has not finished its
+    // teardown yet (see attemptFinalizeCandidate). Stale 'finalizing' runs are
+    // also included so a crash after the claim (aggregation/ledger/
     // notification) is retried instead of stranding the run; shouldAttemptFinalize
     // only admits a finalizing run whose claim exceeded FINALIZE_STALE_MS, so
     // an active finalizer is never raced. finalizeRunByRunId wins or loses the
@@ -307,13 +330,11 @@ export class LiveHub {
     }
     for (const rec of candidates) {
       try {
-        if (await isRunCompleteByRunId(rec.runId)) {
-          const finalized = await finalizeRunByRunId(rec.runId, this.logger);
-          if (!finalized) continue;
-          this.broadcastToSubscribers(rec.runId, { type: 'run_completed', runId: rec.runId });
-          this.cleanupRunState(rec.runId);
-          this.liveRunsCache = null;
-        }
+        const finalized = await attemptFinalizeCandidate(rec, this.logger);
+        if (!finalized) continue;
+        this.broadcastToSubscribers(rec.runId, { type: 'run_completed', runId: rec.runId });
+        this.cleanupRunState(rec.runId);
+        this.liveRunsCache = null;
       } catch { /* ignore */ }
     }
   }

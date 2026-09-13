@@ -211,6 +211,17 @@ test('computeCost bills cached tokens at the input price when the catalog has no
   } finally { closeDb(); cleanup(); }
 });
 
+test('computeCost applies the over-200k tier when called with a friendly display name', async () => {
+  const cleanup = freshDb();
+  try {
+    await seed();
+    const byName = await computeCost('GPT-X', { prompt: 250000, completion: 0 });
+    const byId = await computeCost('openai/gpt-x', { prompt: 250000, completion: 0 });
+    assert.equal(byName.inputCost, byId.inputCost, 'a display-name call must resolve to the canonical id tier');
+    assert.equal(byName.inputCost, 0.375); // 250000/1M * 1.5 tier input
+  } finally { closeDb(); cleanup(); }
+});
+
 test('computeTotalCost sums per-call costs so the over-200k tier applies per call', async () => {
   const cleanup = freshDb();
   try {

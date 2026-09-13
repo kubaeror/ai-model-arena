@@ -484,6 +484,67 @@ describe('finalize merge (run-lifecycle single core)', () => {
     assert.equal(count, 1, 'exactly one judge_scores row per run+model');
   });
 
+  it('finalize awaits its side effects before releasing the finalizing claim', { timeout: 15000 }, async () => {
+    const cfgDir = path.join(root, 'configs');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'evaluation.yaml'), [
+      'judge:',
+      '  model: gpt-4o',
+      '  enabled: true',
+      'rubric:',
+      '  correctness:',
+      '    description: "code correctness"',
+      '    maxScore: 10',
+      '',
+    ].join('\n'));
+
+    const now = new Date().toISOString();
+    const dbRaw = getDb();
+    dbRaw.prepare(
+      `INSERT OR IGNORE INTO providers (id, name, api_base, auth_scheme, is_builtin, adapter, created_at, updated_at)
+       VALUES ('openai', 'OpenAI', 'https://api.openai.com/v1', 'bearer', 1, 'openai-compat', ?, ?)`,
+    ).run(now, now);
+    dbRaw.prepare(
+      `INSERT OR IGNORE INTO models (id, name, provider_id, status, last_synced_at)
+       VALUES ('gpt-4o', 'GPT-4o', 'openai', 'active', ?)`,
+    ).run(now);
+    dbRaw.prepare(
+      `INSERT OR IGNORE INTO model_providers (model_id, provider_id, api_model_id)
+       VALUES ('gpt-4o', 'openai', 'gpt-4o')`,
+    ).run();
+
+    // A judge that takes longer than the finalize bookkeeping: if the side
+    // effect is fired with `void`, finalize returns (and the run is marked
+    // completed) before this verdict is persisted.
+    const slowJudge = {
+      sendMessage: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return {
+          text: JSON.stringify({ scores: [{ category: 'correctness', score: 7, maxScore: 10 }], summary: 'slow' }),
+          usage: {},
+          toolCalls: [],
+        };
+      },
+      supportsReasoning: () => false,
+      supportsPromptCaching: () => false,
+    };
+
+    const runId = 'run_effects_awaited';
+    const alpha = makePerModel(runId, 'alpha', root, 't-awaited');
+    writeResult(alpha, { costUsd: 0.01 });
+    const spec = buildSpec(runId, root, [alpha]);
+    await registerRun(spec, 'cli');
+
+    const started = Date.now();
+    await finalizeRun(spec, logger, slowJudge);
+    const elapsed = Date.now() - started;
+
+    const row = dbRaw.prepare('SELECT * FROM judge_scores WHERE run_id = ? AND model = ?').get(runId, 'alpha');
+    assert.ok(row, 'judge_scores row must be persisted before finalize resolves');
+    assert.ok(elapsed >= 250, `finalize must await side effects; returned after ${elapsed}ms`);
+    assert.strictEqual((await getRunRecord(runId))?.status, 'completed');
+  });
+
   it('writeJudgeResult persists judge_score.json (the finalizeCore persist step)', () => {
     const outputDir = path.join(tmp, 'judge-out');
     const verdict = {

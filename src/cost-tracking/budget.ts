@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import type { Logger } from '../types.js';
 import { loadYamlConfigSync, clearConfigCache } from '../config-loader.js';
 import { outputRoot } from '../paths.js';
@@ -103,14 +104,21 @@ function budgetLockPath(rootDir: string): string {
   return path.join(budgetStateRoot(rootDir), LOCK_FILE);
 }
 
-/** Returns true when the lockfile was created. Breaks stale locks as a side effect. */
-function tryAcquireLock(rootDir: string, logger?: Logger): boolean {
+/**
+ * Try to create the lockfile, breaking a stale one as a side effect. Returns
+ * the owner token written into the lock on success, null when another live
+ * holder has it. The token lets a stalled holder detect that its lock was
+ * stale-broken and replaced before it resumes: only the current owner may
+ * remove the file.
+ */
+export function tryAcquireLock(rootDir: string, logger?: Logger): string | null {
   const lockPath = budgetLockPath(rootDir);
   ensureDir(path.dirname(lockPath));
+  const token = crypto.randomBytes(16).toString('hex');
 
   try {
-    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, createdAt: Date.now() }), { flag: 'wx' });
-    return true;
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, createdAt: Date.now(), token }), { flag: 'wx' });
+    return token;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
   }
@@ -138,12 +146,25 @@ function tryAcquireLock(rootDir: string, logger?: Logger): boolean {
   } catch {
     // Lock disappeared between attempts; retry.
   }
-  return false;
+  return null;
 }
 
-function releaseLock(rootDir: string): void {
+/**
+ * Remove the lockfile only when it still carries `token`. Read-verify-unlink:
+ * a stalled holder whose lock was stale-broken and re-created by a new holder
+ * must not delete the new holder's lock on resume.
+ */
+export function releaseLock(rootDir: string, token: string): void {
+  const lockPath = budgetLockPath(rootDir);
   try {
-    fs.rmSync(budgetLockPath(rootDir), { force: true });
+    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as { token?: unknown };
+    if (parsed.token !== token) return;
+  } catch {
+    // Lock already removed or unreadable: only a verified owner may unlink it.
+    return;
+  }
+  try {
+    fs.rmSync(lockPath, { force: true });
   } catch {
     // Best effort: a failed unlink must not fail an already-written mutation.
   }
@@ -155,7 +176,8 @@ const lockSleep = new Int32Array(new SharedArrayBuffer(4));
 function acquireLockSync(rootDir: string, logger?: Logger): () => void {
   const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
   for (;;) {
-    if (tryAcquireLock(rootDir, logger)) return () => releaseLock(rootDir);
+    const token = tryAcquireLock(rootDir, logger);
+    if (token !== null) return () => releaseLock(rootDir, token);
     if (Date.now() >= deadline) throw new Error(`Timed out acquiring budget lock at ${budgetLockPath(rootDir)}`);
     Atomics.wait(lockSleep, 0, 0, LOCK_RETRY_MS);
   }
@@ -164,7 +186,8 @@ function acquireLockSync(rootDir: string, logger?: Logger): () => void {
 async function acquireLock(rootDir: string, logger?: Logger): Promise<() => void> {
   const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
   for (;;) {
-    if (tryAcquireLock(rootDir, logger)) return () => releaseLock(rootDir);
+    const token = tryAcquireLock(rootDir, logger);
+    if (token !== null) return () => releaseLock(rootDir, token);
     if (Date.now() >= deadline) throw new Error(`Timed out acquiring budget lock at ${budgetLockPath(rootDir)}`);
     await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
   }

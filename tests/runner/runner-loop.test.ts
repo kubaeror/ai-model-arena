@@ -284,7 +284,7 @@ test('runner acks a task for a cancelled run without executing it', async () => 
     perModel: [{ model: 'GPT-4o', runId: 'run3', status: 'running' } as never],
     comparisonMdPath: null, comparisonJsonPath: null,
   });
-  const { stopRun } = await import('../../src/orchestrator/run-lifecycle.js');
+  const { stopRun, isRunCancelled } = await import('../../src/orchestrator/run-lifecycle.js');
   await stopRun('run3');
 
   const queue = new InMemoryQueue();
@@ -306,6 +306,7 @@ test('runner acks a task for a cancelled run without executing it', async () => 
     assert.equal(row?.status, 'stopped', 'cancelled run per-model row should be terminal (stopped)');
     const runRow = getDb().prepare('SELECT status FROM runs WHERE run_id = ?').get('run3') as { status: string } | undefined;
     assert.equal(runRow?.status, 'stopped', 'cancelled run must not be finalized as completed');
+    assert.equal(await isRunCancelled('run3'), false, 'the runner must clear the cancel signal after acknowledging the stop');
   } finally {
     ac.abort();
     await runnerDone;
@@ -365,7 +366,7 @@ test('runner keeps a mid-execution stopRun stopped: halts the loop and never com
     comparisonMdPath: null, comparisonJsonPath: null,
   });
 
-  const { stopRun } = await import('../../src/orchestrator/run-lifecycle.js');
+  const { stopRun, isRunCancelled } = await import('../../src/orchestrator/run-lifecycle.js');
   /** Stops the run from inside the first model send, then returns a tool call
    *  so the loop attempts a second turn — where onBudgetCheck sees the cancel. */
   class StoppingAdapter implements ModelAdapter {
@@ -411,6 +412,8 @@ test('runner keeps a mid-execution stopRun stopped: halts the loop and never com
     const session = getDb().prepare('SELECT status FROM sessions WHERE id = ?').get('midstop-session') as { status: string } | undefined;
     assert.equal(session?.status, 'active', 'a stopped run must not mark its session completed');
     assert.equal(await queue.deadLetterSize(), 0, 'stopped task must be acked, not nacked');
+    assert.ok(fs.existsSync(path.join(modelRunDir, 'result.json')), 'terminal artifacts must be written before the ack');
+    assert.equal(await isRunCancelled(runId), false, 'the runner must clear the cancel signal after writing terminal stopped artifacts');
   } finally {
     ac.abort();
     await runnerDone;
