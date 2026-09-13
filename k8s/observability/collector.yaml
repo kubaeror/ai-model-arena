@@ -38,15 +38,15 @@ data:
             latency:
               threshold_ms: 5000
     exporters:
-      otlp/tempo:
+      otlp_grpc/tempo:
         endpoint: tempo.observability:4317
         tls:
           insecure: true
       prometheus:
         endpoint: 0.0.0.0:8889
         namespace: arena
-      loki:
-        endpoint: http://loki.observability:3100/loki/api/v1/push
+      otlp_http/loki:
+        endpoint: http://loki.observability:3100/otlp
       debug:
         verbosity: basic
     extensions:
@@ -58,11 +58,11 @@ data:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, batch]
-          exporters: [otlp/tempo, debug]
+          exporters: [otlp_grpc/tempo, debug]
         traces/errors:
           receivers: [otlp]
           processors: [memory_limiter, tail_sampling, batch]
-          exporters: [otlp/tempo]
+          exporters: [otlp_grpc/tempo]
         metrics:
           receivers: [otlp]
           processors: [memory_limiter, batch]
@@ -70,7 +70,7 @@ data:
         logs:
           receivers: [otlp]
           processors: [memory_limiter, batch]
-          exporters: [loki, debug]
+          exporters: [otlp_http/loki, debug]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -101,7 +101,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: collector
-          image: otel/opentelemetry-collector-contrib:0.158.0
+          image: otel/opentelemetry-collector-contrib:0.160.0
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
