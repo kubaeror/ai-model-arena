@@ -529,6 +529,8 @@ describe('search_code regex shape guard', () => {
     '(a{0,2})+',
     // `[]` closes immediately in JS; the rest of the group must stay visible.
     '(a|[]x|a)+',
+    // `[^]` is the negated empty class (matches any code unit), not an empty set.
+    '([^]|a)+',
   ];
   for (const query of rejected) {
     it(`rejects ${query}`, async () => {
