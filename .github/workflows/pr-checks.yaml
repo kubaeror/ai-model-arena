@@ -80,7 +80,7 @@ jobs:
       - run: npm run test:tap
       - name: Upload TAP results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Per-leg names: upload-artifact v4+ rejects same-name uploads
           # across matrix legs (409 conflict) and every PR gate would fail.
@@ -89,7 +89,7 @@ jobs:
           if-no-files-found: warn
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report-${{ matrix.node-version }}
           path: coverage/lcov.info
@@ -183,7 +183,7 @@ jobs:
       - run: npm run e2e
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           path: playwright-report/
